@@ -1,0 +1,10 @@
+[tools]
+node = "26"
+pnpm = "12"
+"npm:corepack" = "0.36"
+gh = "2"
+yq = "4"
+uv = "0.12"
+jq = "1"
+git-lfs = "3"
+protoc = "36"
