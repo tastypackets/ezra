@@ -3,6 +3,7 @@ export const APP_DESCRIPTIONS = {
   nav_agents: "Agents",
   nav_settings: "Settings",
   dismiss: "Dismiss",
+  loading: "Loading",
   unreachable: "Could not reach the manager.",
   request_failed: "The request failed.",
   error_title: "This page could not load",
