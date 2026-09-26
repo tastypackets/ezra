@@ -23,3 +23,15 @@ export function errorMessage(error: unknown): string {
   }
   return error instanceof Error ? error.message : APP_DESCRIPTIONS.request_failed;
 }
+
+const DATE_AND_TIME = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+/** A server timestamp as a date and time in the browser's language and time zone. */
+export function formatDateTime(timestamp: string | Date): string {
+  return DATE_AND_TIME.format(new Date(timestamp));
+}

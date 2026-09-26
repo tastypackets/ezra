@@ -31,7 +31,8 @@ import {
 } from "@/hooks/use-agent-actions";
 import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
 import { handOffFocus } from "@/lib/focus";
-import { downloadPercent } from "@/lib/utils";
+import { signInEnd } from "@/lib/sign-in";
+import { downloadPercent, formatDateTime } from "@/lib/utils";
 
 type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
 
@@ -93,7 +94,10 @@ function AgentRow({ status }: { status: AgentStatus }) {
         <Badge variant={state.variant}>{state.label}</Badge>
       </TableCell>
       <TableCell className={cn(status.installed_version && "font-mono")}>{facts.version}</TableCell>
-      <TableCell>{facts.account}</TableCell>
+      <TableCell>
+        {facts.account}
+        <SignInEndNote status={status} />
+      </TableCell>
       <TableCell className="text-right tabular-nums">{facts.savedData}</TableCell>
       <TableCell>
         <AgentActions status={status} nameId={nameId} className="items-end" />
@@ -118,7 +122,10 @@ function AgentListItem({ status }: { status: AgentStatus }) {
         <dt className="text-muted-foreground">{AGENTS_DESCRIPTIONS.column_version}</dt>
         <dd className={cn(status.installed_version && "font-mono")}>{facts.version}</dd>
         <dt className="text-muted-foreground">{AGENTS_DESCRIPTIONS.column_account}</dt>
-        <dd className="truncate">{facts.account}</dd>
+        <dd className="truncate">
+          {facts.account}
+          <SignInEndNote status={status} />
+        </dd>
         <dt className="text-muted-foreground">
           <SavedDataLabel />
         </dt>
@@ -126,6 +133,19 @@ function AgentListItem({ status }: { status: AgentStatus }) {
       </dl>
       <AgentActions status={status} nameId={nameId} className="items-start" />
     </li>
+  );
+}
+
+function SignInEndNote({ status }: { status: AgentStatus }) {
+  const end = signInEnd(status);
+  if (!end) {
+    return null;
+  }
+  const when = formatDateTime(end.at);
+  return (
+    <span className={cn("block text-xs", end.ended ? "text-destructive" : "text-warning")}>
+      {end.ended ? AGENTS_DESCRIPTIONS.sign_in_ended(when) : AGENTS_DESCRIPTIONS.sign_in_ends(when)}
+    </span>
   );
 }
 
@@ -160,7 +180,7 @@ function AgentActions({
   const name = AGENT_NAMES[status.agent];
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
-  const step = nextAgentStep(status, installing);
+  const step = nextAgentStep(status, installing, Boolean(signInEnd(status)));
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
   const path = { agent: status.agent };
   const installNow = () => install.mutate({ path });
@@ -177,7 +197,9 @@ function AgentActions({
             onClick={step === "install" ? installNow : () => startSignIn.mutate({ path })}
           >
             {step === "sign_in"
-              ? AGENTS_DESCRIPTIONS.sign_in
+              ? status.logged_in
+                ? AGENTS_DESCRIPTIONS.sign_in_again
+                : AGENTS_DESCRIPTIONS.sign_in
               : installing && percent !== undefined
                 ? AGENTS_DESCRIPTIONS.installing(percent)
                 : installLabel(status)}
@@ -247,6 +269,12 @@ function agentState(status: AgentStatus): { label: string; variant: BadgeVariant
     return { label: AGENTS_DESCRIPTIONS.status_not_installed, variant: "secondary" };
   }
   if (status.logged_in) {
+    const end = signInEnd(status);
+    if (end) {
+      return end.ended
+        ? { label: AGENTS_DESCRIPTIONS.status_sign_in_ended, variant: "destructive" }
+        : { label: AGENTS_DESCRIPTIONS.status_sign_in_ending, variant: "warning" };
+    }
     return { label: AGENTS_DESCRIPTIONS.status_signed_in, variant: "success" };
   }
   if (status.login_prompt) {

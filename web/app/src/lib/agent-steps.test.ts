@@ -30,6 +30,14 @@ describe("nextAgentStep", () => {
     ).toBe("install");
   });
 
+  it("signs in again, before an update, when the sign-in is about to end", () => {
+    expect(nextAgentStep(signedIn, false, true)).toBe("sign_in");
+    expect(nextAgentStep({ ...signedIn, available_update: "2.1.284" }, false, true)).toBe(
+      "sign_in",
+    );
+    expect(nextAgentStep({ ...signedIn, login_prompt: prompt }, false, true)).toBeUndefined();
+  });
+
   it("has no step for an agent that is signed in and up to date, or signing in", () => {
     expect(nextAgentStep(signedIn, false)).toBeUndefined();
     expect(nextAgentStep({ ...signedOut, login_prompt: prompt }, false)).toBeUndefined();
