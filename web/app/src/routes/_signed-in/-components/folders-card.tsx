@@ -32,6 +32,8 @@ import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { CloneDialog } from "./clone-dialog";
 import { DeleteFolderDialog } from "./delete-folder-dialog";
 import { SERVER_BADGES } from "./remote-control-card";
+import { ServerLogDialog } from "./server-log-dialog";
+import { ServerNotes } from "./server-notes";
 
 const SPAWN_MODE_ORDER: SpawnMode[] = ["same-dir", "worktree"];
 
@@ -137,6 +139,7 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
   const failure = chooseToServe.error ?? chooseSpawnMode.error;
   const switchId = useId();
   const switchLabelId = useId();
+  const [logOpen, setLogOpen] = useState(false);
   return (
     <li className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -154,13 +157,14 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
           ) : null}
         </div>
         {detail ? <span className="truncate text-muted-foreground">{detail}</span> : null}
+        {server ? <ServerNotes status={server} /> : null}
         {failure ? (
           <p role="alert" className="text-destructive">
             {errorMessage(failure)}
           </p>
         ) : null}
       </div>
-      <div className="flex flex-none items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 sm:flex-none sm:flex-nowrap">
         {server?.usage ? (
           <span className="flex gap-3 text-xs text-muted-foreground tabular-nums">
             {REMOTE_CONTROL_DESCRIPTIONS.sessions(server.usage.sessions, server.usage.capacity)}
@@ -243,6 +247,11 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
               })}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
+            {server ? (
+              <DropdownMenuItem onClick={() => setLogOpen(true)}>
+                {REMOTE_CONTROL_DESCRIPTIONS.show_log}
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
               {FOLDERS_DESCRIPTIONS.delete}
             </DropdownMenuItem>
@@ -255,6 +264,9 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
           onOpenChange={setDeleting}
         />
       </div>
+      {server ? (
+        <ServerLogDialog folder={folder.name} open={logOpen} onOpenChange={setLogOpen} />
+      ) : null}
     </li>
   );
 }

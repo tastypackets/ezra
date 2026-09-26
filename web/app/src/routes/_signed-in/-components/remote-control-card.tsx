@@ -1,13 +1,23 @@
 import type { RemoteControlOverview, RemoteControlStatus, ServerState } from "@ezra/client";
 import { Link } from "@tanstack/react-router";
-import { ExternalLinkIcon } from "lucide-react";
+import { EllipsisIcon, ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
+import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import type { badgeVariants } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-control";
+
+import { ServerLogDialog } from "./server-log-dialog";
+import { ServerNotes } from "./server-notes";
 
 type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
 
@@ -23,6 +33,7 @@ export const SERVER_BADGES: Record<ServerState, BadgeVariant> = {
 /** Claude Code's Remote Control server on /projects: whether it runs, and where to continue. */
 export function RemoteControlCard({ overview }: { overview: RemoteControlOverview }) {
   const status = overview.projects;
+  const [logOpen, setLogOpen] = useState(false);
   return (
     <Card>
       <CardHeader>
@@ -30,8 +41,8 @@ export function RemoteControlCard({ overview }: { overview: RemoteControlOvervie
           {REMOTE_CONTROL_DESCRIPTIONS.title}
           <Badge variant={SERVER_BADGES[status.state]}>{SERVER_STATES[status.state]}</Badge>
         </CardTitle>
-        {status.url ? (
-          <CardAction>
+        <CardAction className="flex items-center gap-1">
+          {status.url ? (
             <a
               href={status.url}
               target="_blank"
@@ -41,8 +52,26 @@ export function RemoteControlCard({ overview }: { overview: RemoteControlOvervie
               {REMOTE_CONTROL_DESCRIPTIONS.open}
               <ExternalLinkIcon data-icon="inline-end" />
             </a>
-          </CardAction>
-        ) : null}
+          ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={REMOTE_CONTROL_DESCRIPTIONS.more_actions}
+                />
+              }
+            >
+              <EllipsisIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setLogOpen(true)}>
+                {REMOTE_CONTROL_DESCRIPTIONS.show_log}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <StateHint status={status} device={overview.device} />
@@ -55,15 +84,9 @@ export function RemoteControlCard({ overview }: { overview: RemoteControlOvervie
             )}
           </p>
         ) : null}
-        {status.state === "retrying" && status.last_error ? (
-          <p className="text-destructive">
-            {REMOTE_CONTROL_DESCRIPTIONS.last_stop}:{" "}
-            <span className="font-mono text-xs break-words whitespace-pre-wrap">
-              {status.last_error}
-            </span>
-          </p>
-        ) : null}
+        <ServerNotes status={status} detailed />
       </CardContent>
+      <ServerLogDialog open={logOpen} onOpenChange={setLogOpen} />
     </Card>
   );
 }
@@ -89,7 +112,9 @@ function StateHint({ status, device }: { status: RemoteControlStatus; device?: s
     case "waiting":
       return <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.waiting_hint}</p>;
     case "starting":
-      return <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.starting_hint}</p>;
+      return status.problem ? null : (
+        <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.starting_hint}</p>
+      );
     default:
       return null;
   }
