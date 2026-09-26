@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
@@ -15,6 +15,8 @@ const GITHUB_HOST: &str = "github.com";
 const GIT_CONFIG_VARIABLE: &str = "GIT_CONFIG_GLOBAL";
 const GH_CONFIG_VARIABLE: &str = "GH_CONFIG_DIR";
 const TOKEN_VARIABLES: [&str; 2] = ["GH_TOKEN", "GITHUB_TOKEN"];
+const EXCLUDES_FILE_KEY: &str = "core.excludesFile";
+const CLAUDE_WORKTREES_PATTERN: &str = ".claude/worktrees/";
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
@@ -36,6 +38,8 @@ pub enum GitError {
 #[derive(Debug, Clone)]
 pub struct GitTools {
     git_config: PathBuf,
+    /// The excludes file to set when git has none.
+    excludes_file: PathBuf,
     gh_config_directory: PathBuf,
     token_from_environment: bool,
 }
@@ -45,8 +49,13 @@ impl GitTools {
     pub fn from_environment(home: &Path) -> Self {
         let path_from =
             |variable: &str, default: PathBuf| env::var_os(variable).map_or(default, PathBuf::from);
+        let git_config = env::var_os(GIT_CONFIG_VARIABLE).map(PathBuf::from);
         Self {
-            git_config: path_from(GIT_CONFIG_VARIABLE, home.join(".gitconfig")),
+            excludes_file: git_config.as_deref().map_or_else(
+                || home.join(".config/git/ignore"),
+                |config| config.with_file_name("ignore"),
+            ),
+            git_config: git_config.unwrap_or_else(|| home.join(".gitconfig")),
             gh_config_directory: path_from(GH_CONFIG_VARIABLE, home.join(".config/gh")),
             token_from_environment: TOKEN_VARIABLES
                 .iter()
@@ -63,6 +72,7 @@ impl GitTools {
     pub fn under(directory: &Path) -> Self {
         Self {
             git_config: directory.join("git/config"),
+            excludes_file: directory.join("git/ignore"),
             gh_config_directory: directory.join("gh"),
             token_from_environment: false,
         }
@@ -176,21 +186,46 @@ impl GitTools {
             .await
     }
 
-    async fn config_values(&self, key: &str) -> Result<Vec<String>, GitError> {
-        let output = self
+    /// Adds `.claude/worktrees/` to the excludes file git already uses, or sets the manager's own.
+    pub async fn ignore_claude_worktrees(&self) -> Result<(), GitError> {
+        let chosen = self
             .git()
+            .args([
+                "config",
+                "--global",
+                "--includes",
+                "--type=path",
+                "--get",
+                EXCLUDES_FILE_KEY,
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .await?
+            .config_values()?
+            .pop();
+        let excludes_file = chosen
+            .as_ref()
+            .map_or_else(|| self.excludes_file.clone(), PathBuf::from);
+        ExcludesFile(excludes_file)
+            .include(CLAUDE_WORKTREES_PATTERN)
+            .await?;
+        if chosen.is_none() {
+            self.set_config_value(
+                EXCLUDES_FILE_KEY,
+                Some(&self.excludes_file.to_string_lossy()),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn config_values(&self, key: &str) -> Result<Vec<String>, GitError> {
+        self.git()
             .args(["config", "--global", "--get-all", key])
             .stdin(Stdio::null())
             .output()
-            .await?;
-        match output.status.code() {
-            Some(0) => Ok(output.stdout_text().lines().map(str::to_owned).collect()),
-            Some(1) => Ok(Vec::new()),
-            _ => Err(GitError::Git {
-                action: "config",
-                output: output.stderr_text(),
-            }),
-        }
+            .await?
+            .config_values()
     }
 
     async fn set_config_value(&self, key: &str, value: Option<&str>) -> Result<(), GitError> {
@@ -232,6 +267,50 @@ impl GitTools {
             .env(GIT_CONFIG_VARIABLE, &self.git_config)
             .env(GH_CONFIG_VARIABLE, &self.gh_config_directory);
         command
+    }
+}
+
+trait ConfigOutputExt {
+    /// The values `git config` printed, none when the key is not set.
+    fn config_values(&self) -> Result<Vec<String>, GitError>;
+}
+
+impl ConfigOutputExt for Output {
+    fn config_values(&self) -> Result<Vec<String>, GitError> {
+        match self.status.code() {
+            Some(0) => Ok(self.stdout_text().lines().map(str::to_owned).collect()),
+            Some(1) => Ok(Vec::new()),
+            _ => Err(GitError::Git {
+                action: "config",
+                output: self.stderr_text(),
+            }),
+        }
+    }
+}
+
+/// A file of ignore patterns for every repository.
+struct ExcludesFile(PathBuf);
+
+impl ExcludesFile {
+    /// Adds `pattern` as a line of its own unless one already holds it. Other lines are kept.
+    async fn include(&self, pattern: &str) -> io::Result<()> {
+        let existing = match tokio::fs::read_to_string(&self.0).await {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error),
+        };
+        if existing.lines().any(|line| line.trim_end() == pattern) {
+            return Ok(());
+        }
+        if let Some(directory) = self.0.parent() {
+            tokio::fs::create_dir_all(directory).await?;
+        }
+        let separator = if existing.is_empty() || existing.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        tokio::fs::write(&self.0, format!("{existing}{separator}{pattern}\n")).await
     }
 }
 
@@ -295,6 +374,8 @@ pub struct CommitIdentity {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -337,6 +418,78 @@ mod tests {
             GitHubSignIn::from_status_json(b"not json"),
             GitHubSignIn::default()
         );
+    }
+
+    #[tokio::test]
+    async fn every_repository_ignores_claude_worktrees() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let tools = GitTools::under(directory.path());
+        tools
+            .ignore_claude_worktrees()
+            .await
+            .expect("worktrees are ignored");
+        tools
+            .ignore_claude_worktrees()
+            .await
+            .expect("worktrees are ignored again");
+        let excludes_file = directory.path().join("git/ignore");
+        assert_eq!(
+            tools
+                .config_values(EXCLUDES_FILE_KEY)
+                .await
+                .expect("config reads"),
+            [excludes_file.to_string_lossy()]
+        );
+        assert_eq!(
+            fs::read_to_string(&excludes_file).expect("excludes file is read"),
+            ".claude/worktrees/\n"
+        );
+
+        let repository = directory.path().join("app");
+        let initialized = tools
+            .git()
+            .args(["init", "--quiet"])
+            .arg(&repository)
+            .status()
+            .await
+            .expect("git runs");
+        assert!(initialized.success());
+        let checked = tools
+            .git()
+            .current_dir(&repository)
+            .args(["check-ignore", "--quiet", ".claude/worktrees/feature/file"])
+            .status()
+            .await
+            .expect("git runs");
+        assert!(checked.success(), "the worktree is not ignored");
+    }
+
+    #[tokio::test]
+    async fn an_excludes_file_already_set_is_kept_and_extended() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let tools = GitTools::under(directory.path());
+        let mine = directory.path().join("mine");
+        fs::write(&mine, "*.log").expect("excludes file is written");
+        tools
+            .set_config_value(EXCLUDES_FILE_KEY, Some(&mine.to_string_lossy()))
+            .await
+            .expect("config saves");
+        tools
+            .ignore_claude_worktrees()
+            .await
+            .expect("worktrees are ignored");
+        assert_eq!(
+            tools
+                .config_values(EXCLUDES_FILE_KEY)
+                .await
+                .expect("config reads"),
+            [mine.to_string_lossy()]
+        );
+        assert_eq!(
+            fs::read_to_string(&mine).expect("excludes file is read"),
+            "*.log\n.claude/worktrees/\n"
+        );
+        assert!(!directory.path().join("git/ignore").exists());
     }
 
     #[tokio::test]

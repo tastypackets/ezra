@@ -191,8 +191,12 @@ impl AppState {
         }
     }
 
-    /// Covers sign-ins made outside the manager, such as `gh auth login` in a terminal.
-    pub async fn lend_github_sign_in_at_start(self) {
+    /// Makes git ignore Claude's worktrees, and lends git a sign-in made outside the manager, such
+    /// as `gh auth login` in a terminal.
+    pub async fn prepare_git_at_start(self) {
+        if let Err(error) = self.git_tools.ignore_claude_worktrees().await {
+            tracing::warn!("could not make git ignore .claude/worktrees: {error}");
+        }
         let sign_in = self.git_tools.github_sign_in().await;
         self.note_github_account(
             sign_in

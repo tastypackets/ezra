@@ -127,6 +127,47 @@ fn unknown_certificate_check_setting_stops_the_manager() {
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
+fn repositories_ignore_claude_worktrees() {
+    let container = DockerResource::start_container("manager-worktrees", &[], &[]);
+    wait_for_manager(&container, 8443);
+    let excludes_file_is_set = || {
+        docker(&[
+            "exec",
+            "-u",
+            "dev",
+            &container.name,
+            "git",
+            "config",
+            "--global",
+            "core.excludesFile",
+        ])
+        .status
+        .success()
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !excludes_file_is_set() {
+        assert!(Instant::now() < deadline, "core.excludesFile is not set");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let status = stdout_of(&docker(&[
+        "exec",
+        "-u",
+        "dev",
+        "--workdir",
+        "/projects",
+        &container.name,
+        "sh",
+        "-ec",
+        "git init --quiet app && cd app \
+         && git -c user.name=ezra -c user.email=ezra@example.com commit --quiet --allow-empty -m start \
+         && git worktree add --quiet .claude/worktrees/feature \
+         && git status --porcelain",
+    ]));
+    assert_eq!(status, "");
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
 fn agents_find_the_project_list_in_projects() {
     let container = DockerResource::start_container("manager-folders", &[], &[]);
     wait_for_manager(&container, 8443);
