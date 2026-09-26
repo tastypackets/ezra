@@ -1,6 +1,7 @@
 mod agents;
 mod api;
 mod auth;
+mod events;
 mod folders;
 mod git;
 mod login;
@@ -28,7 +29,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::environment_config::FromEnvironment;
 use agents::TlsVerification;
-use remote_control::RemoteControl;
+use state::AppState;
 
 const STATE_DIRECTORY: &str = "/config/ezra";
 const TLS_VERIFY_VARIABLE: &str = "EZRA_TLS_VERIFY";
@@ -92,7 +93,7 @@ async fn serve() -> Result<(), ManagerError> {
         tracing::info!("no password is set, the first visitor chooses it");
     }
     let home = env::var_os("HOME").unwrap_or_else(|| "/home/dev".into());
-    let state = state::AppState::new(
+    let state = AppState::new(
         settings_path,
         settings,
         agents::InstallPaths::under_home(Path::new(&home))
@@ -105,11 +106,7 @@ async fn serve() -> Result<(), ManagerError> {
     tokio::spawn(state.clone().lend_github_sign_in_at_start());
     tokio::spawn(state.clone().supervise_remote_control());
     tokio::spawn(state.clone().describe_folders_regularly());
-    tokio::spawn(
-        handle
-            .clone()
-            .shut_down_on_signal(Arc::clone(&state.remote_control)),
-    );
+    tokio::spawn(handle.clone().shut_down_on_signal(state.clone()));
     let remote_control = Arc::clone(&state.remote_control);
     let app = state.into_router(web_directory);
     let served =
@@ -122,7 +119,7 @@ async fn serve() -> Result<(), ManagerError> {
     served
 }
 
-impl state::AppState {
+impl AppState {
     /// The API and the web app.
     fn into_router(self, web_directory: PathBuf) -> axum::Router {
         api::router(self.clone()).merge(web::router(self, web_directory))
@@ -154,12 +151,13 @@ impl Default for ManagerOptions {
 impl FromEnvironment for ManagerOptions {}
 
 trait HandleExt {
-    /// On SIGTERM or Ctrl-C, stops Remote Control and gives open connections a few seconds.
-    async fn shut_down_on_signal(self, remote_control: Arc<RemoteControl>);
+    /// On SIGTERM or Ctrl-C, stops Remote Control, ends event streams and gives open connections a
+    /// few seconds.
+    async fn shut_down_on_signal(self, state: AppState);
 }
 
 impl HandleExt for Handle<SocketAddr> {
-    async fn shut_down_on_signal(self, remote_control: Arc<RemoteControl>) {
+    async fn shut_down_on_signal(self, state: AppState) {
         let Ok(mut terminate) = signal(SignalKind::terminate()) else {
             return;
         };
@@ -167,7 +165,8 @@ impl HandleExt for Handle<SocketAddr> {
             _ = terminate.recv() => {}
             _ = tokio::signal::ctrl_c() => {}
         }
-        remote_control.begin_shut_down();
+        state.remote_control.begin_shut_down();
+        state.events.close();
         self.graceful_shutdown(Some(SHUTDOWN_GRACE_PERIOD));
     }
 }

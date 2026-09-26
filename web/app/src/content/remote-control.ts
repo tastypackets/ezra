@@ -21,4 +21,5 @@ export const SERVER_STATES: Record<ServerState, string> = {
   starting: "Starting",
   running: "Running",
   retrying: "Restarting",
+  stopping: "Stopping",
 };

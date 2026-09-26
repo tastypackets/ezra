@@ -2,7 +2,6 @@ import { logInMutation, logOutMutation, setUpPasswordMutation } from "@ezra/clie
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 
-import { agentsQueryOptions } from "@/queries/agent-queries";
 import { sessionQueryOptions } from "@/queries/session-queries";
 
 /** Setting the password, signing in and signing out. Each updates the cached session. */
@@ -27,11 +26,11 @@ export function useSessionActions() {
   const signOut = useMutation({
     ...logOutMutation(),
     onSuccess: () => {
+      queryClient.clear();
       queryClient.setQueryData(sessionQueryOptions.queryKey, {
         claimed: true,
         authenticated: false,
       });
-      queryClient.removeQueries({ queryKey: agentsQueryOptions.queryKey });
     },
   });
   return { setUp, signIn, signOut };

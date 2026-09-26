@@ -6,5 +6,6 @@ const SIGN_IN_POLL_MS = 3_000;
 
 export const gitStatusQueryOptions = queryOptions({
   ...getGitStatusOptions(),
+  staleTime: 30_000,
   refetchInterval: (query) => (query.state.data?.github.login_prompt ? SIGN_IN_POLL_MS : false),
 });

@@ -3,6 +3,7 @@ use std::time::Duration;
 use tokio::time::MissedTickBehavior;
 
 use super::agents::{Agent, ReleaseChannel};
+use super::events::Topic;
 use super::state::AppState;
 
 const CHECK_INTERVAL: Duration = Duration::from_hours(6);
@@ -40,11 +41,16 @@ impl AppState {
             .await
         {
             Ok(version) => {
-                if self.install_paths.installed_version(agent) == Some(installed) {
-                    self.latest_releases
+                let release = LatestRelease { channel, version };
+                if self.install_paths.installed_version(agent) == Some(installed)
+                    && self
+                        .latest_releases
                         .lock()
                         .await
-                        .insert(agent, LatestRelease { channel, version });
+                        .insert(agent, release.clone())
+                        != Some(release)
+                {
+                    self.events.publish(Topic::Agents);
                 }
             }
             Err(error) => tracing::warn!("could not check for a newer {agent}: {error}"),

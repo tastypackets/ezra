@@ -20,6 +20,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval, sleep, timeout, timeout
 use utoipa::ToSchema;
 
 use super::agents::Agent;
+use super::events::{Events, Topic};
 use super::folders::Folder;
 use super::login::{AgentCli, StrExt};
 use super::state::AppState;
@@ -111,6 +112,8 @@ pub enum ServerState {
     Running,
     /// Stopped unexpectedly and starting again soon.
     Retrying,
+    /// Stopping on purpose.
+    Stopping,
 }
 
 /// The manager's view of one Remote Control server.
@@ -123,8 +126,6 @@ pub struct RemoteControlStatus {
     pub last_error: Option<String>,
     /// Unexpected stops since the manager started.
     pub restarts: u32,
-    /// The device the Claude app lists this server under, the container's hostname.
-    pub device: Option<String>,
     /// What the server and its sessions use. Absent while no server process runs.
     pub usage: Option<ServerUsage>,
 }
@@ -148,11 +149,23 @@ pub struct ServerUsage {
     pub memory_bytes: u64,
 }
 
+/// Every Remote Control server, and where the Claude app lists them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RemoteControlOverview {
+    /// The device the Claude app lists the servers under, the container's hostname.
+    pub device: Option<String>,
+    /// The server for /projects, waiting when it has not started yet.
+    pub projects: RemoteControlStatus,
+    /// The servers for folders in /projects, by folder name.
+    pub folders: BTreeMap<String, RemoteControlStatus>,
+}
+
 /// The shared handle the API reads statuses from and signals changes through.
 #[derive(Debug)]
 pub struct RemoteControl {
     device: Option<String>,
     servers: SyncMutex<BTreeMap<PathBuf, RemoteControlStatus>>,
+    events: Events,
     sign_in: watch::Sender<SignIn>,
     changes: watch::Sender<u64>,
     restarts: watch::Sender<u64>,
@@ -160,13 +173,15 @@ pub struct RemoteControl {
     stopped: watch::Sender<bool>,
 }
 
-impl Default for RemoteControl {
-    fn default() -> Self {
+impl RemoteControl {
+    /// Publishes every status change to `events`.
+    pub fn new(events: Events) -> Self {
         Self {
             device: gethostname()
                 .ok()
                 .and_then(|hostname| hostname.into_string().ok()),
             servers: SyncMutex::default(),
+            events,
             sign_in: watch::Sender::new(SignIn::Unknown),
             changes: watch::Sender::new(0),
             restarts: watch::Sender::new(0),
@@ -174,30 +189,30 @@ impl Default for RemoteControl {
             stopped: watch::Sender::new(false),
         }
     }
-}
 
-impl RemoteControl {
     /// The server for `directory`, absent when it has none.
     pub fn status_of(&self, directory: &Path) -> Option<RemoteControlStatus> {
-        let status = self
-            .servers
+        self.servers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(directory)
-            .cloned()?;
-        Some(RemoteControlStatus {
-            device: self.device.clone(),
-            ..status
-        })
+            .cloned()
     }
 
-    /// The server for `directory`, waiting when it has not started yet.
-    pub fn status_or_waiting(&self, directory: &Path) -> RemoteControlStatus {
-        self.status_of(directory)
-            .unwrap_or_else(|| RemoteControlStatus {
-                device: self.device.clone(),
-                ..RemoteControlStatus::default()
-            })
+    pub fn overview(&self, projects: &Path) -> RemoteControlOverview {
+        let servers = self.servers.lock().unwrap_or_else(PoisonError::into_inner);
+        RemoteControlOverview {
+            device: self.device.clone(),
+            projects: servers.get(projects).cloned().unwrap_or_default(),
+            folders: servers
+                .iter()
+                .filter(|(directory, _)| directory.parent() == Some(projects))
+                .filter_map(|(directory, status)| {
+                    let name = directory.file_name()?.to_str()?;
+                    Some((name.to_owned(), status.clone()))
+                })
+                .collect(),
+        }
     }
 
     /// Settings, folders or the install changed, so servers may need to start, stop or restart.
@@ -237,15 +252,27 @@ impl RemoteControl {
     }
 
     fn update(&self, directory: &Path, change: impl FnOnce(&mut RemoteControlStatus)) {
-        let mut servers = self.servers.lock().unwrap_or_else(PoisonError::into_inner);
-        change(servers.entry(directory.to_path_buf()).or_default());
+        let changed = {
+            let mut servers = self.servers.lock().unwrap_or_else(PoisonError::into_inner);
+            let before = servers.get(directory).cloned();
+            let status = servers.entry(directory.to_path_buf()).or_default();
+            change(status);
+            before.as_ref() != Some(&*status)
+        };
+        if changed {
+            self.events.publish(Topic::RemoteControl);
+        }
     }
 
     fn forget(&self, directory: &Path) {
-        self.servers
+        let forgotten = self
+            .servers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(directory);
+        if forgotten.is_some() {
+            self.events.publish(Topic::RemoteControl);
+        }
     }
 }
 
@@ -463,11 +490,14 @@ impl AppState {
                 () = signals.shutdown.until_set() => return false,
             },
         };
-        self.remote_control.sign_in.send_if_modified(|current| {
+        let changed = self.remote_control.sign_in.send_if_modified(|current| {
             let changed = *current != sign_in;
             *current = sign_in;
             changed
         });
+        if changed {
+            self.events.publish(Topic::Agents);
+        }
         signals.sign_in.mark_unchanged();
         true
     }
@@ -663,25 +693,21 @@ impl AppState {
                     return RunEnd::Failed("did not connect within 2 minutes".to_owned());
                 }
                 _ = signals.restarts.changed() => {
-                    server.stop().await;
-                    return RunEnd::Reconsidered;
+                    return self.stop_server(server, launch).await;
                 }
                 _ = signals.changes.changed() => {
                     if !self.still_wanted(served, launch).await {
-                        server.stop().await;
-                        return RunEnd::Reconsidered;
+                        return self.stop_server(server, launch).await;
                     }
                 }
                 _ = signals.sign_in.changed() => {
                     if !self.still_wanted(served, launch).await {
-                        server.stop().await;
-                        return RunEnd::Reconsidered;
+                        return self.stop_server(server, launch).await;
                     }
                 }
                 _ = recheck.tick() => {
                     if !self.still_wanted(served, launch).await {
-                        server.stop().await;
-                        return RunEnd::Reconsidered;
+                        return self.stop_server(server, launch).await;
                     }
                 }
                 _ = usage.tick() => server.note_usage(&self.remote_control, launch).await,
@@ -691,6 +717,14 @@ impl AppState {
                 }
             }
         }
+    }
+
+    async fn stop_server(&self, server: ServerRun, launch: &Launch) -> RunEnd {
+        self.remote_control.update(&launch.directory, |status| {
+            status.enter(ServerState::Stopping);
+        });
+        server.stop().await;
+        RunEnd::Reconsidered
     }
 }
 
@@ -901,6 +935,9 @@ impl ServerOutput {
             if let Some(url) = line.connect_url() {
                 let mut newly_connected = false;
                 remote_control.update(&directory, |status| {
+                    if !matches!(status.state, ServerState::Starting | ServerState::Running) {
+                        return;
+                    }
                     newly_connected = status.state != ServerState::Running
                         || status.url.as_deref() != Some(url.as_str());
                     status.state = ServerState::Running;
@@ -957,8 +994,11 @@ impl RemoteControlLineExt for str {
 
 #[cfg(test)]
 mod tests {
+    use futures_util::StreamExt;
+
     use super::*;
     use crate::manager::api::test_support::TestManager;
+    use crate::manager::events::ManagerEvent;
     use crate::manager::folders::ProjectsDirectory;
     use crate::path_ext::PathExt;
 
@@ -1382,6 +1422,94 @@ mod tests {
         while state.remote_control.status_of(&app).is_some() {
             assert!(Instant::now() < deadline, "the folder server did not stop");
             sleep(Duration::from_millis(50)).await;
+        }
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_folder_server_waiting_from_the_start_is_published() {
+        let manager = TestManager::new();
+        let state = manager.state.clone();
+        let app = state.projects.folder("app");
+        fs::create_dir_all(&app).expect("folder is created");
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Waiting).await;
+        let mut events = Box::pin(state.events.stream());
+        events.next().await;
+
+        state
+            .choose_to_serve_folder("app", true)
+            .await
+            .expect("the choice is saved");
+        wait_in(&state, &app, ServerState::Waiting).await;
+        let mut published = Vec::new();
+        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
+            if let ManagerEvent::Changed { topic, .. } = event {
+                published.push(topic);
+            }
+        }
+        assert!(published.contains(&Topic::RemoteControl), "{published:?}");
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_server_being_stopped_says_so_and_every_change_is_published() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            "trap 'sleep 1; exit' TERM; echo \"https://claude.ai/code?environment=env_$(basename \"$PWD\")\"; sleep 60 & wait",
+        );
+        let mut events = Box::pin(state.events.stream());
+        let app = state.projects.0.join("app");
+        fs::create_dir_all(&app).expect("folder is created");
+        state
+            .choose_to_serve_folder("app", true)
+            .await
+            .expect("the choice is saved");
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Running).await;
+        wait_in(&state, &app, ServerState::Running).await;
+        let overview = state.remote_control.overview(&state.projects.0);
+        assert_eq!(overview.projects.state, ServerState::Running);
+        assert_eq!(
+            overview
+                .folders
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["app"]
+        );
+
+        state
+            .choose_to_serve_folder("app", false)
+            .await
+            .expect("the choice is saved");
+        wait_in(&state, &app, ServerState::Stopping).await;
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .expect("the deadline fits");
+        while state.remote_control.status_of(&app).is_some() {
+            assert!(Instant::now() < deadline, "the folder server did not stop");
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        let mut published = Vec::new();
+        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
+            if let ManagerEvent::Changed { topic, .. } = event {
+                published.push(topic);
+            }
+        }
+        for expected in [Topic::Folders, Topic::RemoteControl] {
+            assert!(
+                published.contains(&expected),
+                "{expected:?} missing from {published:?}"
+            );
         }
 
         state.remote_control.begin_shut_down();

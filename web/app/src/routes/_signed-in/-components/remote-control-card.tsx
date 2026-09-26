@@ -1,4 +1,4 @@
-import type { RemoteControlStatus, ServerState } from "@ezra/client";
+import type { RemoteControlOverview, RemoteControlStatus, ServerState } from "@ezra/client";
 import { Link } from "@tanstack/react-router";
 import { ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
@@ -11,22 +11,24 @@ import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-con
 
 type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
 
-const BADGES: Record<ServerState, BadgeVariant> = {
+export const SERVER_BADGES: Record<ServerState, BadgeVariant> = {
   off: "secondary",
   waiting: "secondary",
   starting: "warning",
   running: "success",
   retrying: "warning",
+  stopping: "warning",
 };
 
 /** Claude Code's Remote Control server on /projects: whether it runs, and where to continue. */
-export function RemoteControlCard({ status }: { status: RemoteControlStatus }) {
+export function RemoteControlCard({ overview }: { overview: RemoteControlOverview }) {
+  const status = overview.projects;
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           {REMOTE_CONTROL_DESCRIPTIONS.title}
-          <Badge variant={BADGES[status.state]}>{SERVER_STATES[status.state]}</Badge>
+          <Badge variant={SERVER_BADGES[status.state]}>{SERVER_STATES[status.state]}</Badge>
         </CardTitle>
         {status.url ? (
           <CardAction>
@@ -43,7 +45,7 @@ export function RemoteControlCard({ status }: { status: RemoteControlStatus }) {
         ) : null}
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
-        <StateHint status={status} />
+        <StateHint status={status} device={overview.device} />
         {status.usage ? (
           <p className="text-muted-foreground">
             {REMOTE_CONTROL_DESCRIPTIONS.usage(
@@ -66,7 +68,7 @@ export function RemoteControlCard({ status }: { status: RemoteControlStatus }) {
   );
 }
 
-function StateHint({ status }: { status: RemoteControlStatus }) {
+function StateHint({ status, device }: { status: RemoteControlStatus; device?: string | null }) {
   switch (status.state) {
     case "off":
       return (
@@ -79,8 +81,8 @@ function StateHint({ status }: { status: RemoteControlStatus }) {
     case "running":
       return (
         <p className="text-muted-foreground">
-          {status.device
-            ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(status.device)
+          {device
+            ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(device)
             : REMOTE_CONTROL_DESCRIPTIONS.running_hint_without_device}
         </p>
       );

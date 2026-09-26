@@ -5,6 +5,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session};
 use crate::manager::agents::{Agent, ReleaseChannel};
+use crate::manager::events::Topic;
 use crate::manager::remote_control::RemoteControlSettings;
 
 /// How the manager installs, updates and serves Claude Code.
@@ -78,11 +79,14 @@ impl AppState {
             Ok::<(), ApiError>(())
         })
         .await?;
+        self.events.publish(Topic::ClaudeSettings);
         if channel_changed {
+            self.events.publish(Topic::Agents);
             self.recheck_claude_release();
         }
         if remote_control_changed {
             self.remote_control.reconsider();
+            self.events.publish(Topic::Folders);
         }
         Ok(body)
     }

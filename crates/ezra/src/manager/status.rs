@@ -3,7 +3,6 @@ use utoipa::ToSchema;
 
 use super::agents::{Agent, DownloadProgress, VersionExt};
 use super::login::{LoginPrompt, SignInStatus};
-use super::remote_control::RemoteControlStatus;
 use super::state::AppState;
 use crate::path_ext::PathExt;
 
@@ -26,8 +25,6 @@ pub struct AgentStatus {
     pub install_progress: Option<DownloadProgress>,
     /// A newer release than the installed version, absent when none is known.
     pub available_update: Option<String>,
-    /// The Remote Control server, Claude Code only.
-    pub remote_control: Option<RemoteControlStatus>,
 }
 
 impl AgentStatus {
@@ -87,8 +84,6 @@ impl AgentStatus {
             config_disk_bytes: config_directory.and_then(|directory| directory.total_bytes().ok()),
             install_progress,
             available_update,
-            remote_control: (agent == Agent::Claude)
-                .then(|| state.remote_control.status_or_waiting(&state.projects.0)),
         }
     }
 }

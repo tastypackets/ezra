@@ -374,6 +374,38 @@
         }
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Stream what changes",
+        "description": "Sends `connected`, then each part that changes, until the manager shuts down.",
+        "operationId": "streamEvents",
+        "responses": {
+          "200": {
+            "description": "Server-sent events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagerEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/folders": {
       "get": {
         "tags": [
@@ -703,6 +735,37 @@
         }
       }
     },
+    "/api/v1/remote-control": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get every Remote Control server's state",
+        "operationId": "getRemoteControl",
+        "responses": {
+          "200": {
+            "description": "The servers for /projects and its folders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteControlOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/session": {
       "get": {
         "tags": [
@@ -851,17 +914,6 @@
                 "type": "null"
               }
             ]
-          },
-          "remote_control": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/RemoteControlStatus",
-                "description": "The Remote Control server, Claude Code only."
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         }
       },
@@ -981,17 +1033,6 @@
               "serve"
             ],
             "properties": {
-              "remote_control": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/RemoteControlStatus",
-                    "description": "The folder's Remote Control server, absent when it has none."
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "serve": {
                 "type": "boolean",
                 "description": "Chosen to be served to the Claude app, by its own choice or by default."
@@ -1097,6 +1138,57 @@
           }
         }
       },
+      "ManagerEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Sent first on every connection, with the current revision.",
+            "required": [
+              "revision",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "connected"
+                ]
+              },
+              "revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "This part changed.",
+            "required": [
+              "topic",
+              "revision",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "changed"
+                ]
+              },
+              "revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "topic": {
+                "$ref": "#/components/schemas/Topic"
+              }
+            }
+          }
+        ],
+        "description": "One message on the event stream. Every change raises the revision by one."
+      },
       "PasswordBody": {
         "type": "object",
         "required": [
@@ -1115,6 +1207,37 @@
           "latest",
           "stable"
         ]
+      },
+      "RemoteControlOverview": {
+        "type": "object",
+        "description": "Every Remote Control server, and where the Claude app lists them.",
+        "required": [
+          "projects",
+          "folders"
+        ],
+        "properties": {
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device the Claude app lists the servers under, the container's hostname."
+          },
+          "folders": {
+            "type": "object",
+            "description": "The servers for folders in /projects, by folder name.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RemoteControlStatus"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "projects": {
+            "$ref": "#/components/schemas/RemoteControlStatus",
+            "description": "The server for /projects, waiting when it has not started yet."
+          }
+        }
       },
       "RemoteControlSettings": {
         "type": "object",
@@ -1159,13 +1282,6 @@
           "restarts"
         ],
         "properties": {
-          "device": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The device the Claude app lists this server under, the container's hostname."
-          },
           "last_error": {
             "type": [
               "string",
@@ -1222,7 +1338,8 @@
           "waiting",
           "starting",
           "running",
-          "retrying"
+          "retrying",
+          "stopping"
         ]
       },
       "ServerUsage": {
@@ -1270,6 +1387,17 @@
             "description": "A password has been set."
           }
         }
+      },
+      "Topic": {
+        "type": "string",
+        "description": "A part of what the web app shows.",
+        "enum": [
+          "agents",
+          "claude_settings",
+          "folders",
+          "remote_control",
+          "git"
+        ]
       }
     }
   }

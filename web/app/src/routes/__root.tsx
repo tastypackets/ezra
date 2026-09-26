@@ -7,6 +7,8 @@ import { APP_DESCRIPTIONS } from "@/content/app";
 
 export interface RouterContext {
   queryClient: QueryClient;
+  /** The event revision the data in `index.html` is from, when the page had some. */
+  initialRevision?: number;
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({

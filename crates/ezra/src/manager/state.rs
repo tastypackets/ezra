@@ -6,6 +6,7 @@ use tokio::sync::{Mutex, watch};
 
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
+use super::events::Events;
 use super::folders::{PROJECTS_DIRECTORY, ProjectsDirectory};
 use super::git::GitTools;
 use super::login::LoginProcess;
@@ -28,6 +29,7 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
+    pub events: Events,
     /// The GitHub account gh is signed in as, from the last check. None when signed out.
     pub github_account: Arc<watch::Sender<Option<String>>>,
     pub projects: ProjectsDirectory,
@@ -41,6 +43,7 @@ impl AppState {
         download_tls_verification: TlsVerification,
         git_tools: GitTools,
     ) -> Self {
+        let events = Events::default();
         Self {
             settings_path: Arc::new(settings_path),
             settings: Arc::new(Mutex::new(settings)),
@@ -53,7 +56,8 @@ impl AppState {
             latest_releases: Arc::default(),
             git_tools: Arc::new(git_tools),
             github_login: Arc::default(),
-            remote_control: Arc::default(),
+            remote_control: Arc::new(RemoteControl::new(events.clone())),
+            events,
             github_account: Arc::new(watch::Sender::new(None)),
             projects: ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY)),
         }

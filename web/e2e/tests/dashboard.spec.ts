@@ -1,9 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-import { recordApiCalls } from "./manager.ts";
+import { inContainer, recordApiCalls } from "./manager.ts";
 
-test("the dashboard arrives with its data", async ({ page }) => {
+test("the dashboard arrives with its data, then only listens for changes", async ({ page }) => {
   const apiCalls = recordApiCalls(page);
+  const listening = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/events",
+  );
   await page.goto("./");
   for (const agent of ["Claude Code", "Codex"]) {
     const row = page.getByRole("row", { name: new RegExp(agent) });
@@ -13,7 +16,30 @@ test("the dashboard arrives with its data", async ({ page }) => {
   await expect(
     page.getByText("No projects yet. Ask an agent to clone a repository into /projects."),
   ).toBeVisible();
-  expect(apiCalls).toEqual([]);
+  await listening;
+  expect(apiCalls).toEqual(["GET /api/v1/events"]);
+});
+
+test("a folder's switch and server follow changes made elsewhere", async ({ page }, testInfo) => {
+  const folder = `notes-${testInfo.retry}`;
+  inContainer("mkdir", `/projects/${folder}`);
+  try {
+    await page.goto("./");
+    const row = page.getByRole("listitem").filter({ hasText: folder });
+    const serve = row.getByRole("switch", { name: `Serve ${folder} in the Claude app` });
+    await expect(serve).not.toBeChecked();
+    const chosen = await page.request.put(`api/v1/folders/${folder}/remote-control`, {
+      data: { serve: true },
+    });
+    expect(chosen.status()).toBe(204);
+    await expect(serve).toBeChecked();
+    await expect(row.getByText("Waiting")).toBeVisible();
+    await serve.click();
+    await expect(serve).not.toBeChecked();
+    await expect(row.getByText("Waiting")).toBeHidden();
+  } finally {
+    inContainer("rmdir", `/projects/${folder}`);
+  }
 });
 
 test("Remote Control waits for Claude Code", async ({ page }) => {

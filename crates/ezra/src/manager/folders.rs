@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{MissedTickBehavior, interval};
 use utoipa::ToSchema;
 
-use super::remote_control::RemoteControlStatus;
+use super::events::Topic;
 use super::settings::SettingsError;
 use super::state::AppState;
 
@@ -75,8 +75,6 @@ pub struct FolderStatus {
     pub folder: Folder,
     /// Chosen to be served to the Claude app, by its own choice or by default.
     pub serve: bool,
-    /// The folder's Remote Control server, absent when it has none.
-    pub remote_control: Option<RemoteControlStatus>,
 }
 
 /// The directory whose folders agents work in, usually /projects.
@@ -363,9 +361,6 @@ impl AppState {
         for folder in self.folders().await? {
             statuses.push(FolderStatus {
                 serve: self.serves_folder(&folder).await,
-                remote_control: self
-                    .remote_control
-                    .status_of(&self.projects.folder(&folder.name)),
                 folder,
             });
         }
@@ -397,6 +392,7 @@ impl AppState {
         .await
         .map_err(FolderChoiceError::Settings)?;
         self.remote_control.reconsider();
+        self.events.publish(Topic::Folders);
         Ok(())
     }
 
@@ -415,7 +411,11 @@ impl AppState {
             let account = github_account.borrow_and_update().clone();
             let described = tokio::task::spawn_blocking(move || {
                 let folders = projects.folders()?;
-                projects.describe_folders_for_agents(&folders, account.as_deref())?;
+                if let Err(error) =
+                    projects.describe_folders_for_agents(&folders, account.as_deref())
+                {
+                    tracing::warn!("could not write /projects/AGENTS.md: {error}");
+                }
                 Ok::<_, io::Error>(folders)
             })
             .await;
@@ -424,10 +424,11 @@ impl AppState {
                     if folders != known {
                         known = folders;
                         self.remote_control.reconsider();
+                        self.events.publish(Topic::Folders);
                     }
                 }
                 Ok(Err(error)) => {
-                    tracing::warn!("could not describe the folders in /projects: {error}");
+                    tracing::warn!("could not list the folders in /projects: {error}");
                 }
                 Err(error) => tracing::warn!("folder scan stopped: {error}"),
             }

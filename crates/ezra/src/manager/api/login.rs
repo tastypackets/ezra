@@ -7,6 +7,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session};
 use crate::manager::agents::Agent;
+use crate::manager::events::Topic;
 use crate::manager::login::{AgentCli, LoginError, LoginPrompt};
 
 impl From<LoginError> for ApiError {
@@ -47,10 +48,12 @@ pub async fn start(
     Path(agent): Path<Agent>,
 ) -> Result<Json<LoginPrompt>, ApiError> {
     state.logins.lock().await.remove(&agent);
+    state.events.publish(Topic::Agents);
     let (login, prompt) = AgentCli::installed(agent, &state.install_paths)?
         .start_login()
         .await?;
     state.logins.lock().await.insert(agent, login);
+    state.events.publish(Topic::Agents);
     Ok(Json(prompt))
 }
 
@@ -86,7 +89,9 @@ pub async fn submit_code(
         .await
         .remove(&agent)
         .ok_or_else(|| ApiError::Conflict(format!("no {agent} sign-in is in progress")))?;
-    login.submit_code(&body.code).await?;
+    let submitted = login.submit_code(&body.code).await;
+    state.events.publish(Topic::Agents);
+    submitted?;
     tracing::info!("{agent} is signed in");
     state.remote_control.restart();
     Ok(StatusCode::NO_CONTENT)
@@ -113,12 +118,14 @@ pub async fn log_out(
     Path(agent): Path<Agent>,
 ) -> Result<StatusCode, ApiError> {
     state.logins.lock().await.remove(&agent);
+    state.events.publish(Topic::Agents);
     AgentCli::installed(agent, &state.install_paths)?
         .log_out()
         .await?;
     if agent == Agent::Claude {
         state.remote_control.reconsider();
     }
+    state.events.publish(Topic::Agents);
     Ok(StatusCode::NO_CONTENT)
 }
 

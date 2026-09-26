@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { isInstallMutation } from "@/hooks/use-agent-actions";
 import { INSTALL_POLL_MS, agentsQueryOptions } from "@/queries/agent-queries";
+import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { AgentsCard } from "./-components/agents-card";
 import { FoldersCard } from "./-components/folders-card";
@@ -11,7 +12,10 @@ import { SignInPanel } from "./-components/sign-in-panel";
 
 export const Route = createFileRoute("/_signed-in/")({
   loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(agentsQueryOptions);
+    await Promise.all([
+      context.queryClient.ensureQueryData(agentsQueryOptions),
+      context.queryClient.ensureQueryData(remoteControlQueryOptions),
+    ]);
   },
   component: DashboardPage,
 });
@@ -22,6 +26,7 @@ function DashboardPage() {
     ...agentsQueryOptions,
     refetchInterval: installing ? INSTALL_POLL_MS : agentsQueryOptions.refetchInterval,
   });
+  const { data: remoteControl } = useSuspenseQuery(remoteControlQueryOptions);
   return (
     <div className="flex flex-col gap-4">
       <AgentsCard agents={agents} />
@@ -30,14 +35,7 @@ function DashboardPage() {
           <SignInPanel key={status.agent} agent={status.agent} prompt={status.login_prompt} />
         ) : null,
       )}
-      {agents.map((status) =>
-        status.remote_control ? (
-          <RemoteControlCard
-            key={`${status.agent}-remote-control`}
-            status={status.remote_control}
-          />
-        ) : null,
-      )}
+      <RemoteControlCard overview={remoteControl} />
       <FoldersCard />
     </div>
   );

@@ -1,10 +1,10 @@
-import type { FolderStatus, ServerState } from "@ezra/client";
+import type { FolderStatus, RemoteControlStatus } from "@ezra/client";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
+import { useId } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import type { badgeVariants } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Hint } from "@/components/ui/hint";
@@ -16,20 +16,14 @@ import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-con
 import { useFolderActions } from "@/hooks/use-folder-actions";
 import { errorMessage } from "@/lib/utils";
 import { foldersQueryOptions } from "@/queries/folder-queries";
+import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
-type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
-
-const BADGES: Record<ServerState, BadgeVariant> = {
-  off: "secondary",
-  waiting: "secondary",
-  starting: "warning",
-  running: "success",
-  retrying: "warning",
-};
+import { SERVER_BADGES } from "./remote-control-card";
 
 /** The projects agents work in, and which ones the Claude app lists. */
 export function FoldersCard() {
   const folders = useQuery(foldersQueryOptions);
+  const remoteControl = useQuery(remoteControlQueryOptions);
   return (
     <Card>
       <CardHeader>
@@ -49,7 +43,11 @@ export function FoldersCard() {
         ) : (
           <ul className="flex flex-col divide-y">
             {folders.data.map((folder) => (
-              <FolderRow key={folder.name} folder={folder} />
+              <FolderRow
+                key={folder.name}
+                folder={folder}
+                server={remoteControl.data?.folders[folder.name]}
+              />
             ))}
           </ul>
         )}
@@ -58,11 +56,11 @@ export function FoldersCard() {
   );
 }
 
-function FolderRow({ folder }: { folder: FolderStatus }) {
+function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteControlStatus }) {
   const { chooseToServe } = useFolderActions();
   const detail = folder.git ? folder.git.repository : FOLDERS_DESCRIPTIONS.not_git;
-  const server = folder.remote_control;
-  const switchId = `serve-${folder.name}`;
+  const switchId = useId();
+  const switchLabelId = useId();
   return (
     <li className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -91,7 +89,7 @@ function FolderRow({ folder }: { folder: FolderStatus }) {
           </span>
         ) : null}
         {server ? (
-          <Badge variant={BADGES[server.state]}>{SERVER_STATES[server.state]}</Badge>
+          <Badge variant={SERVER_BADGES[server.state]}>{SERVER_STATES[server.state]}</Badge>
         ) : null}
         {server?.url ? (
           <a
@@ -112,8 +110,11 @@ function FolderRow({ folder }: { folder: FolderStatus }) {
             onCheckedChange={(serve) =>
               chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
             }
-            aria-label={FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
+            aria-labelledby={switchLabelId}
           />
+          <span id={switchLabelId} className="sr-only">
+            {FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
+          </span>
           <Label htmlFor={switchId} className="text-muted-foreground">
             {FOLDERS_DESCRIPTIONS.serve}
           </Label>

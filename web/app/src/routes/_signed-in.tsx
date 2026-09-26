@@ -1,5 +1,6 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
+import { useManagerEvents } from "@/hooks/use-manager-events";
 import { sessionQueryOptions } from "@/queries/session-queries";
 
 export const Route = createFileRoute("/_signed-in")({
@@ -12,4 +13,11 @@ export const Route = createFileRoute("/_signed-in")({
       throw redirect({ to: "/login" });
     }
   },
+  component: SignedInLayout,
 });
+
+function SignedInLayout() {
+  const { initialRevision } = Route.useRouteContext();
+  useManagerEvents(initialRevision);
+  return <Outlet />;
+}

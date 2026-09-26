@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session};
+use crate::manager::events::Topic;
 use crate::manager::git::{CommitIdentity, GitError};
 use crate::manager::login::{LoginProcess, LoginPrompt};
 
@@ -75,6 +76,7 @@ pub async fn start_github_login(
     state.github_login.lock().await.take();
     let (login, prompt) = state.git_tools.start_github_login().await?;
     *state.github_login.lock().await = Some(login);
+    state.events.publish(Topic::Git);
     tracing::info!("GitHub sign-in started");
     Ok(Json(prompt))
 }
@@ -98,7 +100,9 @@ pub async fn log_out_of_github(
 ) -> Result<StatusCode, ApiError> {
     state.refuse_environment_sign_in()?;
     state.github_login.lock().await.take();
-    state.git_tools.log_out_of_github().await?;
+    let signed_out = state.git_tools.log_out_of_github().await;
+    state.events.publish(Topic::Git);
+    signed_out?;
     state.note_github_account(None);
     tracing::info!("GitHub is signed out");
     Ok(StatusCode::NO_CONTENT)
@@ -124,6 +128,7 @@ pub async fn update_identity(
     Json(identity): Json<CommitIdentity>,
 ) -> Result<Json<CommitIdentity>, ApiError> {
     state.git_tools.save_commit_identity(&identity).await?;
+    state.events.publish(Topic::Git);
     Ok(Json(state.git_tools.commit_identity().await?))
 }
 
@@ -200,11 +205,14 @@ impl AppState {
     }
 
     fn note_github_account(&self, account: Option<String>) {
-        self.github_account.send_if_modified(|current| {
+        let changed = self.github_account.send_if_modified(|current| {
             let changed = *current != account;
             *current = account;
             changed
         });
+        if changed {
+            self.events.publish(Topic::Git);
+        }
     }
 
     async fn lend_github_sign_in_to_git(&self) {

@@ -107,7 +107,6 @@ mod tests {
                         git: None,
                     },
                     serve: false,
-                    remote_control: None,
                 },
                 FolderStatus {
                     folder: Folder {
@@ -118,7 +117,6 @@ mod tests {
                         }),
                     },
                     serve: true,
-                    remote_control: None,
                 },
             ]
         );

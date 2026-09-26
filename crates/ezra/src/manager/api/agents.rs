@@ -5,6 +5,7 @@ use super::{ApiError, AppState, ErrorBody, Session, internal};
 use std::sync::Arc;
 
 use crate::manager::agents::{Agent, InstallProgress};
+use crate::manager::events::Topic;
 use crate::manager::status::AgentStatus;
 use crate::manager::updates::LatestRelease;
 
@@ -80,11 +81,13 @@ impl AppState {
             .lock()
             .await
             .insert(agent, Arc::clone(&progress));
+        self.events.publish(Topic::Agents);
         let outcome = self
             .install_paths
             .install_latest(agent, channel, self.download_tls_verification, &progress)
             .await;
         self.installs_in_progress.lock().await.remove(&agent);
+        self.events.publish(Topic::Agents);
         let version = outcome.map_err(|error| {
             ApiError::AgentFailed(format!("could not install {agent}: {error}"))
         })?;
@@ -145,12 +148,6 @@ mod tests {
                 config_disk_bytes: Some(0),
                 install_progress: None,
                 available_update: None,
-                remote_control: (agent == Agent::Claude).then(|| {
-                    manager
-                        .state
-                        .remote_control
-                        .status_or_waiting(&manager.state.projects.0)
-                }),
             })
         );
     }

@@ -1,7 +1,9 @@
 mod agents;
+mod events;
 mod folders;
 mod git;
 mod login;
+mod remote_control;
 pub mod session;
 mod settings;
 #[cfg(test)]
@@ -39,6 +41,8 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/agents/claude/settings",
             get(settings::claude).put(settings::update_claude),
         )
+        .route("/api/v1/events", get(events::stream))
+        .route("/api/v1/remote-control", get(remote_control::overview))
         .route("/api/v1/folders", get(folders::list))
         .route(
             "/api/v1/folders/{name}/remote-control",
@@ -144,6 +148,8 @@ pub struct ErrorBody {
         git::update_identity,
         folders::list,
         folders::choose_to_serve,
+        remote_control::overview,
+        events::stream,
     )
 )]
 pub struct ApiDoc;

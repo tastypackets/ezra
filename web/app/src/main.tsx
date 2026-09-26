@@ -11,7 +11,7 @@ import { queryClient } from "@/lib/query-client";
 import { router } from "./router";
 import "./styles.css";
 
-seedInitialData(queryClient);
+const initialRevision = seedInitialData(queryClient);
 
 // A 401 anywhere but the sign-in form means the manager session ended, e.g. after a restart.
 client.interceptors.response.use((response) => {
@@ -32,7 +32,7 @@ if (rootElement) {
   createRoot(rootElement).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <RouterProvider router={router} context={{ initialRevision }} />
       </QueryClientProvider>
     </StrictMode>,
   );

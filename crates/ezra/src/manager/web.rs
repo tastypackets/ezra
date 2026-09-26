@@ -14,6 +14,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::api::session::SessionStatus;
 use super::folders::FolderStatus;
+use super::remote_control::RemoteControlOverview;
 use super::state::AppState;
 use super::status::AgentStatus;
 
@@ -23,27 +24,36 @@ const NO_CACHE: HeaderValue = HeaderValue::from_static("no-cache");
 /// What the first screen needs, written into `index.html`.
 #[derive(Debug, Serialize)]
 struct InitialData {
+    /// The event revision the data is from, read before gathering it.
+    revision: u64,
     session: SessionStatus,
     /// Present only when the request is signed in.
     agents: Option<Vec<AgentStatus>>,
     /// Present only when the request is signed in and /projects can be read.
     folders: Option<Vec<FolderStatus>>,
+    /// Present only when the request is signed in.
+    remote_control: Option<RemoteControlOverview>,
 }
 
 impl InitialData {
     async fn gather(app: &AppState, cookies: &CookieJar) -> Self {
+        let revision = app.events.revision();
         let session = SessionStatus::of(app, cookies).await;
         if !session.authenticated {
             return Self {
+                revision,
                 session,
                 agents: None,
                 folders: None,
+                remote_control: None,
             };
         }
         Self {
+            revision,
             session,
             agents: Some(AgentStatus::gather_all(app).await),
             folders: app.folder_statuses().await.ok(),
+            remote_control: Some(app.remote_control.overview(&app.projects.0)),
         }
     }
 
@@ -197,6 +207,7 @@ mod tests {
     fn data_cannot_close_its_script_tag() {
         const OPENING_TAG: &str = r#"<script id="initial-data" type="application/json">"#;
         let data = InitialData {
+            revision: 0,
             session: SessionStatus {
                 claimed: true,
                 authenticated: true,
@@ -211,9 +222,9 @@ mod tests {
                 config_disk_bytes: None,
                 install_progress: None,
                 available_update: None,
-                remote_control: None,
             }]),
             folders: None,
+            remote_control: None,
         };
         let page = data
             .insert_into("<!doctype html><html><head></head><body></body></html>")
