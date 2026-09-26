@@ -2,14 +2,26 @@ import { updateClaudeSettings } from "@ezra/client";
 import type { ClaudeSettingsBody, ReleaseChannel } from "@ezra/client";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { cn } from "cn";
+import { useId } from "react";
 
+import { Autocomplete } from "@/components/ui/autocomplete";
 import { Button } from "@/components/ui/button";
-import { Card, CardFooter, CardHeader } from "@/components/ui/card";
-import { ChoiceCards } from "@/components/ui/choice-cards";
-import { Combobox } from "@/components/ui/combobox";
-import { Field, TextInput } from "@/components/ui/field";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
+import { toastManager } from "@/components/ui/toast";
 import { AGENT_NAMES } from "@/content/agents";
 import { PERMISSION_MODES, RELEASE_CHANNELS, SETTINGS_DESCRIPTIONS } from "@/content/settings";
 import { errorMessage } from "@/lib/utils";
@@ -17,14 +29,18 @@ import { AGENTS } from "@/queries/query-keys";
 import { claudeSettingsQueryOptions } from "@/queries/settings-queries";
 
 const CHANNEL_ORDER: readonly ReleaseChannel[] = ["latest", "stable"];
-const CHANNEL_CHOICES = CHANNEL_ORDER.map((channel) => ({
-  value: channel,
-  ...RELEASE_CHANNELS[channel],
-}));
 
 /** How the manager installs, updates and serves Claude Code. */
 export function ClaudeSettingsCard() {
   const queryClient = useQueryClient();
+  const ids = {
+    enabled: useId(),
+    enabledLabel: useId(),
+    serveFolders: useId(),
+    serveFoldersLabel: useId(),
+    permissionMode: useId(),
+    capacity: useId(),
+  };
   const { data: settings } = useSuspenseQuery(claudeSettingsQueryOptions);
   const save = useMutation({
     mutationFn: async (body: ClaudeSettingsBody) =>
@@ -32,6 +48,7 @@ export function ClaudeSettingsCard() {
     onSuccess: (saved) => {
       queryClient.setQueryData(claudeSettingsQueryOptions.queryKey, saved);
       void queryClient.invalidateQueries({ queryKey: [AGENTS] });
+      toastManager.add({ title: SETTINGS_DESCRIPTIONS.saved });
     },
   });
   const form = useForm({
@@ -46,11 +63,11 @@ export function ClaudeSettingsCard() {
   });
   return (
     <Card>
-      <CardHeader
-        title={AGENT_NAMES.claude}
-        description={SETTINGS_DESCRIPTIONS.claude_description}
-      />
+      <CardHeader>
+        <CardTitle>{AGENT_NAMES.claude}</CardTitle>
+      </CardHeader>
       <form
+        className="contents"
         onSubmit={(event) => {
           event.preventDefault();
           if (!form.state.isSubmitting) {
@@ -58,104 +75,150 @@ export function ClaudeSettingsCard() {
           }
         }}
       >
-        <div className="flex flex-col gap-4 border-b border-ez-border px-5 py-4">
-          <h3 className="font-medium">{SETTINGS_DESCRIPTIONS.remote_control}</h3>
-          <form.Field name="remote_control.enabled">
-            {(field) => (
-              <Switch
-                label={SETTINGS_DESCRIPTIONS.remote_control_enabled}
-                description={SETTINGS_DESCRIPTIONS.remote_control_enabled_hint}
-                checked={field.state.value}
-                onCheckedChange={field.handleChange}
-              />
-            )}
-          </form.Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <form.Field
-              name="remote_control.permission_mode"
-              validators={{
-                onChange: ({ value }) =>
-                  /^\S+$/.test(value.trim())
-                    ? undefined
-                    : SETTINGS_DESCRIPTIONS.permission_mode_word,
-              }}
-            >
-              {(field) => (
-                <Field
-                  label={SETTINGS_DESCRIPTIONS.permission_mode}
-                  hint={SETTINGS_DESCRIPTIONS.permission_mode_hint}
-                  error={field.state.meta.errors.at(0)}
+        <CardContent>
+          <FieldGroup>
+            <FieldSet>
+              <FieldLegend>{SETTINGS_DESCRIPTIONS.remote_control}</FieldLegend>
+              <form.Field name="remote_control.enabled">
+                {(field) => (
+                  <Field orientation="horizontal">
+                    <Switch
+                      id={ids.enabled}
+                      aria-labelledby={ids.enabledLabel}
+                      checked={field.state.value}
+                      onCheckedChange={field.handleChange}
+                    />
+                    <FieldContent>
+                      <FieldLabel id={ids.enabledLabel} htmlFor={ids.enabled}>
+                        {SETTINGS_DESCRIPTIONS.remote_control_enabled}
+                      </FieldLabel>
+                      <FieldDescription>
+                        {SETTINGS_DESCRIPTIONS.remote_control_enabled_hint}
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                )}
+              </form.Field>
+              <form.Field name="remote_control.serve_folders">
+                {(field) => (
+                  <Field orientation="horizontal">
+                    <Switch
+                      id={ids.serveFolders}
+                      aria-labelledby={ids.serveFoldersLabel}
+                      checked={field.state.value}
+                      onCheckedChange={field.handleChange}
+                    />
+                    <FieldContent>
+                      <FieldLabel id={ids.serveFoldersLabel} htmlFor={ids.serveFolders}>
+                        {SETTINGS_DESCRIPTIONS.serve_folders}
+                      </FieldLabel>
+                      <FieldDescription>
+                        {SETTINGS_DESCRIPTIONS.serve_folders_hint}
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                )}
+              </form.Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <form.Field
+                  name="remote_control.permission_mode"
+                  validators={{
+                    onChange: ({ value }) =>
+                      /^\S+$/.test(value.trim())
+                        ? undefined
+                        : SETTINGS_DESCRIPTIONS.permission_mode_word,
+                  }}
                 >
-                  <Combobox
+                  {(field) => {
+                    const error = field.state.meta.errors.at(0);
+                    return (
+                      <Field data-invalid={Boolean(error)}>
+                        <FieldLabel htmlFor={ids.permissionMode}>
+                          {SETTINGS_DESCRIPTIONS.permission_mode}
+                        </FieldLabel>
+                        <Autocomplete
+                          id={ids.permissionMode}
+                          value={field.state.value}
+                          options={PERMISSION_MODES}
+                          onValueChange={field.handleChange}
+                          showOptionsLabel={SETTINGS_DESCRIPTIONS.show_permission_modes}
+                          aria-invalid={Boolean(error)}
+                        />
+                        <FieldDescription>
+                          {SETTINGS_DESCRIPTIONS.permission_mode_hint}
+                        </FieldDescription>
+                        {error ? <FieldError>{error}</FieldError> : null}
+                      </Field>
+                    );
+                  }}
+                </form.Field>
+                <form.Field
+                  name="remote_control.capacity"
+                  validators={{
+                    onChange: ({ value }) =>
+                      Number.isInteger(value) && value >= 1 && value <= 32
+                        ? undefined
+                        : SETTINGS_DESCRIPTIONS.capacity_range,
+                  }}
+                >
+                  {(field) => {
+                    const error = field.state.meta.errors.at(0);
+                    return (
+                      <Field data-invalid={Boolean(error)}>
+                        <FieldLabel htmlFor={ids.capacity}>
+                          {SETTINGS_DESCRIPTIONS.capacity}
+                        </FieldLabel>
+                        <Input
+                          id={ids.capacity}
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          max={32}
+                          name={field.name}
+                          value={Number.isNaN(field.state.value) ? "" : field.state.value}
+                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                          onBlur={field.handleBlur}
+                          aria-invalid={Boolean(error)}
+                        />
+                        <FieldDescription>{SETTINGS_DESCRIPTIONS.capacity_hint}</FieldDescription>
+                        {error ? <FieldError>{error}</FieldError> : null}
+                      </Field>
+                    );
+                  }}
+                </form.Field>
+              </div>
+            </FieldSet>
+            <form.Field name="release_channel">
+              {(field) => (
+                <FieldSet>
+                  <FieldLegend>{SETTINGS_DESCRIPTIONS.release_channel}</FieldLegend>
+                  <FieldDescription>{SETTINGS_DESCRIPTIONS.release_channel_hint}</FieldDescription>
+                  <RadioGroup
                     value={field.state.value}
-                    options={PERMISSION_MODES}
-                    onValueChange={field.handleChange}
-                    showOptionsLabel={SETTINGS_DESCRIPTIONS.show_permission_modes}
-                  />
-                </Field>
+                    onValueChange={(next) => {
+                      const channel = CHANNEL_ORDER.find((candidate) => candidate === next);
+                      if (channel) {
+                        field.handleChange(channel);
+                      }
+                    }}
+                    className="grid gap-2 sm:grid-cols-2"
+                  >
+                    {CHANNEL_ORDER.map((channel) => (
+                      <ChannelChoice key={channel} channel={channel} />
+                    ))}
+                  </RadioGroup>
+                </FieldSet>
               )}
             </form.Field>
-            <form.Field
-              name="remote_control.capacity"
-              validators={{
-                onChange: ({ value }) =>
-                  Number.isInteger(value) && value >= 1 && value <= 32
-                    ? undefined
-                    : SETTINGS_DESCRIPTIONS.capacity_range,
-              }}
-            >
-              {(field) => (
-                <Field
-                  label={SETTINGS_DESCRIPTIONS.capacity}
-                  hint={SETTINGS_DESCRIPTIONS.capacity_hint}
-                  error={field.state.meta.errors.at(0)}
-                >
-                  <TextInput
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={32}
-                    name={field.name}
-                    value={Number.isNaN(field.state.value) ? "" : field.state.value}
-                    onChange={(event) => field.handleChange(event.target.valueAsNumber)}
-                    onBlur={field.handleBlur}
-                  />
-                </Field>
-              )}
-            </form.Field>
-          </div>
-        </div>
-        <div className="px-5 py-4">
-          <form.Field name="release_channel">
-            {(field) => (
-              <ChoiceCards
-                label={SETTINGS_DESCRIPTIONS.release_channel}
-                hint={SETTINGS_DESCRIPTIONS.release_channel_hint}
-                value={field.state.value}
-                choices={CHANNEL_CHOICES}
-                onValueChange={field.handleChange}
-              />
-            )}
-          </form.Field>
-        </div>
-        <CardFooter>
-          <form.Subscribe selector={(state) => state.isDefaultValue}>
-            {(unchanged) => (
-              <p
-                role="status"
-                className={cn(save.isError ? "text-[0.8125rem] text-ez-danger" : "text-ez-muted")}
-              >
-                {save.isError
-                  ? errorMessage(save.error)
-                  : save.isSuccess && unchanged
-                    ? SETTINGS_DESCRIPTIONS.saved
-                    : null}
-              </p>
-            )}
-          </form.Subscribe>
+          </FieldGroup>
+        </CardContent>
+        <CardFooter className="justify-between gap-4">
+          <p role="alert" className="text-destructive">
+            {save.isError ? errorMessage(save.error) : null}
+          </p>
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button type="submit" variant="primary" loading={isSubmitting}>
+              <Button type="submit" loading={isSubmitting}>
                 {SETTINGS_DESCRIPTIONS.save}
               </Button>
             )}
@@ -163,5 +226,28 @@ export function ClaudeSettingsCard() {
         </CardFooter>
       </form>
     </Card>
+  );
+}
+
+function ChannelChoice({ channel }: { channel: ReleaseChannel }) {
+  const id = useId();
+  const titleId = useId();
+  const descriptionId = useId();
+  const { title, description } = RELEASE_CHANNELS[channel];
+  return (
+    <FieldLabel htmlFor={id}>
+      <Field orientation="horizontal">
+        <RadioGroupItem
+          id={id}
+          value={channel}
+          aria-labelledby={titleId}
+          aria-describedby={descriptionId}
+        />
+        <FieldContent>
+          <FieldTitle id={titleId}>{title}</FieldTitle>
+          <FieldDescription id={descriptionId}>{description}</FieldDescription>
+        </FieldContent>
+      </Field>
+    </FieldLabel>
   );
 }

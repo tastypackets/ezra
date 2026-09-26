@@ -8,6 +8,8 @@ import {
 } from "@tanstack/react-query";
 import type { Mutation } from "@tanstack/react-query";
 
+import { toastManager } from "@/components/ui/toast";
+import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
 import { errorMessage } from "@/lib/utils";
 import { AGENT_ACTION, AGENTS } from "@/queries/query-keys";
 
@@ -24,6 +26,18 @@ export function useAgentActions(agent: Agent) {
     mutationKey: mutationKey("install"),
     mutationFn: async (_versionBefore: string | null) =>
       (await installAgent({ path, throwOnError: true })).data,
+    onSuccess: (status, versionBefore) => {
+      const name = AGENT_NAMES[agent];
+      if (!versionBefore || !status.installed_version) {
+        return;
+      }
+      toastManager.add({
+        title:
+          status.installed_version === versionBefore
+            ? AGENTS_DESCRIPTIONS.up_to_date(name)
+            : AGENTS_DESCRIPTIONS.updated(name, status.installed_version),
+      });
+    },
     onSettled: refreshAgents,
   });
   const startSignIn = useMutation({

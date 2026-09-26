@@ -1,12 +1,6 @@
 import type { DownloadProgress } from "@ezra/client";
-import prettyBytes from "pretty-bytes";
 
 import { APP_DESCRIPTIONS } from "@/content/app";
-
-/** Renders a byte count in decimal units, e.g. `231 MB`. */
-export function formatBytes(bytes: number): string {
-  return prettyBytes(bytes);
-}
 
 /** Whole percent of a download, when the server reported its size. */
 export function downloadPercent(progress: DownloadProgress): number | undefined {

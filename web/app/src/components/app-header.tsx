@@ -15,7 +15,7 @@ export function AppHeader() {
   const { signOut } = useSessionActions();
   return (
     <header className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-2">
-      <h1 className="text-lg font-semibold">{APP_DESCRIPTIONS.app_name}</h1>
+      <h1 className="text-base font-semibold">{APP_DESCRIPTIONS.app_name}</h1>
       {session?.authenticated ? (
         <nav className="order-last flex w-full gap-4 sm:order-none sm:w-auto">
           <NavLink to="/" label={APP_DESCRIPTIONS.nav_agents} />
@@ -25,11 +25,13 @@ export function AppHeader() {
       {session?.authenticated ? (
         <div className="ml-auto flex items-center gap-3">
           {signOut.isError ? (
-            <p role="alert" className="text-[0.8125rem] text-ez-danger">
+            <p role="alert" className="text-destructive">
               {errorMessage(signOut.error)}
             </p>
           ) : null}
           <Button
+            variant="ghost"
+            size="sm"
             loading={signOut.isPending}
             onClick={() =>
               signOut.mutate(undefined, { onSuccess: () => navigate({ to: "/login" }) })
@@ -48,7 +50,7 @@ function NavLink({ to, label }: { to: "/" | "/settings"; label: string }) {
     <Link
       to={to}
       activeOptions={{ exact: true }}
-      className="rounded-sm text-ez-muted outline-none hover:text-ez-text focus-visible:ring-3 focus-visible:ring-ez-focus data-[status=active]:font-medium data-[status=active]:text-ez-text"
+      className="rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 data-[status=active]:font-medium data-[status=active]:text-foreground"
     >
       {label}
     </Link>

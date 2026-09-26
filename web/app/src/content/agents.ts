@@ -7,7 +7,6 @@ export const AGENT_NAMES: Record<Agent, string> = {
 
 export const AGENTS_DESCRIPTIONS = {
   title: "Agents",
-  description: "Each agent's install and sign-in state.",
   column_agent: "Agent",
   column_status: "Status",
   column_version: "Version",
@@ -24,7 +23,9 @@ export const AGENTS_DESCRIPTIONS = {
   install: "Install",
   update_to: (version: string) => `Update to ${version}`,
   check_for_update: "Check for update",
-  up_to_date: "Up to date",
+  up_to_date: (agent: string) => `${agent} is up to date.`,
+  updated: (agent: string, version: string) => `${agent} ${version} is installed.`,
+  more_actions: (agent: string) => `More ${agent} actions`,
   sign_in: "Sign in",
   sign_out: "Sign out",
   sign_in_title: (agent: string) => `Sign in to ${agent}`,

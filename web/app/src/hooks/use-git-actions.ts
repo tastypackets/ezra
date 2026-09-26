@@ -2,6 +2,8 @@ import { logOutOfGitHub, startGitHubLogin, updateCommitIdentity } from "@ezra/cl
 import type { CommitIdentity, GitStatus } from "@ezra/client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { toastManager } from "@/components/ui/toast";
+import { GIT_DESCRIPTIONS } from "@/content/git";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
 
 /** GitHub sign-in and out, and the commit identity. Each refreshes the git status. */
@@ -26,6 +28,7 @@ export function useGitActions() {
       queryClient.setQueryData(gitStatusQueryOptions.queryKey, (status: GitStatus | undefined) =>
         status ? { ...status, identity } : status,
       );
+      toastManager.add({ title: GIT_DESCRIPTIONS.saved });
     },
   });
   return { startGitHubSignIn, signOutOfGitHub, saveIdentity };

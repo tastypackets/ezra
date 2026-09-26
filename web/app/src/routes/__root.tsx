@@ -2,6 +2,8 @@ import type { QueryClient } from "@tanstack/react-query";
 import { Outlet, createRootRouteWithContext } from "@tanstack/react-router";
 
 import { AppHeader } from "@/components/app-header";
+import { Toaster } from "@/components/ui/toast";
+import { APP_DESCRIPTIONS } from "@/content/app";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -13,9 +15,11 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 function RootLayout() {
   return (
-    <main className="mx-auto max-w-5xl px-4 pt-6 pb-12">
-      <AppHeader />
-      <Outlet />
-    </main>
+    <Toaster closeLabel={APP_DESCRIPTIONS.dismiss}>
+      <main className="mx-auto max-w-5xl px-4 pt-6 pb-12">
+        <AppHeader />
+        <Outlet />
+      </main>
+    </Toaster>
   );
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { APP_DESCRIPTIONS } from "@/content/app";
 
-import { downloadPercent, errorMessage, formatBytes } from "./utils";
+import { downloadPercent, errorMessage } from "./utils";
 
 describe("downloadPercent", () => {
   it("needs a total", () => {
@@ -15,14 +15,6 @@ describe("downloadPercent", () => {
     expect(downloadPercent({ received_bytes: 0, total_bytes: 200 })).toBe(0);
     expect(downloadPercent({ received_bytes: 51, total_bytes: 200 })).toBe(25);
     expect(downloadPercent({ received_bytes: 300, total_bytes: 200 })).toBe(100);
-  });
-});
-
-describe("formatBytes", () => {
-  it("reads naturally", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatBytes(1_500)).toBe("1.5 kB");
-    expect(formatBytes(231_000_000)).toBe("231 MB");
   });
 });
 

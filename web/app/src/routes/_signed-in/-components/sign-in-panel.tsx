@@ -3,8 +3,16 @@ import { useForm } from "@tanstack/react-form";
 
 import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Button } from "@/components/ui/button";
-import { Card, CardFooter, CardHeader } from "@/components/ui/card";
-import { Field, TextInput } from "@/components/ui/field";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
 import { useAgentActionPending, useAgentActions } from "@/hooks/use-agent-actions";
 
@@ -19,17 +27,28 @@ export function SignInPanel({ agent, prompt }: SignInPanelProps) {
   const restarting = useAgentActionPending(agent, "start_sign_in");
   return (
     <Card>
-      <CardHeader
-        title={AGENTS_DESCRIPTIONS.sign_in_title(AGENT_NAMES[agent])}
-        description={AGENTS_DESCRIPTIONS.sign_in_description}
-      />
-      <SignInSteps prompt={prompt} codeForm={<CodeForm key={prompt.url} agent={agent} />} />
-      <CardFooter>
-        {prompt.code ? <WaitingForWebsite /> : <span />}
-        <Button size="sm" loading={restarting} onClick={() => startSignIn.mutate()}>
-          {AGENTS_DESCRIPTIONS.start_over}
-        </Button>
-      </CardFooter>
+      <CardHeader>
+        <CardTitle>{AGENTS_DESCRIPTIONS.sign_in_title(AGENT_NAMES[agent])}</CardTitle>
+        <CardDescription>{AGENTS_DESCRIPTIONS.sign_in_description}</CardDescription>
+        <CardAction>
+          <Button
+            variant="outline"
+            size="sm"
+            loading={restarting}
+            onClick={() => startSignIn.mutate()}
+          >
+            {AGENTS_DESCRIPTIONS.start_over}
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <SignInSteps prompt={prompt} codeForm={<CodeForm key={prompt.url} agent={agent} />} />
+      </CardContent>
+      {prompt.code ? (
+        <CardFooter>
+          <WaitingForWebsite />
+        </CardFooter>
+      ) : null}
     </Card>
   );
 }
@@ -54,23 +73,23 @@ function CodeForm({ agent }: { agent: Agent }) {
     >
       <form.Field name="code">
         {(field) => (
-          <Field label={AGENTS_DESCRIPTIONS.code_label} hideLabel className="min-w-48 flex-1">
-            <TextInput
-              name={field.name}
-              value={field.state.value}
-              onChange={(event) => field.handleChange(event.target.value)}
-              onBlur={field.handleBlur}
-              placeholder={AGENTS_DESCRIPTIONS.code_placeholder}
-              autoComplete="off"
-              spellCheck={false}
-              required
-            />
-          </Field>
+          <Input
+            aria-label={AGENTS_DESCRIPTIONS.code_label}
+            className="min-w-48 flex-1"
+            name={field.name}
+            value={field.state.value}
+            onChange={(event) => field.handleChange(event.target.value)}
+            onBlur={field.handleBlur}
+            placeholder={AGENTS_DESCRIPTIONS.code_placeholder}
+            autoComplete="off"
+            spellCheck={false}
+            required
+          />
         )}
       </form.Field>
       <form.Subscribe selector={(state) => state.isSubmitting}>
         {(isSubmitting) => (
-          <Button type="submit" variant="primary" loading={isSubmitting}>
+          <Button type="submit" loading={isSubmitting}>
             {AGENTS_DESCRIPTIONS.finish_sign_in}
           </Button>
         )}

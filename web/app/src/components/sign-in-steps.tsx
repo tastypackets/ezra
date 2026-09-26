@@ -1,7 +1,7 @@
 import type { LoginPrompt } from "@ezra/client";
-import { ExternalLink } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
 
-import { buttonClassName } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Spinner } from "@/components/ui/spinner";
 import { SIGN_IN_DESCRIPTIONS } from "@/content/sign-in";
@@ -15,22 +15,22 @@ export interface SignInStepsProps {
 /** Numbered steps for a sign-in finished in a browser: open the page, then enter or paste a code. */
 export function SignInSteps({ prompt, codeForm }: SignInStepsProps) {
   return (
-    <ol className="divide-y divide-ez-border px-5">
+    <ol className="flex flex-col gap-4">
       <Step number={1} title={SIGN_IN_DESCRIPTIONS.step_open}>
         <a
           href={prompt.url}
           target="_blank"
           rel="noopener noreferrer"
-          className={buttonClassName({ size: "sm" })}
+          className={buttonVariants({ variant: "outline", size: "sm" })}
         >
           {siteOf(prompt.url)}
-          <ExternalLink aria-hidden="true" className="size-3.5" />
+          <ExternalLinkIcon data-icon="inline-end" />
         </a>
       </Step>
       {prompt.code ? (
         <Step number={2} title={SIGN_IN_DESCRIPTIONS.step_enter_code}>
           <div className="flex items-center gap-3">
-            <span className="rounded-md border border-dashed border-ez-border-strong bg-ez-surface-muted px-3 py-1 font-mono text-xl font-semibold tracking-widest">
+            <span className="rounded-md border border-dashed px-3 py-1 font-mono text-xl font-semibold tracking-widest">
               {prompt.code}
             </span>
             <CopyButton
@@ -51,8 +51,8 @@ export function SignInSteps({ prompt, codeForm }: SignInStepsProps) {
 
 export function WaitingForWebsite() {
   return (
-    <p className="flex items-center gap-2 text-ez-muted">
-      <Spinner className="text-ez-accent" />
+    <p className="flex items-center gap-2 text-muted-foreground">
+      <Spinner />
       {SIGN_IN_DESCRIPTIONS.waiting_for_website}
     </p>
   );
@@ -68,11 +68,11 @@ function Step({
   children: React.ReactNode;
 }) {
   return (
-    <li className="flex gap-3.5 py-3">
-      <span className="inline-flex size-6 flex-none items-center justify-center rounded-full bg-ez-neutral-soft text-xs font-semibold text-ez-neutral">
+    <li className="flex gap-3">
+      <span className="inline-flex size-6 flex-none items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
         {number}
       </span>
-      <div className="flex flex-col gap-2">
+      <div className="flex min-w-0 flex-col gap-2">
         <p className="font-medium">{title}</p>
         {children}
       </div>

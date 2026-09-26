@@ -1,80 +1,84 @@
-import type { RemoteControlStatus } from "@ezra/client";
+import type { RemoteControlStatus, ServerState } from "@ezra/client";
 import { Link } from "@tanstack/react-router";
-import { ExternalLink } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import type { BadgeProps } from "@/components/ui/badge";
-import { buttonClassName } from "@/components/ui/button";
-import { Card, CardHeader } from "@/components/ui/card";
-import { AGENT_NAMES } from "@/content/agents";
+import type { badgeVariants } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-control";
 
-const TONES: Record<RemoteControlStatus["state"], BadgeProps["tone"]> = {
-  off: "neutral",
-  waiting: "neutral",
-  starting: "pending",
-  running: "good",
-  retrying: "pending",
+type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
+
+const BADGES: Record<ServerState, BadgeVariant> = {
+  off: "secondary",
+  waiting: "secondary",
+  starting: "warning",
+  running: "success",
+  retrying: "warning",
 };
 
-/** Claude Code's Remote Control server: whether it runs, and where to continue. */
+/** Claude Code's Remote Control server on /projects: whether it runs, and where to continue. */
 export function RemoteControlCard({ status }: { status: RemoteControlStatus }) {
   return (
     <Card>
-      <CardHeader
-        title={REMOTE_CONTROL_DESCRIPTIONS.title}
-        description={REMOTE_CONTROL_DESCRIPTIONS.description}
-      />
-      <div className="flex flex-col gap-2 px-5 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-medium">{AGENT_NAMES.claude}</span>
-            <Badge tone={TONES[status.state]}>{SERVER_STATES[status.state]}</Badge>
-          </div>
-          {status.url ? (
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {REMOTE_CONTROL_DESCRIPTIONS.title}
+          <Badge variant={BADGES[status.state]}>{SERVER_STATES[status.state]}</Badge>
+        </CardTitle>
+        {status.url ? (
+          <CardAction>
             <a
               href={status.url}
               target="_blank"
               rel="noopener noreferrer"
-              className={buttonClassName({ size: "sm" })}
+              className={buttonVariants({ variant: "outline", size: "sm" })}
             >
               {REMOTE_CONTROL_DESCRIPTIONS.open}
-              <ExternalLink aria-hidden="true" className="size-3.5" />
+              <ExternalLinkIcon data-icon="inline-end" />
             </a>
-          ) : null}
-        </div>
+          </CardAction>
+        ) : null}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
         <StateHint status={status} />
         {status.state === "retrying" && status.last_error ? (
-          <p className="text-ez-danger">
+          <p className="text-destructive">
             {REMOTE_CONTROL_DESCRIPTIONS.last_stop}:{" "}
-            <span className="font-mono text-[0.8125rem] break-words whitespace-pre-wrap">
+            <span className="font-mono text-xs break-words whitespace-pre-wrap">
               {status.last_error}
             </span>
           </p>
         ) : null}
-      </div>
+      </CardContent>
     </Card>
   );
 }
 
-const HINTS: Record<RemoteControlStatus["state"], string | null> = {
-  off: null,
-  waiting: REMOTE_CONTROL_DESCRIPTIONS.waiting_hint,
-  starting: REMOTE_CONTROL_DESCRIPTIONS.starting_hint,
-  running: REMOTE_CONTROL_DESCRIPTIONS.running_hint,
-  retrying: null,
-};
-
 function StateHint({ status }: { status: RemoteControlStatus }) {
-  if (status.state === "off") {
-    return (
-      <p className="text-ez-muted">
-        <Link to="/settings" className="underline underline-offset-4 hover:text-ez-text">
-          {REMOTE_CONTROL_DESCRIPTIONS.off_hint}
-        </Link>
-      </p>
-    );
+  switch (status.state) {
+    case "off":
+      return (
+        <p className="text-muted-foreground">
+          <Link to="/settings" className="underline underline-offset-4 hover:text-foreground">
+            {REMOTE_CONTROL_DESCRIPTIONS.off_hint}
+          </Link>
+        </p>
+      );
+    case "running":
+      return (
+        <p className="text-muted-foreground">
+          {status.device
+            ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(status.device)
+            : REMOTE_CONTROL_DESCRIPTIONS.running_hint_without_device}
+        </p>
+      );
+    case "waiting":
+      return <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.waiting_hint}</p>;
+    case "starting":
+      return <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.starting_hint}</p>;
+    default:
+      return null;
   }
-  const hint = HINTS[status.state];
-  return hint ? <p className="text-ez-muted">{hint}</p> : null;
 }

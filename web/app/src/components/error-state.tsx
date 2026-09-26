@@ -19,11 +19,7 @@ export function ErrorState({ error }: ErrorComponentProps) {
     <StateCard
       title={APP_DESCRIPTIONS.error_title}
       description={errorMessage(error)}
-      action={
-        <Button variant="primary" onClick={() => void router.invalidate()}>
-          {APP_DESCRIPTIONS.retry}
-        </Button>
-      }
+      action={<Button onClick={() => void router.invalidate()}>{APP_DESCRIPTIONS.retry}</Button>}
     />
   );
 }

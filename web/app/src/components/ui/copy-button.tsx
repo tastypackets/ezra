@@ -1,3 +1,4 @@
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "./button";
@@ -23,7 +24,8 @@ export function CopyButton({ text, label, copiedLabel }: CopyButtonProps) {
     }
   };
   return (
-    <Button size="sm" onClick={() => void copy()}>
+    <Button variant="outline" size="sm" onClick={() => void copy()}>
+      {copied ? <CheckIcon data-icon="inline-start" /> : <CopyIcon data-icon="inline-start" />}
       {copied ? copiedLabel : label}
     </Button>
   );

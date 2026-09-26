@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 function card(page: Page, title: string) {
-  return page.locator("section", {
+  return page.locator("section[data-slot=card]", {
     has: page.getByRole("heading", { name: title, exact: true, level: 2 }),
   });
 }
@@ -17,19 +17,19 @@ test("the Claude release channel is saved", async ({ page }) => {
 
   await stable.click();
   await claude.getByRole("button", { name: "Save" }).click();
-  await expect(claude.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 
   await page.reload();
   await expect(stable).toBeChecked();
   await latest.click();
   await claude.getByRole("button", { name: "Save" }).click();
-  await expect(claude.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 });
 
 test("Remote Control settings are saved and shown on the dashboard", async ({ page }) => {
   await page.goto("./settings");
   const claude = card(page, "Claude Code");
-  const serve = claude.getByRole("switch", { name: "Serve /projects" });
+  const serve = claude.getByRole("switch", { name: "Serve to the Claude app" });
   const mode = page.getByRole("combobox", { name: "Permission mode" });
   const capacity = claude.getByLabel("Sessions at once");
 
@@ -41,7 +41,7 @@ test("Remote Control settings are saved and shown on the dashboard", async ({ pa
   await page.keyboard.press("Escape");
   await capacity.fill("2");
   await claude.getByRole("button", { name: "Save" }).click();
-  await expect(claude.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 
   await page.reload();
   await expect(serve).not.toBeChecked();
@@ -56,7 +56,7 @@ test("Remote Control settings are saved and shown on the dashboard", async ({ pa
   await page.keyboard.press("Escape");
   await capacity.fill("4");
   await claude.getByRole("button", { name: "Save" }).click();
-  await expect(claude.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 });
 
 test("a capacity Claude cannot take is refused", async ({ page }) => {
@@ -75,7 +75,7 @@ test("git starts signed out of GitHub and keeps the commit identity", async ({ p
   await git.getByLabel("Name").fill("Ada Lovelace");
   await git.getByLabel("Email").fill("ada@example.com");
   await git.getByRole("button", { name: "Save" }).click();
-  await expect(git.getByRole("status")).toHaveText("Saved");
+  await expect(page.getByText("Commit identity saved.")).toBeVisible();
 
   await page.reload();
   await expect(git.getByLabel("Name")).toHaveValue("Ada Lovelace");

@@ -16,5 +16,5 @@ export const GIT_DESCRIPTIONS = {
   name: "Name",
   email: "Email",
   save: "Save",
-  saved: "Saved",
+  saved: "Commit identity saved.",
 } as const;

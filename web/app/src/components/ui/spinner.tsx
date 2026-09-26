@@ -1,18 +1,16 @@
 import { cn } from "cn";
+import { Loader2Icon } from "lucide-react";
 
-export interface SpinnerProps {
-  className?: string;
-}
-
-/** A small rotating ring in the current text color. */
-export function Spinner({ className }: SpinnerProps) {
+function Spinner({ className, ...props }: React.ComponentProps<"svg">) {
   return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "inline-block size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent",
-        className,
-      )}
+    <Loader2Icon
+      data-slot="spinner"
+      role="status"
+      aria-label="Loading"
+      className={cn("size-4 animate-spin", className)}
+      {...props}
     />
   );
 }
+
+export { Spinner };

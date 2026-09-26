@@ -1,14 +1,16 @@
 import type { ReleaseChannel } from "@ezra/client";
 
 export const SETTINGS_DESCRIPTIONS = {
-  claude_description: "How the manager installs, updates and serves Claude Code.",
   release_channel: "Release channel",
   release_channel_hint:
     "Switching to stable keeps the installed version until stable has a newer one.",
   remote_control: "Remote Control",
-  remote_control_enabled: "Serve /projects",
+  remote_control_enabled: "Serve to the Claude app",
   remote_control_enabled_hint:
-    "Work in /projects from the Claude app and claude.ai/code while Claude Code is signed in.",
+    "Serves /projects, and the folders you choose, while Claude Code is signed in.",
+  serve_folders: "Serve folders by default",
+  serve_folders_hint:
+    "For folders without their own choice. Each served folder uses about 360 MB of memory.",
   permission_mode: "Permission mode",
   permission_mode_hint: "Sessions started from the Claude app keep this mode.",
   permission_mode_word: "Enter one word, such as auto.",
@@ -17,7 +19,7 @@ export const SETTINGS_DESCRIPTIONS = {
   capacity_hint: "Each session uses about 250 MB of memory.",
   capacity_range: "Enter a number from 1 to 32.",
   save: "Save",
-  saved: "Saved",
+  saved: "Claude Code settings saved.",
 } as const;
 
 export const RELEASE_CHANNELS: Record<ReleaseChannel, { title: string; description: string }> = {
