@@ -1,0 +1,39 @@
+import { expect, test } from "@playwright/test";
+
+import { recordApiCalls } from "./manager.ts";
+
+test("the dashboard arrives with its data", async ({ page }) => {
+  const apiCalls = recordApiCalls(page);
+  await page.goto("./");
+  for (const agent of ["Claude Code", "Codex"]) {
+    const row = page.getByRole("row", { name: new RegExp(agent) });
+    await expect(row).toContainText("Not installed");
+    await expect(row.getByRole("button", { name: "Install" })).toBeVisible();
+  }
+  expect(apiCalls).toEqual([]);
+});
+
+test("signed in, the sign-in page goes to the dashboard", async ({ page }) => {
+  await page.goto("./login");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+});
+
+test("an ended session returns to sign in", async ({ page }) => {
+  await page.goto("./");
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  await page.context().clearCookies();
+  await page
+    .getByRole("row", { name: /Claude Code/ })
+    .getByRole("button", { name: "Install" })
+    .click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+});
+
+test("an unknown page links back to the dashboard", async ({ page }) => {
+  await page.goto("./nowhere");
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await page.getByRole("link", { name: "Go to the dashboard" }).click();
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+});
