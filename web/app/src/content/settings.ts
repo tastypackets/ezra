@@ -15,7 +15,7 @@ export const SETTINGS_DESCRIPTIONS = {
   permission_mode_unknown: "Choose one of the listed modes.",
   show_permission_modes: "Show permission modes",
   capacity: "Sessions per folder",
-  capacity_hint: "Each session is its own Claude Code process, about 150 to 300 MB.",
+  capacity_hint: "Each session is its own Claude Code process.",
   capacity_default: "Claude Code's default",
   capacity_range: "Enter a whole number of 1 or more, or leave it empty.",
   save: "Save",
@@ -36,10 +36,10 @@ export const RELEASE_CHANNELS: Record<ReleaseChannel, { title: string; descripti
 export const PERMISSION_MODES: readonly { value: string; description: string }[] = [
   { value: "auto", description: "Everything, with background safety checks." },
   { value: "acceptEdits", description: "Reads, file edits and common file commands." },
-  { value: "plan", description: "Reads, for exploring before changing anything." },
+  { value: "plan", description: "Reads, plus commands auto mode's checks allow." },
   { value: "default", description: "Reads only, asking before anything else." },
   { value: "dontAsk", description: "Reads and pre-approved tools, denying the rest." },
-  { value: "bypassPermissions", description: "Everything, with no checks." },
+  { value: "bypassPermissions", description: "Everything but deny and ask rules, with no checks." },
 ];
 
 /** Every mode Claude Code takes, `manual` being another name for `default`. */

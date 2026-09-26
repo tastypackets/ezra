@@ -20,9 +20,8 @@ export const REMOTE_CONTROL_DESCRIPTIONS = {
   show_log: "Show log",
   sign_in_again: "Sign in again",
   update_waiting: (version: string, time: string) =>
-    `Restarts on Claude Code ${version} once no sessions run, by ${time} at the latest.`,
-  update_waiting_short: (version: string) =>
-    `Restarts on Claude Code ${version} once no sessions run.`,
+    `Restarts on Claude Code ${version} by ${time}.`,
+  update_waiting_short: (version: string) => `Waits to restart on Claude Code ${version}.`,
   projects_log_title: "/projects log",
   log_title: (folder: string) => `${folder} log`,
   log_description: (path: string) => `The last lines of ${path}.`,

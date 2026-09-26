@@ -15,7 +15,7 @@ export const AGENTS_DESCRIPTIONS = {
   column_saved_data: "Saved data",
   column_actions: "Actions",
   remote_hint: "Remote Control servers for the Claude app, and their sessions",
-  saved_data_hint: "Sign-in, settings and sessions the CLI keeps on /config, not the CLI itself",
+  saved_data_hint: "Sign-in, settings, sessions and anything else the CLI keeps on /config",
   unavailable: "unavailable",
   status_not_installed: "Not installed",
   status_signed_out: "Signed out",

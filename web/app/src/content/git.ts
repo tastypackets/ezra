@@ -1,6 +1,6 @@
 export const GIT_DESCRIPTIONS = {
   title: "Git",
-  description: "Every agent in this box pushes with this sign-in and commits with this identity.",
+  description: "Agents push to GitHub over HTTPS with this sign-in and commit with this identity.",
   github: "GitHub",
   signed_in_as: (account: string) => `Signed in as ${account}`,
   signed_in: "Signed in",

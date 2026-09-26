@@ -61,7 +61,7 @@ function environmentRows(environment: EnvironmentSettings) {
     },
     {
       label: ENVIRONMENT_DESCRIPTIONS.github_token,
-      source: "GH_TOKEN",
+      source: "GH_TOKEN or GITHUB_TOKEN",
       value: environment.github_token
         ? ENVIRONMENT_DESCRIPTIONS.set
         : ENVIRONMENT_DESCRIPTIONS.not_set,

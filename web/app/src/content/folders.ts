@@ -47,7 +47,7 @@ export const SPAWN_MODES: Record<SpawnMode, { title: string; description: string
   },
   worktree: {
     title: "Their own worktree",
-    description: "Each on a new branch in .claude/worktrees.",
+    description: "Each new session gets a branch in .claude/worktrees, except the first.",
   },
 };
 
@@ -70,7 +70,7 @@ export const CLAUDE_OPTIONS_DESCRIPTIONS = {
 export const DELETE_FOLDER_DESCRIPTIONS = {
   title: (folder: string) => `Delete ${folder}?`,
   description: (folder: string) => `Deletes /projects/${folder} and everything in it.`,
-  server: "Stops its Remote Control server and the sessions in it.",
+  server: "Stops its Remote Control server, leaving its sessions offline in the Claude app.",
   checking: "Checking for unsaved work",
   check_failed: "Could not check for unsaved work",
   only_here: "Only in this folder:",

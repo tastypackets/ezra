@@ -111,7 +111,7 @@ test.describe("with Claude Code installed", () => {
       claude.getByText("Enter a whole number of 1 or more, or leave it empty."),
     ).toBeVisible();
     await expect(capacity).toHaveAccessibleDescription(
-      "Each session is its own Claude Code process, about 150 to 300 MB. Enter a whole number of 1 or more, or leave it empty.",
+      "Each session is its own Claude Code process. Enter a whole number of 1 or more, or leave it empty.",
     );
     await expect(capacity).toHaveAttribute("aria-invalid", "true");
 

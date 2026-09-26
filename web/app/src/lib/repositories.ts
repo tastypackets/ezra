@@ -1,6 +1,6 @@
 import { CLONE_DESCRIPTIONS } from "@/content/folders";
 
-/** The folder name git would pick for a repository: the last part of its path, without `.git`. */
+/** The folder name for a repository: the last part of its path, without `.git` or leading dots. */
 export function defaultFolderName(repository: string): string {
   const path = repository
     .trim()

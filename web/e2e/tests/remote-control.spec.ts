@@ -86,11 +86,7 @@ test("a busy server waits for its sessions before restarting on an update", asyn
 
   installFakeClaude("2.1.1-e2e", server);
   await nudgeRemoteControl(request);
-  await expect(
-    projects.getByText(
-      /^Restarts on Claude Code 2\.1\.1-e2e once no sessions run, by .+ at the latest\.$/,
-    ),
-  ).toBeVisible();
+  await expect(projects.getByText(/^Restarts on Claude Code 2\.1\.1-e2e by .+\.$/)).toBeVisible();
   await expect(projects.getByText("Running", { exact: true })).toBeVisible();
 });
 
