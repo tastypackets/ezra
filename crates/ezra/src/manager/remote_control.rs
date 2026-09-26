@@ -560,11 +560,16 @@ impl ServerOutput {
                 .trim_end()
                 .without_terminal_codes();
             if let Some(url) = line.connect_url() {
-                tracing::info!("Claude Remote Control is connected: {url}");
+                let mut newly_connected = false;
                 remote_control.update(|status| {
+                    newly_connected = status.state != ServerState::Running
+                        || status.url.as_deref() != Some(url.as_str());
                     status.state = ServerState::Running;
-                    status.url = Some(url);
+                    status.url = Some(url.clone());
                 });
+                if newly_connected {
+                    tracing::info!("Claude Remote Control is connected: {url}");
+                }
             }
             let mut kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
             kept.push_back(line);
