@@ -128,7 +128,9 @@ fn installed_agents_run_and_offer_sign_in() {
     let listing = get(&container, "/api/v1/agents");
     assert_eq!(
         listing
-            .matches(r#""logged_in":false,"account":null,"login_prompt":null"#)
+            .matches(
+                r#""logged_in":false,"account":null,"sign_in_ends_at":null,"login_prompt":null"#
+            )
             .count(),
         2,
         "{listing}"
