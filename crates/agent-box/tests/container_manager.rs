@@ -2,35 +2,11 @@
 
 mod common;
 
-use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{DockerResource, docker, stderr_of, stdout_of};
+use common::{DockerResource, curl_in, docker, stdout_of, wait_for_manager};
 
 const UNCLAIMED: &str = r#"{"claimed":false,"authenticated":false}"#;
-
-fn curl_in(container: &DockerResource, arguments: &[&str]) -> std::process::Output {
-    let mut command = vec!["exec", &container.name, "curl", "--silent", "--insecure"];
-    command.extend_from_slice(arguments);
-    docker(&command)
-}
-
-fn wait_for_manager(container: &DockerResource, port: u16) -> String {
-    let url = format!("https://localhost:{port}/api/v1/session");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let response = curl_in(container, &["--fail", &url]);
-        if response.status.success() {
-            return stdout_of(&response);
-        }
-        assert!(
-            Instant::now() < deadline,
-            "manager did not answer: {}",
-            stderr_of(&docker(&["logs", &container.name]))
-        );
-        thread::sleep(Duration::from_millis(200));
-    }
-}
 
 fn set_password(container: &DockerResource) -> String {
     let response = curl_in(

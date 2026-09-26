@@ -4,16 +4,51 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::agents::Agent;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub manager: ManagerSettings,
+    #[serde(default)]
+    pub agents: AgentsSettings,
+}
+
+impl Settings {
+    pub fn agent(&self, agent: Agent) -> &AgentSettings {
+        match agent {
+            Agent::Claude => &self.agents.claude,
+            Agent::Codex => &self.agents.codex,
+        }
+    }
+
+    pub fn agent_mut(&mut self, agent: Agent) -> &mut AgentSettings {
+        match agent {
+            Agent::Claude => &mut self.agents.claude,
+            Agent::Codex => &mut self.agents.codex,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManagerSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_hash: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsSettings {
+    #[serde(default)]
+    pub claude: AgentSettings,
+    #[serde(default)]
+    pub codex: AgentSettings,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSettings {
+    /// Installed through the manager at least once, so it is reinstalled when missing.
+    #[serde(default)]
+    pub configured: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,11 +112,13 @@ mod tests {
     fn saved_settings_load_back() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("agent-box/settings.toml");
-        let settings = Settings {
+        let mut settings = Settings {
             manager: ManagerSettings {
                 password_hash: Some("$argon2id$example".to_owned()),
             },
+            ..Settings::default()
         };
+        settings.agent_mut(Agent::Codex).configured = true;
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);
     }

@@ -210,7 +210,10 @@ ENV MISE_DATA_DIR=/config/mise \
     MISE_CONFIG_DIR=/config/mise \
     MISE_STATE_DIR=/config/mise/state \
     MISE_TRUSTED_CONFIG_PATHS=/projects \
-    PATH=/config/mise/shims:/usr/local/share/agent-box/shims:${PATH}
+    CLAUDE_CONFIG_DIR=/config/claude \
+    CODEX_HOME=/config/codex \
+    DISABLE_UPDATES=1 \
+    PATH=/home/dev/.local/bin:/config/mise/shims:/usr/local/share/agent-box/shims:${PATH}
 
 COPY --from=agent-box-build /out/agent-box /usr/local/bin/agent-box
 

@@ -1,3 +1,4 @@
+mod agents;
 mod api;
 mod auth;
 mod settings;
@@ -64,7 +65,14 @@ async fn serve() -> Result<(), ManagerError> {
     if !is_claimed {
         tracing::info!("no password is set yet; the first visitor chooses it");
     }
-    let app = api::router(api::AppState::new(settings_path, settings));
+    let home = env::var_os("HOME").unwrap_or_else(|| "/home/dev".into());
+    let state = api::AppState::new(
+        settings_path,
+        settings,
+        agents::InstallPaths::under_home(Path::new(&home)),
+    );
+    tokio::spawn(api::reinstall_configured_agents(state.clone()));
+    let app = api::router(state);
     axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
         .handle(handle)
         .serve(app.into_make_service())
