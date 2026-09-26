@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,7 +11,6 @@ pub struct Process(PathBuf);
 
 pub struct ProcessStat {
     pub parent: Pid,
-    pub group: Pid,
     /// Exited and waiting for its parent to collect it.
     pub zombie: bool,
 }
@@ -30,16 +30,56 @@ impl Process {
             .map(|entry| Self(entry.path()))
     }
 
+    pub fn id(&self) -> Option<Pid> {
+        let id = self.0.file_name()?.to_str()?.parse().ok()?;
+        Some(Pid::from_raw(id))
+    }
+
+    /// `leader` and the processes it started, also those in process groups of their own.
+    pub fn family_of(leader: Pid) -> Vec<(Self, ProcessStat)> {
+        let mut children: HashMap<Pid, Vec<(Self, ProcessStat)>> = HashMap::new();
+        let mut family = Vec::new();
+        for process in Self::all() {
+            let (Some(id), Some(stat)) = (process.id(), process.stat()) else {
+                continue;
+            };
+            if id == leader {
+                family.push((process, stat));
+            } else {
+                children
+                    .entry(stat.parent)
+                    .or_default()
+                    .push((process, stat));
+            }
+        }
+        let mut next = 0;
+        while let Some((process, _)) = family.get(next) {
+            if let Some(started) = process.id().and_then(|id| children.remove(&id)) {
+                family.extend(started);
+            }
+            next = next.saturating_add(1);
+        }
+        family
+    }
+
+    /// The program and its arguments.
+    pub fn arguments(&self) -> Vec<String> {
+        fs::read(self.0.join("cmdline"))
+            .unwrap_or_default()
+            .split(|byte| *byte == 0)
+            .filter(|argument| !argument.is_empty())
+            .map(|argument| String::from_utf8_lossy(argument).into_owned())
+            .collect()
+    }
+
     pub fn stat(&self) -> Option<ProcessStat> {
         let stat = fs::read_to_string(self.0.join("stat")).ok()?;
         let (_, after_name) = stat.rsplit_once(')')?;
         let mut fields = after_name.split_whitespace();
         let zombie = fields.next()? == "Z";
         let parent = fields.next()?.parse().ok()?;
-        let group = fields.next()?.parse().ok()?;
         Some(ProcessStat {
             parent: Pid::from_raw(parent),
-            group: Pid::from_raw(group),
             zombie,
         })
     }

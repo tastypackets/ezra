@@ -60,6 +60,7 @@ const PERMISSION_MODES: [&str; 7] = [
     "manual",
     "plan",
 ];
+const SESSION_ARGUMENT: &str = "--sdk-url";
 const UNKNOWN_PERMISSION_MODE: &str = "Claude Code has no permission mode by that name";
 /// Variables that make `claude remote-control` refuse to start. Ones set in a settings.json
 /// `env` block still can.
@@ -314,7 +315,7 @@ pub struct ServerUsage {
     pub sessions: u32,
     /// The most sessions the server runs at once, absent when Claude Code's default applies.
     pub capacity: Option<u32>,
-    /// Memory the server and its sessions use, with shared memory counted once.
+    /// Memory the server, its sessions and their commands use, with shared memory counted once.
     pub memory_bytes: u64,
 }
 
@@ -1204,7 +1205,8 @@ impl ServerRun {
     }
 }
 
-/// A process and the processes it started, which share its process group.
+/// A server and its sessions, which share its process group. The commands sessions run have
+/// groups of their own.
 pub struct ProcessGroup(pub Pid);
 
 impl ProcessGroup {
@@ -1227,26 +1229,22 @@ impl ProcessGroup {
         killpg(self.0, None) == Err(Errno::ESRCH)
     }
 
-    /// The leader's live children are its sessions, and the whole group counts for memory.
+    /// Sessions are the leader's live `--sdk-url` children. Memory counts every process it
+    /// started.
     fn usage(&self, capacity: Option<u32>) -> ServerUsage {
         let mut usage = ServerUsage {
             sessions: 0,
             capacity,
             memory_bytes: 0,
         };
-        for process in Process::all() {
-            let Some(ProcessStat {
-                parent,
-                group,
-                zombie,
-            }) = process.stat()
-            else {
-                continue;
-            };
-            if group != self.0 {
-                continue;
-            }
-            if parent == self.0 && !zombie {
+        for (process, ProcessStat { parent, zombie, .. }) in Process::family_of(self.0) {
+            if parent == self.0
+                && !zombie
+                && process
+                    .arguments()
+                    .iter()
+                    .any(|argument| argument == SESSION_ARGUMENT)
+            {
                 usage.sessions = usage.sessions.saturating_add(1);
             }
             if let Some(memory) = process.proportional_memory() {
@@ -1640,7 +1638,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let session = directory.path().join("session.pid");
         let server = format!(
-            "sleep 60 & echo $! > {session}; echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
+            "sh -c 'sleep 60; :' session --sdk-url & echo $! > {session}; echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
             session = session.display()
         );
         let state = fake_claude(&manager, directory.path(), &server);
@@ -2096,9 +2094,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_group_counts_the_leaders_children_and_everyones_memory() {
+    async fn a_group_counts_the_leaders_sessions_and_everyones_memory() {
         let mut leader = Command::new("sh")
-            .args(["-c", "sleep 30 & sleep 30 & wait"])
+            .args([
+                "-c",
+                "sh -c 'sleep 30; :' session --sdk-url & sh -c 'sleep 30; :' session --sdk-url & sleep 30 & wait",
+            ])
             .process_group(0)
             .kill_on_drop(true)
             .spawn()

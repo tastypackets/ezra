@@ -103,7 +103,8 @@ test("a busy server waits for its sessions before restarting on an update", asyn
   page,
   request,
 }) => {
-  const server = "echo 'https://claude.ai/code?environment=env_e2e'; sleep 600 & exec sleep 600";
+  const server =
+    "echo 'https://claude.ai/code?environment=env_e2e'; sh -c 'sleep 600; :' session --sdk-url & exec sleep 600";
   installFakeClaude("2.1.0-e2e", server);
   await nudgeRemoteControl(request);
   await page.goto("./");

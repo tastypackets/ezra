@@ -2264,7 +2264,7 @@
           "memory_bytes": {
             "type": "integer",
             "format": "int64",
-            "description": "Memory the server and its sessions use, with shared memory counted once.",
+            "description": "Memory the server, its sessions and their commands use, with shared memory counted once.",
             "minimum": 0
           },
           "sessions": {
