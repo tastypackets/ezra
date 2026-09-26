@@ -36,6 +36,29 @@ pub struct Folder {
     pub git: Option<GitDetails>,
 }
 
+impl Folder {
+    /// The name, then the branch and origin when it is a repository.
+    fn describe(&self) -> String {
+        let Some(git) = &self.git else {
+            return self.name.clone();
+        };
+        let details: Vec<String> = [
+            git.branch.as_ref().map(|branch| format!("branch {branch}")),
+            git.repository
+                .as_ref()
+                .map(|repository| format!("origin {repository}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if details.is_empty() {
+            format!("{}: git repository", self.name)
+        } else {
+            format!("{}: {}", self.name, details.join(", "))
+        }
+    }
+}
+
 /// Where a repository comes from and what it has checked out.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct GitDetails {
@@ -131,15 +154,9 @@ impl FoldersBlock<'_> {
         if self.folders.is_empty() {
             markdown.push_str("No projects yet.\n");
         } else {
-            markdown.push_str("| Folder | Repository | Branch |\n| --- | --- | --- |\n");
+            markdown.push_str("Folders:\n");
             for folder in self.folders {
-                let git = folder.git.clone().unwrap_or_default();
-                markdown.push_str(&format!(
-                    "| {} | {} | {} |\n",
-                    folder.name.table_cell(),
-                    git.repository.as_deref().unwrap_or("").table_cell(),
-                    git.branch.as_deref().unwrap_or("").table_cell(),
-                ));
+                markdown.push_str(&format!("- {}\n", folder.describe().single_line()));
             }
         }
         markdown.push_str(BLOCK_END);
@@ -148,22 +165,22 @@ impl FoldersBlock<'_> {
 }
 
 trait MarkdownExt {
-    /// Text that can neither end the table cell nor start HTML, such as a block marker.
-    fn table_cell(&self) -> String;
+    /// The text with control characters, such as line breaks, as spaces.
+    fn single_line(&self) -> String;
     /// Replaces the managed block, or adds it at the end when there is none. Markers only count
     /// as whole lines, and the last start line pairs with the next end line.
     fn with_folders_block(&self, block: &str) -> String;
 }
 
 impl MarkdownExt for str {
-    fn table_cell(&self) -> String {
+    fn single_line(&self) -> String {
         self.chars()
-            .map(|character| match character {
-                '\\' => "\\\\".to_owned(),
-                '|' => "\\|".to_owned(),
-                '<' => "&lt;".to_owned(),
-                control if control.is_control() => " ".to_owned(),
-                other => other.to_string(),
+            .map(|character| {
+                if character.is_control() {
+                    ' '
+                } else {
+                    character
+                }
             })
             .collect()
     }
@@ -551,7 +568,8 @@ mod tests {
             "{first}"
         );
         assert!(
-            first.contains("| app | https://github.com/zeke/app.git | main |"),
+            first
+                .contains("Folders:\n- app: branch main, origin https://github.com/zeke/app.git\n"),
             "{first}"
         );
 
@@ -566,7 +584,7 @@ mod tests {
             "{second}"
         );
         assert!(!first.contains("gh is signed in"), "{first}");
-        assert!(!second.contains("| app |"), "{second}");
+        assert!(!second.contains("- app"), "{second}");
         assert!(
             second.ends_with("<!-- ezra:folders:end -->\n\nAfter the block.\n"),
             "{second}"
@@ -605,7 +623,20 @@ mod tests {
     }
 
     #[test]
-    fn table_cells_cannot_break_the_table() {
-        assert_eq!("a|b\nc\\<d".table_cell(), "a\\|b c\\\\&lt;d");
+    fn folders_are_described_on_one_line() {
+        assert_eq!(folder("notes", None).describe(), "notes");
+        assert_eq!(
+            Folder {
+                name: "fresh".to_owned(),
+                git: Some(GitDetails::default()),
+            }
+            .describe(),
+            "fresh: git repository"
+        );
+        assert_eq!(
+            folder("app", Some(("https://github.com/zeke/app.git", "main"))).describe(),
+            "app: branch main, origin https://github.com/zeke/app.git"
+        );
+        assert_eq!("a\nb\tc".single_line(), "a b c");
     }
 }
