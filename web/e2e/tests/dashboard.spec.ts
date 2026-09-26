@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 
 import { inContainer, recordApiCalls } from "./manager.ts";
 
-test("the dashboard arrives with its data, then only listens for changes", async ({ page }) => {
+test("the dashboard arrives with its data, then fetches only what changes", async ({
+  page,
+}, testInfo) => {
   const apiCalls = recordApiCalls(page);
   const listening = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/v1/events",
@@ -17,7 +19,19 @@ test("the dashboard arrives with its data, then only listens for changes", async
     page.getByText("No projects yet. Ask an agent to clone a repository into /projects."),
   ).toBeVisible();
   await listening;
-  expect(apiCalls).toEqual(["GET /api/v1/events"]);
+
+  const folder = `added-${testInfo.retry}`;
+  const refetched = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/folders",
+  );
+  inContainer("mkdir", `/projects/${folder}`);
+  try {
+    await refetched;
+    await expect(page.getByRole("listitem").filter({ hasText: folder })).toBeVisible();
+    expect(apiCalls).toEqual(["GET /api/v1/events", "GET /api/v1/folders"]);
+  } finally {
+    inContainer("rmdir", `/projects/${folder}`);
+  }
 });
 
 test("a folder's switch and server follow changes made elsewhere", async ({ page }, testInfo) => {
@@ -39,6 +53,22 @@ test("a folder's switch and server follow changes made elsewhere", async ({ page
     await expect(row.getByText("Waiting")).toBeHidden();
   } finally {
     inContainer("rmdir", `/projects/${folder}`);
+  }
+});
+
+test("a new repository starts with its switch on", async ({ page }, testInfo) => {
+  const folder = `repository-${testInfo.retry}`;
+  await page.goto("./");
+  await expect(page.getByRole("heading", { name: "Folders" })).toBeVisible();
+  inContainer("git", "init", "--quiet", `/projects/${folder}`);
+  try {
+    const row = page.getByRole("listitem").filter({ hasText: folder });
+    await expect(
+      row.getByRole("switch", { name: `Serve ${folder} in the Claude app` }),
+    ).toBeChecked();
+    await expect(row.getByText("Waiting")).toBeVisible();
+  } finally {
+    inContainer("rm", "-rf", `/projects/${folder}`);
   }
 });
 

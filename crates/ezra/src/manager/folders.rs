@@ -1,10 +1,16 @@
+use std::collections::BTreeSet;
 use std::fs;
+use std::future;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use notify::event::ModifyKind;
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::sync::Notify;
+use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use utoipa::ToSchema;
 
 use super::events::Topic;
@@ -23,6 +29,9 @@ pub enum FolderChoiceError {
 
 pub const PROJECTS_DIRECTORY: &str = "/projects";
 const RESCAN_INTERVAL: Duration = Duration::from_secs(30);
+const RESCAN_INTERVAL_WHILE_WATCHING: Duration = Duration::from_secs(300);
+const QUIET_PERIOD: Duration = Duration::from_secs(1);
+const LONGEST_SETTLE: Duration = Duration::from_secs(10);
 const BLOCK_START: &str = "<!-- ezra:folders:start -->";
 const BLOCK_END: &str = "<!-- ezra:folders:end -->";
 const UNBORN_REFTABLE_BRANCH: &str = ".invalid";
@@ -418,9 +427,10 @@ impl AppState {
     }
 
     /// Keeps the folder list in `/projects/AGENTS.md` and the folder choices current, and servers
-    /// in step with them.
+    /// in step with them, as soon as the folders change.
     pub async fn describe_folders_regularly(self) {
-        let mut rescan = interval(RESCAN_INTERVAL);
+        let mut watcher = FolderWatcher::start(&self.projects.0);
+        let mut rescan = interval(watcher.rescan_interval());
         rescan.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut github_account = self.github_account.subscribe();
         let mut known: Vec<Folder> = Vec::new();
@@ -428,6 +438,7 @@ impl AppState {
             tokio::select! {
                 _ = rescan.tick() => {}
                 _ = github_account.changed() => {}
+                () = watcher.settled_change() => {}
             }
             let projects = self.projects.clone();
             let account = github_account.borrow_and_update().clone();
@@ -443,6 +454,7 @@ impl AppState {
             .await;
             match described {
                 Ok(Ok(folders)) => {
+                    watcher.follow(&self.projects, &folders);
                     let recorded =
                         self.record_folder_choices(&folders)
                             .await
@@ -462,6 +474,103 @@ impl AppState {
                 Err(error) => tracing::warn!("folder scan stopped: {error}"),
             }
         }
+    }
+}
+
+/// Notices at once when folders in /projects appear, go, or become repositories, and when a
+/// repository's branch or remote changes. Without inotify, rescans do all the work.
+struct FolderWatcher {
+    watcher: Option<RecommendedWatcher>,
+    watched: BTreeSet<PathBuf>,
+    changed: Arc<Notify>,
+}
+
+impl FolderWatcher {
+    fn start(projects: &Path) -> Self {
+        let changed = Arc::new(Notify::new());
+        let notifier = Arc::clone(&changed);
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            let relevant = event.map_or(true, |event| {
+                matches!(
+                    event.kind,
+                    EventKind::Create(_)
+                        | EventKind::Remove(_)
+                        | EventKind::Modify(ModifyKind::Name(_))
+                )
+            });
+            if relevant {
+                notifier.notify_one();
+            }
+        })
+        .and_then(|mut watcher| {
+            watcher.watch(projects, RecursiveMode::NonRecursive)?;
+            Ok(watcher)
+        })
+        .inspect_err(|error| {
+            tracing::warn!(
+                "cannot watch {}, rescanning every 30 s instead: {error}",
+                projects.display()
+            );
+        })
+        .ok();
+        Self {
+            watcher,
+            watched: BTreeSet::new(),
+            changed,
+        }
+    }
+
+    fn rescan_interval(&self) -> Duration {
+        if self.watcher.is_some() {
+            RESCAN_INTERVAL_WHILE_WATCHING
+        } else {
+            RESCAN_INTERVAL
+        }
+    }
+
+    /// Watches each folder for a new `.git`, and each repository's `.git` for a new branch or
+    /// remote. Stops watching what is gone.
+    fn follow(&mut self, projects: &ProjectsDirectory, folders: &[Folder]) {
+        let Some(watcher) = &mut self.watcher else {
+            return;
+        };
+        let wanted: BTreeSet<PathBuf> = folders
+            .iter()
+            .flat_map(|folder| {
+                let path = projects.folder(&folder.name);
+                let git = folder.git.is_some().then(|| path.join(".git"));
+                [Some(path), git]
+            })
+            .flatten()
+            .collect();
+        self.watched.retain(|path| {
+            let keep = wanted.contains(path);
+            if !keep {
+                let _already_gone = watcher.unwatch(path);
+            }
+            keep
+        });
+        for path in wanted {
+            if !self.watched.contains(&path)
+                && watcher.watch(&path, RecursiveMode::NonRecursive).is_ok()
+            {
+                self.watched.insert(path);
+            }
+        }
+    }
+
+    /// Returns once changes stop for a moment, so a clone is scanned when it is done.
+    async fn settled_change(&self) {
+        if self.watcher.is_none() {
+            return future::pending().await;
+        }
+        self.changed.notified().await;
+        let Some(deadline) = Instant::now().checked_add(LONGEST_SETTLE) else {
+            return;
+        };
+        while Instant::now() < deadline
+            && timeout(QUIET_PERIOD, self.changed.notified()).await.is_ok()
+        {}
     }
 }
 
@@ -661,6 +770,43 @@ mod tests {
             .expect("block is written");
         let second = fs::read_to_string(directory.path().join("AGENTS.md")).expect("file is read");
         assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn new_folders_and_repositories_are_noticed() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let projects = ProjectsDirectory(directory.path().to_path_buf());
+        let mut watcher = FolderWatcher::start(&projects.0);
+        let noticed = Duration::from_secs(5);
+
+        fs::create_dir(projects.folder("app")).expect("folder is created");
+        timeout(noticed, watcher.settled_change())
+            .await
+            .expect("the new folder is noticed");
+
+        watcher.follow(&projects, &projects.folders().expect("folders are listed"));
+        fs::create_dir(projects.folder("app").join(".git")).expect("repository is created");
+        timeout(noticed, watcher.settled_change())
+            .await
+            .expect("the new repository is noticed");
+
+        watcher.follow(&projects, &projects.folders().expect("folders are listed"));
+        fs::write(
+            projects.folder("app").join(".git/HEAD"),
+            "ref: refs/heads/main\n",
+        )
+        .expect("HEAD is written");
+        timeout(noticed, watcher.settled_change())
+            .await
+            .expect("the branch change is noticed");
+
+        projects.folders().expect("folders are listed");
+        assert!(
+            timeout(Duration::from_millis(1500), watcher.settled_change())
+                .await
+                .is_err(),
+            "scanning counted as a change"
+        );
     }
 
     #[test]
