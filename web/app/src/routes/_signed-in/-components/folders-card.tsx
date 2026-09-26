@@ -82,10 +82,11 @@ function FolderRow({ folder }: { folder: FolderStatus }) {
         ) : null}
       </div>
       <div className="flex flex-none items-center gap-3">
-        {typeof server?.memory_bytes === "number" ? (
-          <span className="text-xs text-muted-foreground tabular-nums">
+        {server?.usage ? (
+          <span className="flex gap-3 text-xs text-muted-foreground tabular-nums">
+            {REMOTE_CONTROL_DESCRIPTIONS.sessions(server.usage.sessions, server.usage.capacity)}
             <Hint content={REMOTE_CONTROL_DESCRIPTIONS.memory_hint}>
-              {prettyBytes(server.memory_bytes)}
+              {prettyBytes(server.usage.memory_bytes)}
             </Hint>
           </span>
         ) : null}

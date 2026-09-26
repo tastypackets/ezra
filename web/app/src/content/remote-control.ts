@@ -9,7 +9,9 @@ export const REMOTE_CONTROL_DESCRIPTIONS = {
   running_hint: (device: string) => `In the Claude app, open ${device}.`,
   running_hint_without_device: "In the Claude app, open this box.",
   last_stop: "Last stop",
-  memory: (size: string) => `Uses ${size} of memory, sessions included.`,
+  usage: (sessions: number, capacity: number, memory: string) =>
+    `${sessions} of ${capacity} sessions running, using ${memory} of memory in all.`,
+  sessions: (sessions: number, capacity: number) => `${sessions} of ${capacity} sessions`,
   memory_hint: "Memory this server and its sessions use.",
 } as const;
 

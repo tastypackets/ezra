@@ -142,7 +142,6 @@ mod tests {
                 logged_in: false,
                 account: None,
                 login_prompt: None,
-                session_count: Some(0),
                 config_disk_bytes: Some(0),
                 install_progress: None,
                 available_update: None,

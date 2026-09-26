@@ -51,7 +51,6 @@ export function AgentsCard({ agents }: AgentsCardProps) {
               <TableHead>{AGENTS_DESCRIPTIONS.column_status}</TableHead>
               <TableHead>{AGENTS_DESCRIPTIONS.column_version}</TableHead>
               <TableHead>{AGENTS_DESCRIPTIONS.column_account}</TableHead>
-              <TableHead className="text-right">{AGENTS_DESCRIPTIONS.column_sessions}</TableHead>
               <TableHead className="text-right">
                 <SavedDataLabel />
               </TableHead>
@@ -89,7 +88,6 @@ function AgentRow({ status }: { status: AgentStatus }) {
       </TableCell>
       <TableCell className={cn(status.installed_version && "font-mono")}>{facts.version}</TableCell>
       <TableCell>{facts.account}</TableCell>
-      <TableCell className="text-right tabular-nums">{facts.sessions}</TableCell>
       <TableCell className="text-right tabular-nums">{facts.savedData}</TableCell>
       <TableCell>
         <AgentActions status={status} className="items-end" />
@@ -112,8 +110,6 @@ function AgentListItem({ status }: { status: AgentStatus }) {
         <dd className={cn(status.installed_version && "font-mono")}>{facts.version}</dd>
         <dt className="text-muted-foreground">{AGENTS_DESCRIPTIONS.column_account}</dt>
         <dd className="truncate">{facts.account}</dd>
-        <dt className="text-muted-foreground">{AGENTS_DESCRIPTIONS.column_sessions}</dt>
-        <dd className="tabular-nums">{facts.sessions}</dd>
         <dt className="text-muted-foreground">
           <SavedDataLabel />
         </dt>
@@ -207,7 +203,6 @@ function agentFacts(status: AgentStatus) {
   return {
     version: status.installed_version ?? "—",
     account: status.account ?? (status.logged_in ? AGENTS_DESCRIPTIONS.unavailable : "—"),
-    sessions: status.session_count ?? AGENTS_DESCRIPTIONS.unavailable,
     savedData:
       typeof status.config_disk_bytes === "number"
         ? prettyBytes(status.config_disk_bytes)

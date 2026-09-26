@@ -1,6 +1,3 @@
-use std::io;
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -23,8 +20,6 @@ pub struct AgentStatus {
     pub account: Option<String>,
     /// Present while a sign-in is waiting for the person signing in.
     pub login_prompt: Option<LoginPrompt>,
-    /// Saved sessions, absent when they cannot be counted.
-    pub session_count: Option<u64>,
     /// Bytes the agent keeps on /config, absent when they cannot be measured.
     pub config_disk_bytes: Option<u64>,
     /// Present while an install or update is downloading.
@@ -89,8 +84,6 @@ impl AgentStatus {
             logged_in: sign_in.logged_in,
             account: sign_in.account,
             login_prompt,
-            session_count: config_directory
-                .and_then(|directory| agent.session_count(directory).ok()),
             config_disk_bytes: config_directory.and_then(|directory| directory.total_bytes().ok()),
             install_progress,
             available_update,
@@ -100,28 +93,10 @@ impl AgentStatus {
     }
 }
 
-impl Agent {
-    /// Claude keeps `projects/<project>/<session>.jsonl`. Codex keeps `sessions/<year>/<month>/<day>/rollout-*.jsonl`.
-    fn session_count(self, config_directory: &Path) -> io::Result<u64> {
-        match self {
-            Self::Claude => config_directory
-                .join("projects")
-                .entries_or_empty()?
-                .iter()
-                .filter(|project| project.is_dir())
-                .try_fold(0_u64, |count, project| {
-                    Ok(count.saturating_add(project.count_files_with_extension("jsonl", false)?))
-                }),
-            Self::Codex => config_directory
-                .join("sessions")
-                .count_files_with_extension("jsonl", true),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use super::*;
     use crate::manager::agents::ReleaseChannel;
@@ -132,34 +107,6 @@ mod tests {
         fs::create_dir_all(path.parent().expect("test paths have a parent"))
             .expect("parent directory is created");
         fs::write(path, "{}").expect("test file is written");
-    }
-
-    fn session_count(agent: Agent, config: &Path) -> u64 {
-        agent
-            .session_count(config)
-            .expect("sessions can be counted")
-    }
-
-    #[test]
-    fn claude_sessions_are_jsonl_files_per_project() {
-        let config = tempfile::tempdir().expect("temporary directory");
-        for session in [
-            "projects/-projects-app/one.jsonl",
-            "projects/-projects-app/two.jsonl",
-            "projects/-projects-other/three.jsonl",
-            "projects/-projects-app/notes.txt",
-        ] {
-            write(&config.path().join(session));
-        }
-        assert_eq!(session_count(Agent::Claude, config.path()), 3);
-    }
-
-    #[test]
-    fn codex_sessions_are_nested_by_date() {
-        let config = tempfile::tempdir().expect("temporary directory");
-        write(&config.path().join("sessions/2026/09/25/rollout-a.jsonl"));
-        write(&config.path().join("sessions/2026/09/26/rollout-b.jsonl"));
-        assert_eq!(session_count(Agent::Codex, config.path()), 2);
     }
 
     #[tokio::test]
@@ -201,12 +148,5 @@ mod tests {
             let status = AgentStatus::gather(Agent::Claude, &manager.state).await;
             assert_eq!(status.available_update.as_deref(), expected, "{release:?}");
         }
-    }
-
-    #[test]
-    fn no_session_store_means_no_sessions() {
-        let config = tempfile::tempdir().expect("temporary directory");
-        assert_eq!(session_count(Agent::Claude, config.path()), 0);
-        assert_eq!(session_count(Agent::Codex, config.path()), 0);
     }
 }

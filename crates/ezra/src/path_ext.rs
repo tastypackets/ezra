@@ -15,9 +15,6 @@ pub trait PathExt {
     /// Size of everything at or below this path, without following links. A missing path is zero.
     fn total_bytes(&self) -> io::Result<u64>;
 
-    /// Files with this extension in this directory, and in its subdirectories when `recursive`.
-    fn count_files_with_extension(&self, extension: &str, recursive: bool) -> io::Result<u64>;
-
     /// Unpacks this `.tar.gz` into `destination`, refusing entries that would land outside it. Blocks.
     fn unpack_tar_gz_into(&self, destination: &Path) -> io::Result<()>;
 
@@ -60,23 +57,6 @@ impl PathExt for Path {
             .iter()
             .try_fold(0_u64, |total, entry| {
                 Ok(total.saturating_add(entry.total_bytes()?))
-            })
-    }
-
-    fn count_files_with_extension(&self, extension: &str, recursive: bool) -> io::Result<u64> {
-        self.entries_or_empty()?
-            .iter()
-            .try_fold(0_u64, |count, entry| {
-                let metadata = fs::symlink_metadata(entry)?;
-                let found = if metadata.is_dir() && recursive {
-                    entry.count_files_with_extension(extension, true)?
-                } else {
-                    u64::from(
-                        metadata.is_file()
-                            && entry.extension().is_some_and(|found| found == extension),
-                    )
-                };
-                Ok(count.saturating_add(found))
             })
     }
 
@@ -130,22 +110,6 @@ mod tests {
         write(&directory.path().join("a"), "12345");
         write(&directory.path().join("nested/b"), "123");
         assert_eq!(directory.path().total_bytes().expect("size works"), 8);
-    }
-
-    #[test]
-    fn files_are_counted_by_extension() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        write(&directory.path().join("one.jsonl"), "");
-        write(&directory.path().join("notes.txt"), "");
-        write(&directory.path().join("2026/09/two.jsonl"), "");
-        let count = |recursive| {
-            directory
-                .path()
-                .count_files_with_extension("jsonl", recursive)
-                .expect("counting works")
-        };
-        assert_eq!(count(false), 1);
-        assert_eq!(count(true), 2);
     }
 
     #[test]

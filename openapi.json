@@ -862,15 +862,6 @@
                 "type": "null"
               }
             ]
-          },
-          "session_count": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Saved sessions, absent when they cannot be counted.",
-            "minimum": 0
           }
         }
       },
@@ -1182,15 +1173,6 @@
             ],
             "description": "The end of the server's output when it last stopped unexpectedly."
           },
-          "memory_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Memory the server and its sessions use, with shared memory counted once. Absent while no\nserver process runs.",
-            "minimum": 0
-          },
           "restarts": {
             "type": "integer",
             "format": "int32",
@@ -1206,6 +1188,17 @@
               "null"
             ],
             "description": "Where to continue in a browser, once connected."
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ServerUsage",
+                "description": "What the server and its sessions use. Absent while no server process runs."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -1231,6 +1224,35 @@
           "running",
           "retrying"
         ]
+      },
+      "ServerUsage": {
+        "type": "object",
+        "description": "What a running server and its sessions use.",
+        "required": [
+          "sessions",
+          "capacity",
+          "memory_bytes"
+        ],
+        "properties": {
+          "capacity": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most sessions the server runs at once.",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Memory the server and its sessions use, with shared memory counted once.",
+            "minimum": 0
+          },
+          "sessions": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sessions running now.",
+            "minimum": 0
+          }
+        }
       },
       "SessionStatus": {
         "type": "object",

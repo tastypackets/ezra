@@ -11,7 +11,6 @@ export const AGENTS_DESCRIPTIONS = {
   column_status: "Status",
   column_version: "Version",
   column_account: "Account",
-  column_sessions: "Sessions",
   column_saved_data: "Saved data",
   column_actions: "Actions",
   saved_data_hint: "Sign-in, settings and sessions the CLI keeps on /config, not the CLI itself",

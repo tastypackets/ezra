@@ -125,17 +125,27 @@ pub struct RemoteControlStatus {
     pub restarts: u32,
     /// The device the Claude app lists this server under, the container's hostname.
     pub device: Option<String>,
-    /// Memory the server and its sessions use, with shared memory counted once. Absent while no
-    /// server process runs.
-    pub memory_bytes: Option<u64>,
+    /// What the server and its sessions use. Absent while no server process runs.
+    pub usage: Option<ServerUsage>,
 }
 
 impl RemoteControlStatus {
     fn enter(&mut self, state: ServerState) {
         self.state = state;
         self.url = None;
-        self.memory_bytes = None;
+        self.usage = None;
     }
+}
+
+/// What a running server and its sessions use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ServerUsage {
+    /// Sessions running now.
+    pub sessions: u32,
+    /// The most sessions the server runs at once.
+    pub capacity: u32,
+    /// Memory the server and its sessions use, with shared memory counted once.
+    pub memory_bytes: u64,
 }
 
 /// The shared handle the API reads statuses from and signals changes through.
@@ -674,7 +684,7 @@ impl AppState {
                         return RunEnd::Reconsidered;
                     }
                 }
-                _ = usage.tick() => server.note_usage(&self.remote_control, &launch.directory).await,
+                _ = usage.tick() => server.note_usage(&self.remote_control, launch).await,
                 () = signals.shutdown.until_set() => {
                     server.stop().await;
                     return RunEnd::ShutDown;
@@ -743,14 +753,15 @@ impl ServerRun {
         self.output.describe_exit(exit)
     }
 
-    async fn note_usage(&self, remote_control: &RemoteControl, directory: &Path) {
+    async fn note_usage(&self, remote_control: &RemoteControl, launch: &Launch) {
         let Some(ProcessGroup(group)) = self.group else {
             return;
         };
-        let memory = tokio::task::spawn_blocking(move || ProcessGroup(group).memory())
+        let capacity = launch.capacity;
+        let usage = tokio::task::spawn_blocking(move || ProcessGroup(group).usage(capacity))
             .await
             .ok();
-        remote_control.update(directory, |status| status.memory_bytes = memory);
+        remote_control.update(&launch.directory, |status| status.usage = usage);
     }
 
     async fn stop_reading(&mut self) {
@@ -790,17 +801,38 @@ impl ProcessGroup {
         killpg(self.0, None) == Err(Errno::ESRCH)
     }
 
-    /// The proportional memory of every process in the group, in bytes.
-    fn memory(&self) -> u64 {
-        Process::all()
-            .filter(|process| process.group() == Some(self.0))
-            .filter_map(|process| process.proportional_memory())
-            .fold(0, u64::saturating_add)
+    /// The leader's children are its sessions, and every process in the group counts for memory.
+    fn usage(&self, capacity: u32) -> ServerUsage {
+        let mut usage = ServerUsage {
+            sessions: 0,
+            capacity,
+            memory_bytes: 0,
+        };
+        for process in Process::all() {
+            let Some(ProcessStat { parent, group }) = process.stat() else {
+                continue;
+            };
+            if group != self.0 {
+                continue;
+            }
+            if parent == self.0 {
+                usage.sessions = usage.sessions.saturating_add(1);
+            }
+            if let Some(memory) = process.proportional_memory() {
+                usage.memory_bytes = usage.memory_bytes.saturating_add(memory);
+            }
+        }
+        usage
     }
 }
 
 /// A process as /proc describes it.
 struct Process(PathBuf);
+
+struct ProcessStat {
+    parent: Pid,
+    group: Pid,
+}
 
 impl Process {
     fn all() -> impl Iterator<Item = Self> {
@@ -817,11 +849,16 @@ impl Process {
             .map(|entry| Self(entry.path()))
     }
 
-    fn group(&self) -> Option<Pid> {
+    fn stat(&self) -> Option<ProcessStat> {
         let stat = fs::read_to_string(self.0.join("stat")).ok()?;
         let (_, after_name) = stat.rsplit_once(')')?;
-        let group = after_name.split_whitespace().nth(2)?.parse().ok()?;
-        Some(Pid::from_raw(group))
+        let mut fields = after_name.split_whitespace().skip(1);
+        let parent = fields.next()?.parse().ok()?;
+        let group = fields.next()?.parse().ok()?;
+        Some(ProcessStat {
+            parent: Pid::from_raw(parent),
+            group: Pid::from_raw(group),
+        })
     }
 
     /// Resident memory with each shared page split between the processes sharing it.
@@ -1216,9 +1253,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_group_counts_the_memory_of_all_its_processes() {
+    async fn a_group_counts_the_leaders_children_and_everyones_memory() {
         let mut leader = Command::new("sh")
-            .args(["-c", "sleep 30 & sleep 30"])
+            .args(["-c", "sleep 30 & sleep 30 & wait"])
             .process_group(0)
             .kill_on_drop(true)
             .spawn()
@@ -1232,18 +1269,16 @@ mod tests {
         let deadline = Instant::now()
             .checked_add(Duration::from_secs(5))
             .expect("the deadline fits");
-        while Process::all()
-            .filter(|process| process.group() == Some(group.0))
-            .count()
-            < 2
-        {
+        while group.usage(4).sessions < 2 {
             assert!(Instant::now() < deadline, "the group did not start");
             sleep(Duration::from_millis(20)).await;
         }
-        assert!(group.memory() > 0);
+        let usage = group.usage(4);
+        assert_eq!((usage.sessions, usage.capacity), (2, 4));
+        assert!(usage.memory_bytes > 0);
 
         group.terminate(&mut leader).await;
-        assert_eq!(group.memory(), 0);
+        assert_eq!(group.usage(4).memory_bytes, 0);
     }
 
     #[tokio::test]

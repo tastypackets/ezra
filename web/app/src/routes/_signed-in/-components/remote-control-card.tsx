@@ -44,9 +44,13 @@ export function RemoteControlCard({ status }: { status: RemoteControlStatus }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <StateHint status={status} />
-        {typeof status.memory_bytes === "number" ? (
+        {status.usage ? (
           <p className="text-muted-foreground">
-            {REMOTE_CONTROL_DESCRIPTIONS.memory(prettyBytes(status.memory_bytes))}
+            {REMOTE_CONTROL_DESCRIPTIONS.usage(
+              status.usage.sessions,
+              status.usage.capacity,
+              prettyBytes(status.usage.memory_bytes),
+            )}
           </p>
         ) : null}
         {status.state === "retrying" && status.last_error ? (

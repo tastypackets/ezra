@@ -208,7 +208,6 @@ mod tests {
                 logged_in: true,
                 account: Some("</script><script>alert(1)</script><!--".to_owned()),
                 login_prompt: None,
-                session_count: None,
                 config_disk_bytes: None,
                 install_progress: None,
                 available_update: None,
