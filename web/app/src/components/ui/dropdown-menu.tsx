@@ -5,9 +5,7 @@ import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { cn } from "cn";
 import { ChevronRightIcon, CheckIcon } from "lucide-react";
 
-function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
-  return <MenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
-}
+const DropdownMenu = MenuPrimitive.Root;
 
 function DropdownMenuPortal({ ...props }: MenuPrimitive.Portal.Props) {
   return <MenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />;
@@ -95,9 +93,7 @@ function DropdownMenuItem({
   );
 }
 
-function DropdownMenuSub({ ...props }: MenuPrimitive.SubmenuRoot.Props) {
-  return <MenuPrimitive.SubmenuRoot data-slot="dropdown-menu-sub" {...props} />;
-}
+const DropdownMenuSub = MenuPrimitive.SubmenuRoot;
 
 function DropdownMenuSubTrigger({
   className,
