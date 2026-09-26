@@ -21,6 +21,16 @@ test("Remote Control waits for Claude Code", async ({ page }) => {
   await expect(page.getByText("Starts once Claude Code is installed and signed in.")).toBeVisible();
 });
 
+test("hovering Settings loads its data before the click", async ({ page }) => {
+  await page.goto("./");
+  await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+  const settingsLoaded = page.waitForRequest(
+    (request) => new URL(request.url()).pathname === "/api/v1/agents/claude/settings",
+  );
+  await page.getByRole("link", { name: "Settings", exact: true }).hover();
+  await settingsLoaded;
+});
+
 test("signed in, the sign-in page goes to the dashboard", async ({ page }) => {
   await page.goto("./login");
   await expect(page).toHaveURL(/\/$/);

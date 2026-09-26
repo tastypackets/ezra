@@ -11,6 +11,8 @@ export const router = createRouter({
   routeTree,
   context: { queryClient },
   scrollRestoration: true,
+  defaultPreload: "intent",
+  defaultStructuralSharing: true,
   defaultPreloadStaleTime: 0,
   defaultPendingMs: 500,
   defaultPendingComponent: LoadingState,
