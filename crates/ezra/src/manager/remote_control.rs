@@ -21,7 +21,6 @@ use utoipa::ToSchema;
 
 use super::agents::Agent;
 use super::events::{Events, Topic};
-use super::folders::Folder;
 use super::login::{AgentCli, SignInStatus, StrExt};
 use super::state::AppState;
 
@@ -92,6 +91,26 @@ impl Default for RemoteControlSettings {
             permission_mode: "auto".to_owned(),
             capacity: 4,
             serve_repositories: true,
+        }
+    }
+}
+
+/// Where sessions started from the Claude app work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpawnMode {
+    /// In the served folder.
+    #[default]
+    SameDir,
+    /// Each in its own git worktree in `.claude/worktrees`, only in a repository.
+    Worktree,
+}
+
+impl SpawnMode {
+    fn argument(self) -> &'static str {
+        match self {
+            Self::SameDir => "same-dir",
+            Self::Worktree => "worktree",
         }
     }
 }
@@ -340,6 +359,7 @@ struct Launch {
     claude_version: Option<String>,
     config_directory: Option<PathBuf>,
     directory: PathBuf,
+    spawn: SpawnMode,
     permission_mode: String,
     capacity: u32,
 }
@@ -349,7 +369,12 @@ impl Launch {
         let mut command = Command::new(&self.claude);
         command
             .current_dir(&self.directory)
-            .args(["remote-control", "--spawn", "same-dir", "--capacity"])
+            .args([
+                "remote-control",
+                "--spawn",
+                self.spawn.argument(),
+                "--capacity",
+            ])
             .arg(self.capacity.to_string())
             .arg("--permission-mode")
             .arg(&self.permission_mode)
@@ -479,39 +504,20 @@ impl AppState {
         true
     }
 
-    /// Whether the folder's switch is on, the default for a repository not recorded yet.
-    pub async fn serves_folder(&self, folder: &Folder) -> bool {
-        let settings = self.settings.lock().await;
-        let claude = &settings.agents.claude;
-        claude
-            .folders
-            .get(&folder.name)
-            .copied()
-            .unwrap_or(claude.remote_control.serve_repositories && folder.git.is_some())
-    }
-
     async fn served_folder_names(&self) -> Vec<String> {
-        if !self
-            .settings
-            .lock()
-            .await
-            .agents
-            .claude
-            .remote_control
-            .enabled
-        {
-            return Vec::new();
-        }
         let Ok(folders) = self.folders().await else {
             return Vec::new();
         };
-        let mut served = Vec::new();
-        for folder in folders {
-            if self.serves_folder(&folder).await {
-                served.push(folder.name);
-            }
+        let settings = self.settings.lock().await;
+        let claude = &settings.agents.claude;
+        if !claude.remote_control.enabled {
+            return Vec::new();
         }
-        served
+        folders
+            .into_iter()
+            .filter(|folder| claude.folder_choice(folder).serve)
+            .map(|folder| folder.name)
+            .collect()
     }
 
     async fn supervise_server(self, served: Served) {
@@ -586,24 +592,23 @@ impl AppState {
     }
 
     async fn wanted_server(&self, served: &Served, directory: &Path) -> Wanted {
-        let settings = self
-            .settings
-            .lock()
-            .await
-            .agents
-            .claude
-            .remote_control
-            .clone();
-        if !settings.enabled {
+        let folder = match served {
+            Served::Projects => None,
+            Served::Folder(name) => match self.projects.find(name) {
+                Some(folder) => Some(folder),
+                None => return Wanted::Off,
+            },
+        };
+        let (settings, choice) = {
+            let settings = self.settings.lock().await;
+            let claude = &settings.agents.claude;
+            (
+                claude.remote_control.clone(),
+                folder.map(|folder| claude.folder_choice(&folder)),
+            )
+        };
+        if !settings.enabled || choice.is_some_and(|choice| !choice.serve) {
             return Wanted::Off;
-        }
-        if let Served::Folder(name) = served {
-            let Some(folder) = self.projects.find(name) else {
-                return Wanted::Off;
-            };
-            if !self.serves_folder(&folder).await {
-                return Wanted::Off;
-            }
         }
         if AgentCli::installed(Agent::Claude, &self.install_paths).is_err() {
             return Wanted::Waiting;
@@ -621,6 +626,7 @@ impl AppState {
                 .config_directory(Agent::Claude)
                 .map(Path::to_path_buf),
             directory: directory.to_path_buf(),
+            spawn: choice.map_or(SpawnMode::SameDir, |choice| choice.spawn),
             permission_mode: settings.permission_mode,
             capacity: settings.capacity,
         })
@@ -1094,9 +1100,22 @@ mod tests {
             claude_version: Some("2.1.283".to_owned()),
             config_directory: Some(directory.join("claude")),
             directory: directory.join("projects"),
+            spawn: SpawnMode::SameDir,
             permission_mode: "auto".to_owned(),
             capacity: 4,
         }
+    }
+
+    #[test]
+    fn worktree_sessions_are_asked_for_by_name() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let launch = Launch {
+            spawn: SpawnMode::Worktree,
+            ..launch(directory.path())
+        };
+        let command = launch.command();
+        let arguments: Vec<_> = command.as_std().get_args().take(3).collect();
+        assert_eq!(arguments, ["remote-control", "--spawn", "worktree"]);
     }
 
     #[test]
@@ -1488,7 +1507,7 @@ esac"#,
         assert_eq!(state.remote_control.status_of(&app), None);
 
         state
-            .choose_to_serve_folder("app", true)
+            .change_folder_choice("app", |choice| choice.serve = true)
             .await
             .expect("the choice is saved");
         let served = wait_in(&state, &app, ServerState::Running).await;
@@ -1498,7 +1517,7 @@ esac"#,
         );
 
         state
-            .choose_to_serve_folder("app", false)
+            .change_folder_choice("app", |choice| choice.serve = false)
             .await
             .expect("the choice is saved");
         let deadline = Instant::now()
@@ -1508,6 +1527,52 @@ esac"#,
             assert!(Instant::now() < deadline, "the folder server did not stop");
             sleep(Duration::from_millis(50)).await;
         }
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_new_spawn_mode_restarts_only_that_folders_server() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let starts = directory.path().join("starts");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            &format!(
+                "echo \"$(basename \"$PWD\") $3\" >> {}; echo \"https://claude.ai/code?environment=env_$(basename \"$PWD\")\"; exec sleep 60",
+                starts.display()
+            ),
+        );
+        let app = state.projects.folder("app");
+        fs::create_dir_all(app.join(".git")).expect("repository is created");
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Running).await;
+        wait_in(&state, &app, ServerState::Running).await;
+
+        state
+            .change_folder_choice("app", |choice| choice.spawn = SpawnMode::Worktree)
+            .await
+            .expect("the choice is saved");
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .expect("the deadline fits");
+        let expected = ["app same-dir", "app worktree", "projects same-dir"];
+        loop {
+            let mut started: Vec<String> = fs::read_to_string(&starts)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect();
+            started.sort();
+            if started == expected {
+                break;
+            }
+            assert!(Instant::now() < deadline, "started {started:?}");
+            sleep(Duration::from_millis(50)).await;
+        }
+        wait_in(&state, &app, ServerState::Running).await;
 
         state.remote_control.begin_shut_down();
         supervisor.await.expect("supervisor stops");
@@ -1525,7 +1590,7 @@ esac"#,
         events.next().await;
 
         state
-            .choose_to_serve_folder("app", true)
+            .change_folder_choice("app", |choice| choice.serve = true)
             .await
             .expect("the choice is saved");
         wait_in(&state, &app, ServerState::Waiting).await;
@@ -1554,7 +1619,7 @@ esac"#,
         let app = state.projects.0.join("app");
         fs::create_dir_all(&app).expect("folder is created");
         state
-            .choose_to_serve_folder("app", true)
+            .change_folder_choice("app", |choice| choice.serve = true)
             .await
             .expect("the choice is saved");
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
@@ -1572,7 +1637,7 @@ esac"#,
         );
 
         state
-            .choose_to_serve_folder("app", false)
+            .change_folder_choice("app", |choice| choice.serve = false)
             .await
             .expect("the choice is saved");
         wait_in(&state, &app, ServerState::Stopping).await;

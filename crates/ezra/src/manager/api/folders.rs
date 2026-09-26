@@ -6,6 +6,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
 use crate::manager::folders::{FolderChoiceError, FolderStatus};
+use crate::manager::remote_control::SpawnMode;
 
 #[utoipa::path(
     get,
@@ -52,10 +53,53 @@ pub async fn choose_to_serve(
     Path(name): Path<String>,
     Json(body): Json<ServeBody>,
 ) -> Result<StatusCode, ApiError> {
-    match state.choose_to_serve_folder(&name, body.serve).await {
-        Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(FolderChoiceError::NoSuchFolder) => Err(ApiError::NotFound("no such folder")),
-        Err(error) => Err(internal(error)),
+    state
+        .change_folder_choice(&name, |choice| choice.serve = body.serve)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Where a folder's sessions work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SpawnModeBody {
+    pub spawn: SpawnMode,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/folders/{name}/spawn-mode",
+    operation_id = "chooseFolderSpawnMode",
+    tag = "folders",
+    summary = "Choose where a folder's sessions work",
+    description = "Restarts the folder's Remote Control server if it is running.",
+    params(("name" = String, Path, description = "The folder's name in /projects")),
+    request_body = SpawnModeBody,
+    responses(
+        (status = 204, description = "Saved"),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 404, description = "No such folder", body = ErrorBody),
+        (status = 409, description = "Worktrees need a git repository", body = ErrorBody)
+    )
+)]
+pub async fn choose_spawn_mode(
+    _: Session,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SpawnModeBody>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .change_folder_choice(&name, |choice| choice.spawn = body.spawn)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+impl From<FolderChoiceError> for ApiError {
+    fn from(error: FolderChoiceError) -> Self {
+        match error {
+            FolderChoiceError::NoSuchFolder => Self::NotFound("no such folder"),
+            FolderChoiceError::NotARepository => Self::Conflict(error.to_string()),
+            FolderChoiceError::Scan(_) | FolderChoiceError::Settings(_) => internal(error),
+        }
     }
 }
 
@@ -68,7 +112,20 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::manager::folders::{Folder, GitDetails, ProjectsDirectory};
-    use crate::manager::settings::SettingsError;
+    use crate::manager::settings::{FolderChoice, SettingsError};
+
+    impl TestManager {
+        async fn choice_of(&self, name: &str) -> FolderChoice {
+            let folder = self.state.projects.find(name).expect("folder is found");
+            self.state
+                .settings
+                .lock()
+                .await
+                .agents
+                .claude
+                .folder_choice(&folder)
+        }
+    }
 
     #[tokio::test]
     async fn folders_need_a_login() {
@@ -110,6 +167,7 @@ mod tests {
                         git: None,
                     },
                     serve: false,
+                    spawn: SpawnMode::SameDir,
                 },
                 FolderStatus {
                     folder: Folder {
@@ -120,6 +178,7 @@ mod tests {
                         }),
                     },
                     serve: true,
+                    spawn: SpawnMode::SameDir,
                 },
             ]
         );
@@ -138,7 +197,7 @@ mod tests {
                     .agents
                     .claude
                     .folders
-                    .insert("gone".to_owned(), true);
+                    .insert("gone".to_owned(), FolderChoice::default());
                 Ok::<(), SettingsError>(())
             })
             .await
@@ -153,7 +212,13 @@ mod tests {
         );
         assert_eq!(
             manager.state.settings.lock().await.agents.claude.folders,
-            BTreeMap::from([("repo".to_owned(), true)])
+            BTreeMap::from([(
+                "repo".to_owned(),
+                FolderChoice {
+                    serve: true,
+                    spawn: SpawnMode::SameDir
+                }
+            )])
         );
 
         manager
@@ -171,12 +236,7 @@ mod tests {
                 .await
                 .expect("recorded")
         );
-        let repo = manager
-            .state
-            .projects
-            .find("repo")
-            .expect("repository is found");
-        assert!(manager.state.serves_folder(&repo).await);
+        assert!(manager.choice_of("repo").await.serve);
     }
 
     #[tokio::test]
@@ -194,8 +254,7 @@ mod tests {
             )
             .await;
         assert_eq!(chosen.status(), StatusCode::NO_CONTENT);
-        let app = manager.state.projects.find("app").expect("folder is found");
-        assert!(manager.state.serves_folder(&app).await);
+        assert!(manager.choice_of("app").await.serve);
 
         let unknown = manager
             .put(
@@ -205,5 +264,61 @@ mod tests {
             )
             .await;
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn only_repositories_can_use_worktrees() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let ProjectsDirectory(projects) = &manager.state.projects;
+        fs::create_dir_all(projects.join("notes")).expect("folder is created");
+        fs::create_dir_all(projects.join("repo/.git")).expect("repository is created");
+        let worktree = r#"{"spawn":"worktree"}"#;
+        assert_eq!(
+            manager
+                .put("/api/v1/folders/repo/spawn-mode", worktree, None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let chosen = manager
+            .put("/api/v1/folders/repo/spawn-mode", worktree, Some(&cookie))
+            .await;
+        assert_eq!(chosen.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            manager.choice_of("repo").await,
+            FolderChoice {
+                serve: true,
+                spawn: SpawnMode::Worktree
+            }
+        );
+        let folders: Vec<FolderStatus> = manager
+            .get("/api/v1/folders", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(
+            folders
+                .iter()
+                .map(|folder| folder.spawn)
+                .collect::<Vec<_>>(),
+            [SpawnMode::SameDir, SpawnMode::Worktree]
+        );
+
+        for (name, status) in [
+            ("notes", StatusCode::CONFLICT),
+            ("gone", StatusCode::NOT_FOUND),
+        ] {
+            let refused = manager
+                .put(
+                    &format!("/api/v1/folders/{name}/spawn-mode"),
+                    worktree,
+                    Some(&cookie),
+                )
+                .await;
+            assert_eq!(refused.status(), status, "{name}");
+        }
+        assert_eq!(manager.choice_of("notes").await, FolderChoice::default());
     }
 }

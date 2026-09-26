@@ -14,17 +14,20 @@ use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use utoipa::ToSchema;
 
 use super::events::Topic;
-use super::settings::SettingsError;
+use super::remote_control::SpawnMode;
+use super::settings::{FolderChoice, SettingsError};
 use super::state::AppState;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FolderChoiceError {
     #[error("no such folder")]
     NoSuchFolder,
+    #[error("worktrees need a git repository")]
+    NotARepository,
     #[error("could not list the folders in /projects: {0}")]
     Scan(io::Error),
     #[error(transparent)]
-    Settings(SettingsError),
+    Settings(#[from] SettingsError),
 }
 
 pub const PROJECTS_DIRECTORY: &str = "/projects";
@@ -84,6 +87,8 @@ pub struct FolderStatus {
     pub folder: Folder,
     /// Chosen to be served to the Claude app, by its own choice or by default.
     pub serve: bool,
+    /// Where its sessions work, always `same-dir` outside a repository.
+    pub spawn: SpawnMode,
 }
 
 /// The directory whose folders agents work in, usually /projects.
@@ -366,40 +371,46 @@ impl AppState {
     }
 
     pub async fn folder_statuses(&self) -> io::Result<Vec<FolderStatus>> {
-        let mut statuses = Vec::new();
-        for folder in self.folders().await? {
-            statuses.push(FolderStatus {
-                serve: self.serves_folder(&folder).await,
-                folder,
-            });
-        }
-        Ok(statuses)
+        let folders = self.folders().await?;
+        let settings = self.settings.lock().await;
+        Ok(folders
+            .into_iter()
+            .map(|folder| {
+                let FolderChoice { serve, spawn } = settings.agents.claude.folder_choice(&folder);
+                FolderStatus {
+                    folder,
+                    serve,
+                    spawn,
+                }
+            })
+            .collect())
     }
 
     /// Records the folder's own choice, and drops the choices of folders that are gone.
-    pub async fn choose_to_serve_folder(
+    pub async fn change_folder_choice(
         &self,
         name: &str,
-        serve: bool,
+        change: impl FnOnce(&mut FolderChoice),
     ) -> Result<(), FolderChoiceError> {
-        let names: Vec<String> = self
-            .folders()
-            .await
-            .map_err(FolderChoiceError::Scan)?
-            .into_iter()
-            .map(|folder| folder.name)
-            .collect();
-        if !names.iter().any(|folder| folder == name) {
-            return Err(FolderChoiceError::NoSuchFolder);
-        }
+        let folders = self.folders().await.map_err(FolderChoiceError::Scan)?;
+        let folder = folders
+            .iter()
+            .find(|folder| folder.name == name)
+            .ok_or(FolderChoiceError::NoSuchFolder)?;
         self.update_settings(|settings| {
-            let choices = &mut settings.agents.claude.folders;
-            choices.retain(|folder, _| names.contains(folder));
-            choices.insert(name.to_owned(), serve);
-            Ok::<(), SettingsError>(())
+            let claude = &mut settings.agents.claude;
+            let mut choice = claude.folder_choice(folder);
+            change(&mut choice);
+            if choice.spawn == SpawnMode::Worktree && folder.git.is_none() {
+                return Err(FolderChoiceError::NotARepository);
+            }
+            claude
+                .folders
+                .retain(|name, _| folders.iter().any(|folder| folder.name == *name));
+            claude.folders.insert(name.to_owned(), choice);
+            Ok(())
         })
-        .await
-        .map_err(FolderChoiceError::Settings)?;
+        .await?;
         self.remote_control.reconsider();
         self.events.publish(Topic::Folders);
         Ok(())
@@ -415,9 +426,10 @@ impl AppState {
             let before = choices.clone();
             choices.retain(|name, _| folders.iter().any(|folder| folder.name == *name));
             for folder in folders.iter().filter(|folder| folder.git.is_some()) {
-                choices
-                    .entry(folder.name.clone())
-                    .or_insert(serve_repositories);
+                choices.entry(folder.name.clone()).or_insert(FolderChoice {
+                    serve: serve_repositories,
+                    spawn: SpawnMode::SameDir,
+                });
             }
             changed = *choices != before;
             Ok::<(), SettingsError>(())

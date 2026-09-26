@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::agents::{Agent, ReleaseChannel};
 use super::auth::HashedPassword;
-use super::remote_control::RemoteControlSettings;
+use super::folders::Folder;
+use super::remote_control::{RemoteControlSettings, SpawnMode};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -62,9 +63,65 @@ pub struct ClaudeSettings {
     pub release_channel: ReleaseChannel,
     #[serde(default)]
     pub remote_control: RemoteControlSettings,
-    /// Each folder's switch by name, set to the default for a repository when first seen.
+    /// Each folder's choices by name, set to the defaults for a repository when first seen.
     #[serde(default)]
-    pub folders: BTreeMap<String, bool>,
+    pub folders: BTreeMap<String, FolderChoice>,
+}
+
+impl ClaudeSettings {
+    /// The folder's recorded choices, or the defaults. Sessions start in the folder itself when it
+    /// is not a repository.
+    pub fn folder_choice(&self, folder: &Folder) -> FolderChoice {
+        let is_repository = folder.git.is_some();
+        let choice = self
+            .folders
+            .get(&folder.name)
+            .copied()
+            .unwrap_or(FolderChoice {
+                serve: self.remote_control.serve_repositories && is_repository,
+                spawn: SpawnMode::SameDir,
+            });
+        if is_repository {
+            choice
+        } else {
+            FolderChoice {
+                spawn: SpawnMode::SameDir,
+                ..choice
+            }
+        }
+    }
+}
+
+/// How the Claude app sees one folder in /projects.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredFolderChoice")]
+pub struct FolderChoice {
+    pub serve: bool,
+    pub spawn: SpawnMode,
+}
+
+/// A folder's choices as saved: the switch alone, or every choice.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredFolderChoice {
+    Switch(bool),
+    Choices {
+        serve: bool,
+        #[serde(default)]
+        spawn: SpawnMode,
+    },
+}
+
+impl From<StoredFolderChoice> for FolderChoice {
+    fn from(stored: StoredFolderChoice) -> Self {
+        match stored {
+            StoredFolderChoice::Switch(serve) => Self {
+                serve,
+                spawn: SpawnMode::SameDir,
+            },
+            StoredFolderChoice::Choices { serve, spawn } => Self { serve, spawn },
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +180,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manager::folders::GitDetails;
 
     #[test]
     fn missing_file_means_defaults() {
@@ -164,6 +222,76 @@ mod tests {
         assert_eq!(
             settings.release_channel(Agent::Codex),
             ReleaseChannel::Latest
+        );
+    }
+
+    #[test]
+    fn folder_switches_saved_alone_load_as_choices() {
+        let settings: Settings = toml::from_str(
+            "[agents.claude.folders]\n\
+             app = true\n\
+             notes = false\n\
+             site = { serve = true, spawn = \"worktree\" }\n",
+        )
+        .expect("settings parse");
+        let served = FolderChoice {
+            serve: true,
+            spawn: SpawnMode::SameDir,
+        };
+        let in_worktrees = FolderChoice {
+            serve: true,
+            spawn: SpawnMode::Worktree,
+        };
+        assert_eq!(
+            settings.agents.claude.folders,
+            BTreeMap::from([
+                ("app".to_owned(), served),
+                ("notes".to_owned(), FolderChoice::default()),
+                ("site".to_owned(), in_worktrees),
+            ])
+        );
+        let saved = toml::to_string_pretty(&settings).expect("settings serialize");
+        assert!(
+            saved.contains("[agents.claude.folders.app]\nserve = true\nspawn = \"same-dir\"\n"),
+            "{saved}"
+        );
+        assert_eq!(
+            toml::from_str::<Settings>(&saved).expect("saved settings parse"),
+            settings
+        );
+    }
+
+    #[test]
+    fn sessions_start_in_place_outside_a_repository() {
+        let mut claude = ClaudeSettings::default();
+        let in_worktrees = FolderChoice {
+            serve: true,
+            spawn: SpawnMode::Worktree,
+        };
+        claude.folders.insert("app".to_owned(), in_worktrees);
+        let repository = Folder {
+            name: "app".to_owned(),
+            git: Some(GitDetails::default()),
+        };
+        assert_eq!(claude.folder_choice(&repository), in_worktrees);
+        let plain = Folder {
+            git: None,
+            ..repository.clone()
+        };
+        let served = FolderChoice {
+            serve: true,
+            spawn: SpawnMode::SameDir,
+        };
+        assert_eq!(claude.folder_choice(&plain), served);
+        let new_repository = Folder {
+            name: "new".to_owned(),
+            ..repository
+        };
+        assert_eq!(claude.folder_choice(&new_repository), served);
+        claude.remote_control.serve_repositories = false;
+        assert_eq!(
+            claude.folder_choice(&new_repository),
+            FolderChoice::default()
         );
     }
 
