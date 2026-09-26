@@ -31,7 +31,7 @@ function ToastList({ closeLabel }: { closeLabel: string }) {
       </div>
       <Toast.Close
         aria-label={closeLabel}
-        className="rounded-md p-0.5 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="rounded-md p-0.5 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         <XIcon className="size-4" />
       </Toast.Close>

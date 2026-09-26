@@ -48,7 +48,7 @@ function NavLink({ to, label }: { to: "/" | "/settings"; label: string }) {
     <Link
       to={to}
       activeOptions={{ exact: true }}
-      className="rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 data-[status=active]:font-medium data-[status=active]:text-foreground"
+      className="rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[status=active]:font-medium data-[status=active]:text-foreground"
     >
       {label}
     </Link>
