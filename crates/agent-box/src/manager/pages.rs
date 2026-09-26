@@ -148,7 +148,7 @@ fn dashboard(statuses: &[AgentStatus]) -> Markup {
                             th { "Version" }
                             th { "Account" }
                             th.number { "Sessions" }
-                            th.number { "Disk" }
+                            th.number title="Sign-in, settings and sessions the CLI keeps on /config. The CLI itself is not counted." { "Saved data" }
                             th.number { span.visually-hidden { "Actions" } }
                         }
                     }
