@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 
-use super::{ApiError, AppState, ErrorBody, Session};
+use super::{ApiError, AppState, ErrorBody, Session, internal};
 use std::sync::Arc;
 
 use crate::manager::agents::{Agent, InstallProgress};
@@ -42,7 +42,10 @@ pub async fn install(
     State(state): State<AppState>,
     Path(agent): Path<Agent>,
 ) -> Result<Json<AgentStatus>, ApiError> {
-    state.install_and_record(agent).await?;
+    let installing = state.clone();
+    tokio::spawn(async move { installing.install_and_record(agent).await })
+        .await
+        .map_err(internal)??;
     Ok(Json(AgentStatus::gather(agent, &state).await))
 }
 
