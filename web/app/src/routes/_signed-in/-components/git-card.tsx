@@ -7,14 +7,7 @@ import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Badge } from "@/components/ui/badge";
 import type { badgeVariants } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -144,6 +137,7 @@ function IdentityForm({ identity }: { identity: CommitIdentity }) {
   });
   return (
     <form
+      className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
         if (!form.state.isSubmitting) {
@@ -187,10 +181,7 @@ function IdentityForm({ identity }: { identity: CommitIdentity }) {
           </form.Field>
         </FieldGroup>
       </FieldSet>
-      <CardFooter className="-mx-(--card-spacing) mt-6 -mb-(--card-spacing) justify-between gap-4">
-        <p role="alert" className="text-destructive">
-          {saveIdentity.isError ? errorMessage(saveIdentity.error) : null}
-        </p>
+      <div className="flex flex-wrap items-center gap-3">
         <form.Subscribe selector={(state) => state.isSubmitting}>
           {(isSubmitting) => (
             <Button type="submit" loading={isSubmitting}>
@@ -198,7 +189,12 @@ function IdentityForm({ identity }: { identity: CommitIdentity }) {
             </Button>
           )}
         </form.Subscribe>
-      </CardFooter>
+        {saveIdentity.isError ? (
+          <p role="alert" className="text-destructive">
+            {errorMessage(saveIdentity.error)}
+          </p>
+        ) : null}
+      </div>
     </form>
   );
 }

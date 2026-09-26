@@ -740,7 +740,7 @@
         "tags": [
           "manager"
         ],
-        "summary": "Get the manager's certificate, sessions and environment",
+        "summary": "Get the manager's certificate and environment",
         "operationId": "getManager",
         "responses": {
           "200": {
@@ -852,30 +852,6 @@
           },
           "403": {
             "description": "Wrong current password",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/manager/sessions/end-others": {
-      "post": {
-        "tags": [
-          "manager"
-        ],
-        "summary": "Sign out every other session",
-        "operationId": "endOtherSessions",
-        "responses": {
-          "204": {
-            "description": "Other sessions signed out"
-          },
-          "401": {
-            "description": "Not signed in to the manager",
             "content": {
               "application/json": {
                 "schema": {
@@ -1073,26 +1049,13 @@
         "type": "object",
         "description": "The certificate the manager serves HTTPS with.",
         "required": [
-          "hostnames",
-          "expires_at",
-          "fingerprint"
+          "expires_at"
         ],
         "properties": {
           "expires_at": {
             "type": "integer",
             "format": "int64",
             "description": "When it expires, in seconds since the Unix epoch."
-          },
-          "fingerprint": {
-            "type": "string",
-            "description": "Its SHA-256 fingerprint, as browsers show it."
-          },
-          "hostnames": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "The hostnames it is valid for."
           }
         }
       },
@@ -1423,7 +1386,6 @@
         "type": "object",
         "description": "The manager's own settings and state.",
         "required": [
-          "other_sessions",
           "environment"
         ],
         "properties": {
@@ -1440,12 +1402,6 @@
           },
           "environment": {
             "$ref": "#/components/schemas/EnvironmentSettings"
-          },
-          "other_sessions": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Signed-in sessions other than this one.",
-            "minimum": 0
           }
         }
       },

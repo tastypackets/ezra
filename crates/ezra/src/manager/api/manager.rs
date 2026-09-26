@@ -15,8 +15,6 @@ use crate::manager::tls::CertificateStatus;
 pub struct ManagerStatus {
     /// Absent when the manager serves no certificate of its own.
     pub certificate: Option<CertificateStatus>,
-    /// Signed-in sessions other than this one.
-    pub other_sessions: u32,
     pub environment: EnvironmentSettings,
 }
 
@@ -31,14 +29,14 @@ pub struct PasswordChangeBody {
     path = "/api/v1/manager",
     operation_id = "getManager",
     tag = "manager",
-    summary = "Get the manager's certificate, sessions and environment",
+    summary = "Get the manager's certificate and environment",
     responses(
         (status = 200, description = "Manager state", body = ManagerStatus),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody)
     )
 )]
 pub async fn status(
-    session: Session,
+    _: Session,
     State(state): State<AppState>,
 ) -> Result<Json<ManagerStatus>, ApiError> {
     let certificate = match &state.certificate {
@@ -47,7 +45,6 @@ pub async fn status(
     };
     Ok(Json(ManagerStatus {
         certificate,
-        other_sessions: u32::try_from(state.sessions.others(&session.0)).unwrap_or(u32::MAX),
         environment: state.environment.clone(),
     }))
 }
@@ -97,23 +94,6 @@ pub async fn change_password(
 
 #[utoipa::path(
     post,
-    path = "/api/v1/manager/sessions/end-others",
-    operation_id = "endOtherSessions",
-    tag = "manager",
-    summary = "Sign out every other session",
-    responses(
-        (status = 204, description = "Other sessions signed out"),
-        (status = 401, description = "Not signed in to the manager", body = ErrorBody)
-    )
-)]
-pub async fn end_other_sessions(session: Session, State(state): State<AppState>) -> StatusCode {
-    state.sessions.end_others(&session.0);
-    state.events.publish(Topic::Manager);
-    StatusCode::NO_CONTENT
-}
-
-#[utoipa::path(
-    post,
     path = "/api/v1/manager/certificate",
     operation_id = "regenerateCertificate",
     tag = "manager",
@@ -153,20 +133,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_counts_the_other_sessions() {
+    async fn status_needs_a_session() {
         let manager = TestManager::new();
         let cookie = manager.logged_in().await;
         assert_eq!(
             manager.get("/api/v1/manager", None).await.status(),
             StatusCode::UNAUTHORIZED
         );
-        second_session(&manager).await;
         let status: ManagerStatus = manager
             .get("/api/v1/manager", Some(&cookie))
             .await
             .json()
             .await;
-        assert_eq!(status.other_sessions, 1);
         assert_eq!(status.certificate, None);
     }
 
@@ -222,25 +200,6 @@ mod tests {
                 .await
                 .status(),
             StatusCode::NO_CONTENT
-        );
-    }
-
-    #[tokio::test]
-    async fn other_sessions_can_be_signed_out() {
-        let manager = TestManager::new();
-        let cookie = manager.logged_in().await;
-        let other = second_session(&manager).await;
-        let ended = manager
-            .post("/api/v1/manager/sessions/end-others", "", Some(&cookie))
-            .await;
-        assert_eq!(ended.status(), StatusCode::NO_CONTENT);
-        assert_eq!(
-            manager.get("/api/v1/manager", Some(&other)).await.status(),
-            StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            manager.get("/api/v1/manager", Some(&cookie)).await.status(),
-            StatusCode::OK
         );
     }
 

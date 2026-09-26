@@ -102,14 +102,6 @@ impl Sessions {
         ended
     }
 
-    /// Sessions other than `current`.
-    pub fn others(&self, current: &str) -> usize {
-        self.tokens()
-            .iter()
-            .filter(|token| token.as_str() != current)
-            .count()
-    }
-
     /// Resolves once `token` is no longer an active session.
     pub async fn until_ended(&self, token: &str) {
         let mut ended = self.ended.subscribe();
@@ -163,7 +155,6 @@ mod tests {
         let kept = sessions.start().expect("session starts").0;
         let other = sessions.start().expect("session starts").0;
         sessions.start().expect("session starts");
-        assert_eq!(sessions.others(&kept), 2);
 
         let waiting = sessions.until_ended(&other);
         tokio::pin!(waiting);
@@ -177,7 +168,7 @@ mod tests {
             .await
             .expect("the waiter wakes once its session ends");
         assert!(sessions.is_active(&kept));
-        assert_eq!(sessions.others(&kept), 0);
+        assert!(!sessions.is_active(&other));
     }
 
     #[test]

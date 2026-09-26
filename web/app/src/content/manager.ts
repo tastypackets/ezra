@@ -5,23 +5,9 @@ export const MANAGER_DESCRIPTIONS = {
   new_password: "New password",
   change_password: "Change password",
   password_changed: "Password changed, other sessions signed out.",
-  sessions: "Sessions",
-  other_sessions: (count: number) =>
-    count === 0
-      ? "No other sessions are signed in."
-      : count === 1
-        ? "1 other session is signed in."
-        : `${count} other sessions are signed in.`,
-  end_other_sessions: "Sign out other sessions",
-  other_sessions_ended: "Other sessions signed out.",
   certificate: "Certificate",
   self_signed: "Self-signed",
-  hostnames: "Hostnames",
-  expires: "Expires",
-  fingerprint: "SHA-256 fingerprint",
-  copy_fingerprint: "Copy",
-  copied_fingerprint: "Copied",
-  not_covered: (hostname: string) => `Does not cover ${hostname}`,
+  expires: (date: string) => `Expires ${date}.`,
   no_certificate: "This manager serves no certificate of its own.",
   regenerate: "Regenerate",
   regenerate_title: "Regenerate the certificate?",

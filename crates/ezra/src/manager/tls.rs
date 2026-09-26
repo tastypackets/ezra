@@ -7,10 +7,8 @@ use std::time::Duration;
 use axum_server::tls_rustls::RustlsConfig;
 use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
-use x509_parser::extensions::GeneralName;
 use x509_parser::pem::parse_x509_pem;
 
 const CERTIFICATE_FILE: &str = "certificate.pem";
@@ -60,29 +58,8 @@ impl CertificateFiles {
         let pem = fs::read(&self.certificate)?;
         let (_, pem) = parse_x509_pem(&pem).map_err(io::Error::other)?;
         let certificate = pem.parse_x509().map_err(io::Error::other)?;
-        let hostnames = certificate
-            .subject_alternative_name()
-            .map_err(io::Error::other)?
-            .map(|names| {
-                names
-                    .value
-                    .general_names
-                    .iter()
-                    .filter_map(|name| match name {
-                        GeneralName::DNSName(hostname) => Some((*hostname).to_owned()),
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         Ok(CertificateStatus {
-            hostnames,
             expires_at: certificate.validity().not_after.timestamp(),
-            fingerprint: Sha256::digest(&pem.contents)
-                .iter()
-                .map(|byte| format!("{byte:02X}"))
-                .collect::<Vec<_>>()
-                .join(":"),
         })
     }
 
@@ -100,12 +77,8 @@ impl CertificateFiles {
 /// The certificate the manager serves HTTPS with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CertificateStatus {
-    /// The hostnames it is valid for.
-    pub hostnames: Vec<String>,
     /// When it expires, in seconds since the Unix epoch.
     pub expires_at: i64,
-    /// Its SHA-256 fingerprint, as browsers show it.
-    pub fingerprint: String,
 }
 
 /// The certificate on disk and the TLS configuration serving it.
@@ -200,12 +173,10 @@ mod tests {
         let files = CertificateFiles::ensure_self_signed(directory.path(), "ezra")
             .expect("certificate is created");
         let status = files.status().expect("status is read");
-        assert_eq!(status.hostnames, ["localhost", "ezra"]);
         let in_819_days = OffsetDateTime::now_utc()
             .saturating_add(time::Duration::days(VALIDITY_DAYS.saturating_sub(1)))
             .unix_timestamp();
         assert!(status.expires_at > in_819_days, "{status:?}");
-        assert_eq!(status.fingerprint.len(), 95, "{status:?}");
     }
 
     #[tokio::test]
@@ -215,14 +186,14 @@ mod tests {
         let served = ServedCertificate::load(directory.path(), "ezra")
             .await
             .expect("certificate is served");
-        let before = served.status().expect("status is read");
+        let before = fs::read_to_string(&served.files.certificate).expect("certificate is read");
         served
             .regenerate()
             .await
             .expect("certificate is regenerated");
         assert_ne!(
-            served.status().expect("status is read").fingerprint,
-            before.fingerprint
+            fs::read_to_string(&served.files.certificate).expect("certificate is read"),
+            before
         );
     }
 

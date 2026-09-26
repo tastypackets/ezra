@@ -94,22 +94,6 @@ async function signInElsewhere(
   return elsewhere;
 }
 
-test("other sessions can be signed out", async ({ page, playwright, baseURL }) => {
-  await page.goto("./settings");
-  const manager = card(page, "Manager");
-  const elsewhere = await signInElsewhere(playwright, baseURL);
-  try {
-    const signOutOthers = manager.getByRole("button", { name: "Sign out other sessions" });
-    await expect(signOutOthers).toBeEnabled();
-    await signOutOthers.click();
-    await expect(page.getByText("Other sessions signed out.").last()).toBeVisible();
-    await expect(manager.getByText("No other sessions are signed in.")).toBeVisible();
-    expect((await elsewhere.get("api/v1/manager")).status()).toBe(401);
-  } finally {
-    await elsewhere.dispose();
-  }
-});
-
 test("changing the password needs the current one and signs out other sessions", async ({
   page,
   playwright,
@@ -149,16 +133,13 @@ test("changing the password needs the current one and signs out other sessions",
 test("the certificate can be regenerated", async ({ page }) => {
   await page.goto("./settings");
   const manager = card(page, "Manager");
-  await expect(manager.getByText("localhost")).toBeVisible();
-  const fingerprint = manager.getByText(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
-  const before = await fingerprint.textContent();
+  await expect(manager.getByText(/^Expires /)).toBeVisible();
 
   await manager.getByRole("button", { name: "Regenerate" }).click();
   const dialog = page.getByRole("alertdialog", { name: "Regenerate the certificate?" });
   await expect(dialog).toContainText("Browsers warn again until you accept the new certificate.");
   await dialog.getByRole("button", { name: "Regenerate certificate" }).click();
   await expect(page.getByText("Certificate regenerated.").last()).toBeVisible();
-  await expect(fingerprint).not.toHaveText(before ?? "");
 });
 
 test("the environment is shown read-only", async ({ page }) => {

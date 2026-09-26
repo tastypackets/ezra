@@ -52,10 +52,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/manager", get(manager::status))
         .route("/api/v1/manager/password", put(manager::change_password))
         .route(
-            "/api/v1/manager/sessions/end-others",
-            post(manager::end_other_sessions),
-        )
-        .route(
             "/api/v1/manager/certificate",
             post(manager::regenerate_certificate),
         )
@@ -164,7 +160,6 @@ pub struct ErrorBody {
         events::stream,
         manager::status,
         manager::change_password,
-        manager::end_other_sessions,
         manager::regenerate_certificate,
     )
 )]

@@ -16,7 +16,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CopyButton } from "@/components/ui/copy-button";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -25,7 +24,7 @@ import { useManagerActions } from "@/hooks/use-manager-actions";
 import { errorMessage } from "@/lib/utils";
 import { managerQueryOptions } from "@/queries/manager-queries";
 
-/** The manager's password, other signed-in sessions and HTTPS certificate. */
+/** The manager's password and HTTPS certificate. */
 export function ManagerCard() {
   const { data: manager } = useSuspenseQuery(managerQueryOptions);
   return (
@@ -36,12 +35,7 @@ export function ManagerCard() {
       <CardContent className="flex flex-col gap-6">
         <PasswordForm />
         <Separator />
-        <SessionsSection otherSessions={manager.other_sessions} />
-        <Separator />
-        <CertificateSection
-          certificate={manager.certificate}
-          hostname={manager.environment.hostname}
-        />
+        <CertificateSection certificate={manager.certificate} />
       </CardContent>
     </Card>
   );
@@ -117,7 +111,7 @@ function PasswordForm() {
         </FieldGroup>
         <form.Subscribe selector={(state) => state.isSubmitting}>
           {(isSubmitting) => (
-            <Button type="submit" variant="outline" className="self-start" loading={isSubmitting}>
+            <Button type="submit" className="self-start" loading={isSubmitting}>
               {MANAGER_DESCRIPTIONS.change_password}
             </Button>
           )}
@@ -127,40 +121,7 @@ function PasswordForm() {
   );
 }
 
-function SessionsSection({ otherSessions }: { otherSessions: number }) {
-  const { endOtherSessions } = useManagerActions();
-  return (
-    <section className="flex flex-col gap-3">
-      <h3 className="font-medium">{MANAGER_DESCRIPTIONS.sessions}</h3>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-muted-foreground">
-          {MANAGER_DESCRIPTIONS.other_sessions(otherSessions)}
-        </p>
-        <Button
-          variant="outline"
-          disabled={otherSessions === 0}
-          loading={endOtherSessions.isPending}
-          onClick={() => endOtherSessions.mutate({})}
-        >
-          {MANAGER_DESCRIPTIONS.end_other_sessions}
-        </Button>
-      </div>
-      {endOtherSessions.isError ? (
-        <p role="alert" className="text-destructive">
-          {errorMessage(endOtherSessions.error)}
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-function CertificateSection({
-  certificate,
-  hostname,
-}: {
-  certificate?: CertificateStatus | null;
-  hostname: string;
-}) {
+function CertificateSection({ certificate }: { certificate?: CertificateStatus | null }) {
   const { regenerateCertificate } = useManagerActions();
   return (
     <section className="flex flex-col gap-3">
@@ -197,30 +158,13 @@ function CertificateSection({
         ) : null}
       </div>
       {certificate ? (
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2">
-          <dt className="text-muted-foreground">{MANAGER_DESCRIPTIONS.hostnames}</dt>
-          <dd className="flex flex-wrap items-center gap-2">
-            {certificate.hostnames.join(", ")}
-            {certificate.hostnames.includes(hostname) ? null : (
-              <Badge variant="warning">{MANAGER_DESCRIPTIONS.not_covered(hostname)}</Badge>
-            )}
-          </dd>
-          <dt className="text-muted-foreground">{MANAGER_DESCRIPTIONS.expires}</dt>
-          <dd>
-            {new Date(certificate.expires_at * 1000).toLocaleDateString(undefined, {
+        <p className="text-muted-foreground">
+          {MANAGER_DESCRIPTIONS.expires(
+            new Date(certificate.expires_at * 1000).toLocaleDateString(undefined, {
               dateStyle: "medium",
-            })}
-          </dd>
-          <dt className="text-muted-foreground">{MANAGER_DESCRIPTIONS.fingerprint}</dt>
-          <dd className="flex flex-col items-start gap-2">
-            <span className="font-mono text-xs break-all">{certificate.fingerprint}</span>
-            <CopyButton
-              text={certificate.fingerprint}
-              label={MANAGER_DESCRIPTIONS.copy_fingerprint}
-              copiedLabel={MANAGER_DESCRIPTIONS.copied_fingerprint}
-            />
-          </dd>
-        </dl>
+            }),
+          )}
+        </p>
       ) : (
         <p className="text-muted-foreground">{MANAGER_DESCRIPTIONS.no_certificate}</p>
       )}
