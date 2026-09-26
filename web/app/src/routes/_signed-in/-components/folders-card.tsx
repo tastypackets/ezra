@@ -41,10 +41,10 @@ export function FoldersCard() {
   const clones = useQuery(clonesQueryOptions);
   const remoteControl = useQuery(remoteControlQueryOptions);
   const cloning = clones.data ?? [];
-  const taken = [
-    ...(folders.data ?? []).map((folder) => folder.name),
-    ...cloning.map((clone) => clone.name),
-  ];
+  const taken = {
+    folders: (folders.data ?? []).map((folder) => folder.name),
+    cloning: cloning.filter((clone) => !clone.error).map((clone) => clone.name),
+  };
   return (
     <Card>
       <CardHeader>

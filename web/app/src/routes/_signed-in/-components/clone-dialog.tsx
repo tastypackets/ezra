@@ -22,11 +22,12 @@ import { Switch } from "@/components/ui/switch";
 import { CLONE_DESCRIPTIONS } from "@/content/folders";
 import { useCloneActions } from "@/hooks/use-folder-actions";
 import { defaultFolderName, folderNameProblem } from "@/lib/repositories";
+import type { TakenNames } from "@/lib/repositories";
 import { errorMessage } from "@/lib/utils";
 import { gitHubRepositoriesQueryOptions } from "@/queries/git-queries";
 
-/** "Clone repository" and the dialog it opens. `taken` holds the names already in /projects. */
-export function CloneDialog({ taken }: { taken: readonly string[] }) {
+/** "Clone repository" and the dialog it opens. */
+export function CloneDialog({ taken }: { taken: TakenNames }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -44,7 +45,7 @@ export function CloneDialog({ taken }: { taken: readonly string[] }) {
 }
 
 interface CloneFormProps {
-  taken: readonly string[];
+  taken: TakenNames;
   onStarted: () => void;
 }
 

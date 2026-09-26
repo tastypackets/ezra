@@ -21,15 +21,25 @@ describe("defaultFolderName", () => {
 });
 
 describe("folderNameProblem", () => {
+  const none = { folders: [], cloning: [] };
+
   it("accepts a new top-level name", () => {
-    expect(folderNameProblem("app", ["notes"])).toBeUndefined();
-    expect(folderNameProblem(" my app ", [])).toBeUndefined();
+    expect(folderNameProblem("app", { folders: ["notes"], cloning: ["site"] })).toBeUndefined();
+    expect(folderNameProblem(" my app ", none)).toBeUndefined();
   });
 
-  it("refuses empty, hidden, nested and taken names", () => {
-    expect(folderNameProblem(" ", [])).toBe(CLONE_DESCRIPTIONS.folder_required);
-    expect(folderNameProblem(".hidden", [])).toBe(CLONE_DESCRIPTIONS.folder_invalid);
-    expect(folderNameProblem("a/b", [])).toBe(CLONE_DESCRIPTIONS.folder_invalid);
-    expect(folderNameProblem("notes", ["notes"])).toBe(CLONE_DESCRIPTIONS.folder_exists);
+  it("refuses empty, hidden and nested names", () => {
+    expect(folderNameProblem(" ", none)).toBe(CLONE_DESCRIPTIONS.folder_required);
+    expect(folderNameProblem(".hidden", none)).toBe(CLONE_DESCRIPTIONS.folder_invalid);
+    expect(folderNameProblem("a/b", none)).toBe(CLONE_DESCRIPTIONS.folder_invalid);
+  });
+
+  it("says whether a folder or a running clone holds the name", () => {
+    expect(folderNameProblem("notes ", { folders: ["notes"], cloning: [] })).toBe(
+      CLONE_DESCRIPTIONS.folder_exists,
+    );
+    expect(folderNameProblem("app", { folders: [], cloning: ["app"] })).toBe(
+      CLONE_DESCRIPTIONS.folder_cloning,
+    );
   });
 });

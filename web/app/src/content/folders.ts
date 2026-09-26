@@ -31,6 +31,7 @@ export const CLONE_DESCRIPTIONS = {
   folder_required: "Enter a folder name.",
   folder_invalid: "Use a name without slashes that does not start with a dot.",
   folder_exists: "A folder with this name exists.",
+  folder_cloning: "A clone into this folder is running.",
   serve: "Serve in the Claude app",
   cancel: "Cancel",
   submit: "Clone",

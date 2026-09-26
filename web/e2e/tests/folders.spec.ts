@@ -78,17 +78,21 @@ test("deleting a repository names the work only it has", async ({ page }) => {
   }
 });
 
-test("a failed clone says why until dismissed", async ({ page }) => {
+test("a failed clone says why, can be retried, and is dismissed", async ({ page }) => {
   const folder = `missing-${randomUUID().slice(0, 8)}`;
   await page.goto("./");
-  await page.getByRole("button", { name: "Clone repository" }).click();
   const dialog = page.getByRole("dialog", { name: "Clone repository" });
-  await dialog.getByRole("combobox", { name: "Repository" }).fill(`/tmp/${folder}`);
-  await dialog.getByRole("button", { name: "Clone", exact: true }).click();
-
   const row = folderRow(page, folder);
-  await expect(row).toContainText("Could not clone");
-  await expect(row).toContainText("does not exist");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await page.getByRole("button", { name: "Clone repository" }).click();
+    await dialog.getByRole("combobox", { name: "Repository" }).fill(`/tmp/${folder}`);
+    await expect(dialog.getByLabel("Folder")).toHaveValue(folder);
+    await dialog.getByRole("button", { name: "Clone", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(row).toContainText("Could not clone");
+    await expect(row).toContainText("does not exist");
+    await expect(row).toHaveCount(1);
+  }
   await row.getByRole("button", { name: `Dismiss the failed clone of ${folder}` }).click();
   await expect(row).toBeHidden();
 });
