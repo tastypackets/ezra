@@ -430,7 +430,7 @@ impl AppState {
             }
             claude
                 .folders
-                .retain(|name, _| folders.iter().any(|folder| folder.name == *name));
+                .retain(|recorded, _| folders.iter().any(|present| present.name == *recorded));
             claude.folders.insert(name.to_owned(), choice);
             Ok(())
         })
