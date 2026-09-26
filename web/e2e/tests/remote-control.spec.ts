@@ -167,7 +167,9 @@ test("Claude Code's parts are hidden until it is installed", async ({
     installFakeClaude("2.1.0-e2e", CONNECTED);
     await nudgeRemoteControl(request);
     await expect(projectsRow(page).getByText("Running", { exact: true })).toBeVisible();
-    await expect(page.getByText(/^In the Claude app, open .+\.$/)).toBeVisible();
+    await expect(
+      projectsRow(page).getByText(/^In the Claude app, pick .+ under Remote Control\.$/),
+    ).toBeVisible();
     await expect(claude).toContainText("1 server, 0 sessions");
     await expect(
       row.getByRole("switch", { name: `Serve ${folder} in the Claude app` }),

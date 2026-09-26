@@ -62,18 +62,11 @@ export function FoldersCard() {
     folders: listed.map((folder) => folder.name),
     cloning: cloning.filter((clone) => !clone.error).map((clone) => clone.name),
   };
-  const device = remoteControl.device;
   return (
     <Card>
       <CardHeader>
         <CardTitle>{FOLDERS_DESCRIPTIONS.title}</CardTitle>
-        {claudeInstalled && remoteControl.projects.state === "running" ? (
-          <CardDescription>
-            {device
-              ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(device)
-              : REMOTE_CONTROL_DESCRIPTIONS.running_hint_without_device}
-          </CardDescription>
-        ) : null}
+        <CardDescription>{FOLDERS_DESCRIPTIONS.description}</CardDescription>
         <CardAction>
           <CloneDialog taken={taken} claudeInstalled={claudeInstalled} />
         </CardAction>
@@ -131,6 +124,12 @@ function ProjectsRow({ overview }: { overview: RemoteControlOverview }) {
             </Link>
           ) : status.state === "waiting" ? (
             <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.waiting_hint}</p>
+          ) : status.state === "running" ? (
+            <p className="text-muted-foreground">
+              {overview.device
+                ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(overview.device)
+                : REMOTE_CONTROL_DESCRIPTIONS.running_hint_without_device}
+            </p>
           ) : null}
           <ServerNotes status={status} detailed />
         </div>

@@ -22,7 +22,9 @@ test("the dashboard arrives with its data, then fetches only what changes", asyn
     await expect(row).toContainText("Not installed");
     await expect(row.getByRole("button", { name: "Install" })).toHaveAccessibleDescription(agent);
   }
-  await expect(page.getByText("No projects yet.")).toBeVisible();
+  await expect(
+    page.getByText("No projects yet. Clone a repository, or ask an agent started in /projects to."),
+  ).toBeVisible();
   await listening;
 
   const folder = `added-${testInfo.retry}`;

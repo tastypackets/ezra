@@ -2,7 +2,8 @@ import type { SpawnMode } from "@ezra/client";
 
 export const FOLDERS_DESCRIPTIONS = {
   title: "Folders",
-  empty: "No projects yet.",
+  description: "An agent started in /projects can also clone and set up repositories.",
+  empty: "No projects yet. Clone a repository, or ask an agent started in /projects to.",
   projects: "All projects",
   projects_path: "/projects",
   not_git: "Not a git repository",

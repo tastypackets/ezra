@@ -10,8 +10,8 @@ function sessionCount(sessions: number, capacity?: number | null): string {
 export const REMOTE_CONTROL_DESCRIPTIONS = {
   off_hint: "Turned off in Settings.",
   waiting_hint: "Starts once Claude Code is signed in.",
-  running_hint: (device: string) => `In the Claude app, open ${device}.`,
-  running_hint_without_device: "In the Claude app, open this box.",
+  running_hint: (device: string) => `In the Claude app, pick ${device} under Remote Control.`,
+  running_hint_without_device: "In the Claude app, pick this box under Remote Control.",
   last_stop: "Last stop",
   sessions: sessionCount,
   summary: (servers: number, sessions: number) =>
