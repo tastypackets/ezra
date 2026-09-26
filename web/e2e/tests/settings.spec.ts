@@ -202,7 +202,7 @@ test("the environment is shown read-only", async ({ page }) => {
   await expect(environment.getByRole("textbox")).toHaveCount(0);
 });
 
-test("GitHub sign-in steps take focus when they open", async ({ page }) => {
+test("GitHub sign-in steps take focus and hand it back when they close", async ({ page }) => {
   // Starting a GitHub sign-in asks github.com for a code, so the manager's replies are stubbed.
   const prompt = { url: "https://github.com/login/device", code: "ABCD-1234" };
   let github: object = { failing: false, from_environment: false, signed_in: false };
@@ -219,6 +219,11 @@ test("GitHub sign-in steps take focus when they open", async ({ page }) => {
   const box = card(page, "Git");
   await box.getByRole("button", { name: "Sign in to GitHub" }).focus();
   await page.keyboard.press("Enter");
-  await expect(box.getByRole("group", { name: "Sign in to GitHub" })).toBeFocused();
+  const steps = box.getByRole("group", { name: "Sign in to GitHub" });
+  await expect(steps).toBeFocused();
   await expect(box.getByText("ABCD-1234")).toBeVisible();
+
+  github = { failing: false, from_environment: false, signed_in: true, account: "octocat" };
+  await expect(steps).toBeHidden();
+  await expect(box.getByRole("button", { name: "Sign out" })).toBeFocused();
 });

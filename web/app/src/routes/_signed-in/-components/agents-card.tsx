@@ -30,6 +30,7 @@ import {
   useAgentActions,
 } from "@/hooks/use-agent-actions";
 import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
+import { handOffFocus } from "@/lib/focus";
 import { downloadPercent } from "@/lib/utils";
 
 type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
@@ -153,15 +154,7 @@ function AgentActions({
   const failure = useAgentActionError(status.agent);
   const menuTrigger = useRef<HTMLButtonElement>(null);
   const keepFocusInRow = useCallback(
-    (button: HTMLButtonElement | null) => () => {
-      if (button && button === document.activeElement) {
-        queueMicrotask(() => {
-          if (document.activeElement === document.body) {
-            menuTrigger.current?.focus();
-          }
-        });
-      }
-    },
+    (button: HTMLButtonElement | null) => handOffFocus(button, () => menuTrigger.current),
     [],
   );
   const name = AGENT_NAMES[status.agent];
@@ -174,7 +167,7 @@ function AgentActions({
   const menuInstall = menuOffersInstall(status, step);
   return (
     <div className={cn("flex flex-col gap-1", className)}>
-      <div className="flex items-center gap-1">
+      <div data-agent-actions={status.agent} className="flex items-center gap-1">
         {step ? (
           <Button
             ref={keepFocusInRow}

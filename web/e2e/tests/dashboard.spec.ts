@@ -33,7 +33,7 @@ test("the dashboard arrives with its data, then fetches only what changes", asyn
   }
 });
 
-test("an agent row keeps keyboard focus on its one button", async ({ page }) => {
+test("keyboard focus stays in an agent's row", async ({ page }) => {
   // Installing and signing in reach the vendors, so the manager's replies are stubbed.
   const codex = { agent: "codex", configured: false, logged_in: false };
   const installed = {
@@ -86,7 +86,7 @@ test("an agent row keeps keyboard focus on its one button", async ({ page }) => 
   await page.keyboard.press("Enter");
 
   const update = row.getByRole("button", { name: "Update to 2.1.284" });
-  await update.focus();
+  await expect(update).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(update).toBeHidden();
   await expect(more).toBeFocused();

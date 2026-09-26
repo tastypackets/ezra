@@ -1,7 +1,8 @@
 import type { CommitIdentity, GitHubStatus, LoginPrompt } from "@ezra/client";
 import { useForm } from "@tanstack/react-form";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useEffect, useId, useRef } from "react";
+import { useCallback, useId, useRef } from "react";
+import type { RefObject } from "react";
 
 import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { GIT_DESCRIPTIONS } from "@/content/git";
 import { useGitActions } from "@/hooks/use-git-actions";
+import { handOffFocus } from "@/lib/focus";
 import { errorMessage } from "@/lib/utils";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
 
@@ -38,6 +40,7 @@ export function GitCard() {
 
 function GitHubSection({ github }: { github: GitHubStatus }) {
   const { startGitHubSignIn, signOutOfGitHub } = useGitActions();
+  const button = useRef<HTMLButtonElement>(null);
   const failed = [startGitHubSignIn, signOutOfGitHub]
     .filter((mutation) => mutation.isError)
     .toSorted((first, second) => second.submittedAt - first.submittedAt)
@@ -55,6 +58,7 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
         </div>
         {canSignOut || canSignIn ? (
           <Button
+            ref={button}
             variant={canSignOut ? "outline" : "default"}
             size="sm"
             loading={canSignOut ? signOutOfGitHub.isPending : startGitHubSignIn.isPending}
@@ -80,6 +84,7 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
           }
           restarting={startGitHubSignIn.isPending}
           startOver={() => startGitHubSignIn.mutate({})}
+          returnFocusTo={button}
         />
       ) : null}
     </section>
@@ -91,20 +96,26 @@ function GitHubSignIn({
   startedHere,
   restarting,
   startOver,
+  returnFocusTo,
 }: {
   prompt: LoginPrompt;
   /** Moves focus here on open, for a sign-in started on this page. */
   startedHere: boolean;
   restarting: boolean;
   startOver: () => void;
+  /** Takes focus when the steps close while holding it. */
+  returnFocusTo: RefObject<HTMLButtonElement | null>;
 }) {
-  const steps = useRef<HTMLDivElement>(null);
   const focusOnOpen = useRef(startedHere);
-  useEffect(() => {
-    if (focusOnOpen.current) {
-      steps.current?.focus();
-    }
-  }, []);
+  const steps = useCallback(
+    (group: HTMLDivElement | null) => {
+      if (focusOnOpen.current) {
+        group?.focus();
+      }
+      return handOffFocus(group, () => returnFocusTo.current);
+    },
+    [returnFocusTo],
+  );
   return (
     <div
       ref={steps}

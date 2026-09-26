@@ -1,6 +1,6 @@
 import type { Agent, LoginPrompt } from "@ezra/client";
 import { useForm } from "@tanstack/react-form";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
   useAgentActions,
   useSignInStartedHere,
 } from "@/hooks/use-agent-actions";
+import { handOffFocus } from "@/lib/focus";
 
 export interface SignInPanelProps {
   agent: Agent;
@@ -38,8 +39,17 @@ export function SignInPanel({ agent, prompt }: SignInPanelProps) {
       title.current?.focus();
     }
   }, []);
+  const returnFocusToRow = useCallback(
+    (panel: HTMLElement | null) =>
+      handOffFocus(panel, () =>
+        [...document.querySelectorAll<HTMLElement>(`[data-agent-actions="${agent}"] button`)].find(
+          (button) => button.checkVisibility(),
+        ),
+      ),
+    [agent],
+  );
   return (
-    <Card>
+    <Card ref={returnFocusToRow}>
       <CardHeader>
         <CardTitle ref={title} tabIndex={-1} className="outline-none">
           {AGENTS_DESCRIPTIONS.sign_in_title(AGENT_NAMES[agent])}
