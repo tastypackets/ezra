@@ -17,6 +17,7 @@ use super::events::Topic;
 use super::remote_control::SpawnMode;
 use super::settings::{FolderChoice, SettingsError};
 use super::state::AppState;
+use crate::path_ext::PathExt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FolderChoiceError {
@@ -78,6 +79,8 @@ pub struct GitDetails {
     pub branch: Option<String>,
     /// Where `origin` points, without credentials.
     pub repository: Option<String>,
+    /// Linked worktrees that still exist, counted on the main checkout only.
+    pub worktrees: u32,
 }
 
 /// A folder with what the Claude app sees of it.
@@ -281,7 +284,28 @@ impl GitCheckout {
             .ok()
             .and_then(|config| config.origin_url())
             .map(|url| url.without_credentials());
-        Some(GitDetails { branch, repository })
+        Some(GitDetails {
+            branch,
+            repository,
+            worktrees: Self::linked_worktrees(git_directory),
+        })
+    }
+
+    /// Linked worktrees whose folder still exists, from the `gitdir` file of each entry in
+    /// `worktrees`.
+    fn linked_worktrees(git_directory: &Path) -> u32 {
+        let entries = git_directory
+            .join("worktrees")
+            .entries_or_empty()
+            .unwrap_or_default();
+        let existing = entries
+            .iter()
+            .filter(|entry| {
+                fs::read_to_string(entry.join("gitdir"))
+                    .is_ok_and(|gitdir| entry.join(gitdir.trim()).exists())
+            })
+            .count();
+        u32::try_from(existing).unwrap_or(u32::MAX)
     }
 }
 
@@ -540,8 +564,9 @@ impl FolderWatcher {
         }
     }
 
-    /// Watches each folder for a new `.git`, and each repository's `.git` for a new branch or
-    /// remote. Stops watching what is gone.
+    /// Watches each folder for a new `.git`, each repository's `.git` for a new branch or remote,
+    /// and its `.git/worktrees` for a new worktree. Stops watching what is gone. A path that was
+    /// removed and made again is watched again.
     fn follow(&mut self, projects: &ProjectsDirectory, folders: &[Folder]) {
         let Some(watcher) = &mut self.watcher else {
             return;
@@ -551,7 +576,8 @@ impl FolderWatcher {
             .flat_map(|folder| {
                 let path = projects.folder(&folder.name);
                 let git = folder.git.is_some().then(|| path.join(".git"));
-                [Some(path), git]
+                let worktrees = git.as_ref().map(|git| git.join("worktrees"));
+                [Some(path), git, worktrees]
             })
             .flatten()
             .collect();
@@ -563,9 +589,7 @@ impl FolderWatcher {
             keep
         });
         for path in wanted {
-            if !self.watched.contains(&path)
-                && watcher.watch(&path, RecursiveMode::NonRecursive).is_ok()
-            {
+            if watcher.watch(&path, RecursiveMode::NonRecursive).is_ok() {
                 self.watched.insert(path);
             }
         }
@@ -596,6 +620,7 @@ mod tests {
             git: git.map(|(repository, branch)| GitDetails {
                 branch: Some(branch.to_owned()),
                 repository: Some(repository.to_owned()),
+                worktrees: 0,
             }),
         }
     }
@@ -642,6 +667,11 @@ mod tests {
         let worktree_git = root.join("main/.git/worktrees/feature");
         fs::write(worktree_git.join("HEAD"), "ref: refs/heads/feature\n").expect("HEAD is written");
         fs::write(worktree_git.join("commondir"), "../..\n").expect("commondir is written");
+        fs::write(
+            worktree_git.join("gitdir"),
+            format!("{}\n", root.join("feature/.git").display()),
+        )
+        .expect("gitdir is written");
         fs::create_dir_all(root.join("feature")).expect("worktree is created");
         fs::write(
             root.join("feature/.git"),
@@ -653,11 +683,58 @@ mod tests {
             .folders()
             .expect("folders are listed");
         assert_eq!(
-            folders.first(),
-            Some(&folder(
-                "feature",
-                Some(("https://github.com/zeke/app.git", "feature"))
-            ))
+            folders,
+            [
+                folder(
+                    "feature",
+                    Some(("https://github.com/zeke/app.git", "feature"))
+                ),
+                Folder {
+                    name: "main".to_owned(),
+                    git: Some(GitDetails {
+                        branch: Some("main".to_owned()),
+                        repository: Some("https://github.com/zeke/app.git".to_owned()),
+                        worktrees: 1,
+                    }),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn worktrees_whose_folder_is_gone_are_not_counted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let git = directory.path().join("app/.git");
+        let claude_worktrees = directory.path().join("app/.claude/worktrees");
+        for (name, gitdir) in [
+            ("kept", claude_worktrees.join("kept/.git")),
+            (
+                "relative",
+                PathBuf::from("../../../.claude/worktrees/relative/.git"),
+            ),
+            ("deleted", claude_worktrees.join("deleted/.git")),
+        ] {
+            fs::create_dir_all(git.join("worktrees").join(name)).expect("entry is created");
+            fs::write(
+                git.join("worktrees").join(name).join("gitdir"),
+                format!("{}\n", gitdir.display()),
+            )
+            .expect("gitdir is written");
+        }
+        for name in ["kept", "relative"] {
+            fs::create_dir_all(claude_worktrees.join(name)).expect("worktree is created");
+            fs::write(claude_worktrees.join(name).join(".git"), "gitdir: x\n")
+                .expect("pointer is written");
+        }
+        let folders = ProjectsDirectory(directory.path().to_path_buf())
+            .folders()
+            .expect("folders are listed");
+        assert_eq!(
+            folders
+                .first()
+                .and_then(|folder| folder.git.as_ref())
+                .map(|git| git.worktrees),
+            Some(2)
         );
     }
 
@@ -812,6 +889,24 @@ mod tests {
             .await
             .expect("the branch change is noticed");
 
+        let worktrees = projects.folder("app").join(".git/worktrees");
+        for round in ["first", "second"] {
+            fs::create_dir(&worktrees).expect("worktrees directory is created");
+            timeout(noticed, watcher.settled_change())
+                .await
+                .unwrap_or_else(|_| panic!("the {round} worktrees directory is not noticed"));
+            watcher.follow(&projects, &projects.folders().expect("folders are listed"));
+            fs::create_dir(worktrees.join("feature")).expect("worktree entry is created");
+            timeout(noticed, watcher.settled_change())
+                .await
+                .unwrap_or_else(|_| panic!("the {round} new worktree is not noticed"));
+            fs::remove_dir_all(&worktrees).expect("worktrees directory is removed");
+            timeout(noticed, watcher.settled_change())
+                .await
+                .unwrap_or_else(|_| panic!("the {round} removal is not noticed"));
+        }
+
+        watcher.follow(&projects, &projects.folders().expect("folders are listed"));
         projects.folders().expect("folders are listed");
         assert!(
             timeout(Duration::from_millis(1500), watcher.settled_change())

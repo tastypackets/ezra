@@ -175,6 +175,7 @@ mod tests {
                         git: Some(GitDetails {
                             branch: Some("main".to_owned()),
                             repository: None,
+                            worktrees: 0,
                         }),
                     },
                     serve: true,

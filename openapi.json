@@ -1309,6 +1309,9 @@
       "GitDetails": {
         "type": "object",
         "description": "Where a repository comes from and what it has checked out.",
+        "required": [
+          "worktrees"
+        ],
         "properties": {
           "branch": {
             "type": [
@@ -1323,6 +1326,12 @@
               "null"
             ],
             "description": "Where `origin` points, without credentials."
+          },
+          "worktrees": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Linked worktrees that still exist, counted on the main checkout only.",
+            "minimum": 0
           }
         }
       },
