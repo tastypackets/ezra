@@ -1,47 +1,13 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState, Session, internal};
 use crate::manager::agents::{self, Agent};
-use crate::manager::login;
 use crate::manager::settings;
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentStatus {
-    agent: Agent,
-    configured: bool,
-    installed_version: Option<String>,
-    logged_in: bool,
-    login_in_progress: bool,
-}
-
-async fn status_of(agent: Agent, state: &AppState) -> AgentStatus {
-    let login_in_progress = {
-        let mut logins = state.logins.lock().await;
-        if logins
-            .get_mut(&agent)
-            .is_some_and(|login| login.has_finished())
-        {
-            logins.remove(&agent);
-        }
-        logins.contains_key(&agent)
-    };
-    AgentStatus {
-        agent,
-        configured: state.settings.lock().await.agent(agent).configured,
-        installed_version: agents::installed_version(agent, &state.install_paths),
-        logged_in: login::is_logged_in(agent, &state.install_paths).await,
-        login_in_progress,
-    }
-}
+use crate::manager::status::{self, AgentStatus};
 
 pub async fn list(_: Session, State(state): State<AppState>) -> Json<Vec<AgentStatus>> {
-    let mut statuses = Vec::new();
-    for agent in Agent::ALL {
-        statuses.push(status_of(agent, &state).await);
-    }
-    Json(statuses)
+    Json(status::all_agent_statuses(&state).await)
 }
 
 /// Installs the newest release, or updates to it, and marks the agent configured.
@@ -51,7 +17,7 @@ pub async fn install(
     Path(agent): Path<Agent>,
 ) -> Result<Json<AgentStatus>, ApiError> {
     install_and_record(&state, agent).await?;
-    Ok(Json(status_of(agent, &state).await))
+    Ok(Json(status::agent_status(agent, &state).await))
 }
 
 /// Runs at manager start: a configured agent is missing after the container was recreated.
@@ -119,22 +85,16 @@ mod tests {
             json_of(manager.get("/api/v1/agents", Some(&cookie)).await).await;
         assert_eq!(
             listing,
-            [
-                AgentStatus {
-                    agent: Agent::Claude,
-                    configured: false,
-                    installed_version: None,
-                    logged_in: false,
-                    login_in_progress: false,
-                },
-                AgentStatus {
-                    agent: Agent::Codex,
-                    configured: false,
-                    installed_version: None,
-                    logged_in: false,
-                    login_in_progress: false,
-                },
-            ]
+            Agent::ALL.map(|agent| AgentStatus {
+                agent,
+                configured: false,
+                installed_version: None,
+                logged_in: false,
+                account: None,
+                login_prompt: None,
+                session_count: Some(0),
+                config_disk_bytes: Some(0),
+            })
         );
     }
 

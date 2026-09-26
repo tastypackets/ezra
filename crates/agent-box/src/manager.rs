@@ -2,7 +2,10 @@ mod agents;
 mod api;
 mod auth;
 mod login;
+mod pages;
 mod settings;
+mod state;
+mod status;
 mod tls;
 
 use std::env;
@@ -67,13 +70,14 @@ async fn serve() -> Result<(), ManagerError> {
         tracing::info!("no password is set yet; the first visitor chooses it");
     }
     let home = env::var_os("HOME").unwrap_or_else(|| "/home/dev".into());
-    let state = api::AppState::new(
+    let state = state::AppState::new(
         settings_path,
         settings,
-        agents::InstallPaths::under_home(Path::new(&home)),
+        agents::InstallPaths::under_home(Path::new(&home))
+            .with_config_directories_from_environment(),
     );
     tokio::spawn(api::reinstall_configured_agents(state.clone()));
-    let app = api::router(state);
+    let app = api::router(state.clone()).merge(pages::router(state));
     axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
         .handle(handle)
         .serve(app.into_make_service())

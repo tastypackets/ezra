@@ -1,0 +1,14 @@
+{
+  "name": "agent-box-ui",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc --noEmit && esbuild src/app.ts src/app.css --bundle --minify --target=es2022 --outdir=dist"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

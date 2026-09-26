@@ -2,8 +2,21 @@
 
 # Optional: --secret id=github_token,env=GITHUB_TOKEN avoids GitHub rate limits during mise installs.
 
-# Must match the rust version in mise.toml.
+# Must match the rust, node and pnpm versions in mise.toml.
 ARG RUST_VERSION=1.98.1
+ARG NODE_VERSION=26
+ARG PNPM_VERSION=12.6.0
+
+FROM node:${NODE_VERSION}-slim AS agent-box-ui
+
+ARG PNPM_VERSION
+WORKDIR /ui
+RUN npm install --global "pnpm@${PNPM_VERSION}"
+COPY ui/package.json ui/pnpm-lock.yaml ui/pnpm-workspace.yaml ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
+COPY ui/tsconfig.json ./
+COPY ui/src ./src
+RUN pnpm build
 
 FROM rust:${RUST_VERSION}-slim-trixie AS agent-box-build
 
@@ -21,6 +34,7 @@ EOF
 RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     --mount=type=bind,source=Cargo.lock,target=Cargo.lock \
     --mount=type=bind,source=crates,target=crates \
+    --mount=type=bind,from=agent-box-ui,source=/ui/dist,target=ui/dist \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     <<'EOF'

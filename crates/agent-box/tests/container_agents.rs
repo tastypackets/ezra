@@ -93,9 +93,7 @@ fn installed_agents_run_and_offer_sign_in() {
     assert!(!codex_prompt.contains(r#""code":null"#), "{codex_prompt}");
     let listing = get(&container, "/api/v1/agents");
     assert_eq!(
-        listing
-            .matches(r#""logged_in":false,"login_in_progress":true"#)
-            .count(),
+        listing.matches(r#""login_prompt":{"url""#).count(),
         2,
         "{listing}"
     );
@@ -113,7 +111,7 @@ fn installed_agents_run_and_offer_sign_in() {
     let listing = get(&container, "/api/v1/agents");
     assert_eq!(
         listing
-            .matches(r#""logged_in":false,"login_in_progress":false"#)
+            .matches(r#""logged_in":false,"account":null,"login_prompt":null"#)
             .count(),
         2,
         "{listing}"

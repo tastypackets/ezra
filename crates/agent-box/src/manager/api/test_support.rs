@@ -8,10 +8,11 @@ use http_body_util::BodyExt;
 use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 
+use super::router;
 use super::session::SessionStatus;
-use super::{AppState, router};
 use crate::manager::agents::InstallPaths;
 use crate::manager::settings::Settings;
+use crate::manager::state::AppState;
 
 pub const PASSWORD: &str = r#"{"password": "correct horse"}"#;
 
@@ -25,7 +26,11 @@ impl TestManager {
     pub fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let settings_path = directory.path().join("agent-box/settings.toml");
-        let install_paths = InstallPaths::under_home(&directory.path().join("home"));
+        let install_paths = InstallPaths::under_home(&directory.path().join("home"))
+            .with_config_directories(
+                directory.path().join("config/claude"),
+                directory.path().join("config/codex"),
+            );
         let router = router(AppState::new(
             settings_path.clone(),
             Settings::default(),

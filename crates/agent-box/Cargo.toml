@@ -13,6 +13,7 @@ axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 caps = "0.5.6"
 clap = { version = "4.6.7", features = ["derive"] }
 getrandom = "0.4"
+maud = { version = "0.27.0", features = ["axum"] }
 nix = { version = "0.31.3", features = ["user", "fs", "process", "hostname"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }

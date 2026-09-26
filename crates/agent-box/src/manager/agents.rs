@@ -58,10 +58,13 @@ pub enum InstallError {
 }
 
 /// `~/.local/bin` holds the commands; `~/.local/share/<agent>` holds one directory or file per version.
+/// The config directories hold each CLI's sign-in, settings and sessions on the /config volume.
 #[derive(Debug, Clone)]
 pub struct InstallPaths {
     bin_directory: PathBuf,
     share_directory: PathBuf,
+    claude_config_directory: Option<PathBuf>,
+    codex_config_directory: Option<PathBuf>,
 }
 
 impl InstallPaths {
@@ -69,6 +72,34 @@ impl InstallPaths {
         Self {
             bin_directory: home.join(".local/bin"),
             share_directory: home.join(".local/share"),
+            claude_config_directory: None,
+            codex_config_directory: None,
+        }
+    }
+
+    pub fn with_config_directories_from_environment(self) -> Self {
+        let from_environment =
+            |agent: Agent| std::env::var_os(agent.config_directory_variable()).map(PathBuf::from);
+        Self {
+            claude_config_directory: from_environment(Agent::Claude),
+            codex_config_directory: from_environment(Agent::Codex),
+            ..self
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_config_directories(self, claude: PathBuf, codex: PathBuf) -> Self {
+        Self {
+            claude_config_directory: Some(claude),
+            codex_config_directory: Some(codex),
+            ..self
+        }
+    }
+
+    pub fn config_directory(&self, agent: Agent) -> Option<&Path> {
+        match agent {
+            Agent::Claude => self.claude_config_directory.as_deref(),
+            Agent::Codex => self.codex_config_directory.as_deref(),
         }
     }
 
@@ -138,7 +169,7 @@ pub async fn install_latest(agent: Agent, paths: &InstallPaths) -> Result<String
     };
     link_command(&paths.command(agent), &command_target)?;
     remove_other_versions(&versions_directory, &release.version)?;
-    if let Some(config_directory) = std::env::var_os(agent.config_directory_variable()) {
+    if let Some(config_directory) = paths.config_directory(agent) {
         fs::create_dir_all(config_directory)?;
     }
     Ok(release.version)

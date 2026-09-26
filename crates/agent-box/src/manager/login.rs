@@ -41,6 +41,7 @@ pub enum LoginError {
 /// A running `claude auth login` or `codex login --device-auth`. Dropping it stops the process.
 pub struct LoginProcess {
     agent: Agent,
+    prompt: Option<LoginPrompt>,
     child: Child,
     stdin: Option<ChildStdin>,
     output: Arc<Mutex<String>>,
@@ -71,6 +72,7 @@ impl LoginProcess {
         }
         let mut login = Self {
             agent,
+            prompt: None,
             stdin: child.stdin.take(),
             child,
             output,
@@ -79,6 +81,7 @@ impl LoginProcess {
         let deadline = Instant::now() + PROMPT_TIMEOUT;
         loop {
             if let Some(prompt) = parse_prompt(agent, &login.output_text()) {
+                login.prompt = Some(prompt.clone());
                 return Ok((login, prompt));
             }
             if login.has_finished() || Instant::now() > deadline {
@@ -89,6 +92,10 @@ impl LoginProcess {
             }
             sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    pub fn prompt(&self) -> Option<&LoginPrompt> {
+        self.prompt.as_ref()
     }
 
     pub fn has_finished(&mut self) -> bool {
@@ -127,22 +134,32 @@ impl LoginProcess {
     }
 }
 
-pub async fn is_logged_in(agent: Agent, paths: &InstallPaths) -> bool {
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SignInStatus {
+    pub logged_in: bool,
+    pub account: Option<String>,
+}
+
+/// Asks the CLI. Anything unexpected in its answer counts as signed out.
+pub async fn sign_in_status(agent: Agent, paths: &InstallPaths) -> SignInStatus {
     let Ok(mut command) = agent_command(agent, paths) else {
-        return false;
+        return SignInStatus::default();
     };
     match agent {
         Agent::Claude => command.args(["auth", "status"]),
         Agent::Codex => command.args(["login", "status"]),
     };
     let Ok(output) = command.stdin(Stdio::null()).output().await else {
-        return false;
+        return SignInStatus::default();
     };
     match agent {
-        Agent::Claude => claude_status_is_logged_in(&output.stdout),
-        Agent::Codex => {
-            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("Logged in")
+        Agent::Claude => claude_sign_in_status(&output.stdout),
+        Agent::Codex if output.status.success() => {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            codex_sign_in_status(&text)
         }
+        Agent::Codex => SignInStatus::default(),
     }
 }
 
@@ -185,13 +202,36 @@ async fn collect_output(mut stream: impl AsyncRead + Unpin, output: Arc<Mutex<St
     }
 }
 
-fn claude_status_is_logged_in(status_json: &[u8]) -> bool {
+fn claude_sign_in_status(status_json: &[u8]) -> SignInStatus {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Status {
         logged_in: bool,
+        email: Option<String>,
+        subscription_type: Option<String>,
     }
-    serde_json::from_slice::<Status>(status_json).is_ok_and(|status| status.logged_in)
+    let Ok(status) = serde_json::from_slice::<Status>(status_json) else {
+        return SignInStatus::default();
+    };
+    let account = match (status.email, status.subscription_type) {
+        (Some(email), Some(plan)) => Some(format!("{email} ({plan})")),
+        (email, plan) => email.or(plan),
+    };
+    SignInStatus {
+        logged_in: status.logged_in,
+        account: account.filter(|_| status.logged_in),
+    }
+}
+
+/// `codex login status` prints e.g. "Logged in using ChatGPT" or "Not logged in".
+fn codex_sign_in_status(text: &str) -> SignInStatus {
+    let logged_in_line = text.lines().find(|line| line.starts_with("Logged in"));
+    SignInStatus {
+        logged_in: logged_in_line.is_some(),
+        account: logged_in_line
+            .and_then(|line| line.strip_prefix("Logged in using "))
+            .map(|method| method.trim().to_owned()),
+    }
 }
 
 /// Reads only complete lines, so a link that is still arriving is never cut short.
@@ -296,13 +336,42 @@ mod tests {
     }
 
     #[test]
-    fn claude_status_json_says_whether_logged_in() {
-        assert!(claude_status_is_logged_in(
-            br#"{"loggedIn": true, "authMethod": "claude.ai"}"#
-        ));
-        assert!(!claude_status_is_logged_in(
-            br#"{"loggedIn": false, "authMethod": "none"}"#
-        ));
-        assert!(!claude_status_is_logged_in(b"not json"));
+    fn claude_status_gives_sign_in_and_account() {
+        assert_eq!(
+            claude_sign_in_status(
+                br#"{"loggedIn": true, "email": "a@example.com", "subscriptionType": "max"}"#
+            ),
+            SignInStatus {
+                logged_in: true,
+                account: Some("a@example.com (max)".to_owned())
+            }
+        );
+        assert_eq!(
+            claude_sign_in_status(br#"{"loggedIn": true, "authMethod": "claude.ai"}"#),
+            SignInStatus {
+                logged_in: true,
+                account: None
+            }
+        );
+        assert_eq!(
+            claude_sign_in_status(br#"{"loggedIn": false, "authMethod": "none"}"#),
+            SignInStatus::default()
+        );
+        assert_eq!(claude_sign_in_status(b"not json"), SignInStatus::default());
+    }
+
+    #[test]
+    fn codex_status_gives_sign_in_and_method() {
+        assert_eq!(
+            codex_sign_in_status("Logged in using ChatGPT\n"),
+            SignInStatus {
+                logged_in: true,
+                account: Some("ChatGPT".to_owned())
+            }
+        );
+        assert_eq!(
+            codex_sign_in_status("Not logged in\n"),
+            SignInStatus::default()
+        );
     }
 }

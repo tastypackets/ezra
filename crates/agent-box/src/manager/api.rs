@@ -4,10 +4,6 @@ mod session;
 #[cfg(test)]
 mod test_support;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
@@ -16,37 +12,11 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::CookieJar;
 use serde::Serialize;
-use tokio::sync::Mutex;
 
-use super::agents::{Agent, InstallPaths};
-use super::auth::{SESSION_COOKIE, Sessions};
-use super::login::LoginProcess;
-use super::settings::Settings;
+use super::auth::SESSION_COOKIE;
+use super::state::AppState;
 
 pub use agents::reinstall_configured_agents;
-
-#[derive(Clone)]
-pub struct AppState {
-    settings_path: Arc<PathBuf>,
-    settings: Arc<Mutex<Settings>>,
-    sessions: Arc<Sessions>,
-    install_paths: Arc<InstallPaths>,
-    install_lock: Arc<Mutex<()>>,
-    logins: Arc<Mutex<HashMap<Agent, LoginProcess>>>,
-}
-
-impl AppState {
-    pub fn new(settings_path: PathBuf, settings: Settings, install_paths: InstallPaths) -> Self {
-        Self {
-            settings_path: Arc::new(settings_path),
-            settings: Arc::new(Mutex::new(settings)),
-            sessions: Arc::default(),
-            install_paths: Arc::new(install_paths),
-            install_lock: Arc::default(),
-            logins: Arc::default(),
-        }
-    }
-}
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -73,9 +43,10 @@ impl FromRequestParts<AppState> for Session {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let cookies = CookieJar::from_headers(&parts.headers);
-        match cookies.get(SESSION_COOKIE) {
-            Some(cookie) if state.sessions.is_active(cookie.value()) => Ok(Self),
-            _ => Err(ApiError::Unauthorized("log in first")),
+        if state.is_session(cookies.get(SESSION_COOKIE).map(|cookie| cookie.value())) {
+            Ok(Self)
+        } else {
+            Err(ApiError::Unauthorized("log in first"))
         }
     }
 }
