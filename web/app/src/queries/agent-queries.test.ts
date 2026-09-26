@@ -16,13 +16,14 @@ describe("pollInterval", () => {
     expect(pollInterval([installing])).toBe(INSTALL_POLL_MS);
   });
 
-  it("polls while Codex waits on the website", () => {
-    const prompt = { url: "https://auth.openai.com/codex/device", code: "ABCD-1234" };
-    expect(pollInterval([{ ...idle, agent: "codex", login_prompt: prompt }])).toBe(3_000);
-  });
-
-  it("does not poll while Claude waits for a pasted code", () => {
-    const prompt = { url: "https://claude.com/oauth" };
-    expect(pollInterval([{ ...idle, login_prompt: prompt }])).toBe(false);
+  it("does not poll while a sign-in waits", () => {
+    const codex = { url: "https://auth.openai.com/codex/device", code: "ABCD-1234" };
+    const claude = { url: "https://claude.com/oauth" };
+    expect(
+      pollInterval([
+        { ...idle, login_prompt: claude },
+        { ...idle, agent: "codex", login_prompt: codex },
+      ]),
+    ).toBe(false);
   });
 });
