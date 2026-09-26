@@ -92,7 +92,7 @@ impl ClaudeSettings {
     }
 }
 
-/// How the Claude app sees one folder in /projects.
+/// One folder's Remote Control choices.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "StoredFolderChoice")]
 pub struct FolderChoice {
