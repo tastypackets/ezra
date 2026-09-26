@@ -96,6 +96,9 @@ pub async fn submit_code(
     let finishing = state.clone();
     let submitted = tokio::spawn(async move {
         let submitted = login.submit_code(&body.code).await;
+        if submitted.is_ok() {
+            finishing.remote_control.restart();
+        }
         finishing.agent_checks.refresh(agent).await;
         finishing.events.publish(Topic::Agents);
         submitted
@@ -104,7 +107,6 @@ pub async fn submit_code(
     .map_err(internal)?;
     submitted?;
     tracing::info!("{agent} is signed in");
-    state.remote_control.restart();
     Ok(StatusCode::NO_CONTENT)
 }
 

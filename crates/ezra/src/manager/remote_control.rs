@@ -972,6 +972,7 @@ impl RemoteControlLineExt for str {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
     use futures_util::StreamExt;
 
     use super::*;
@@ -1359,6 +1360,112 @@ mod tests {
 
         fs::write(&marker, "").expect("marker is written");
         state.agent_checks.refresh(Agent::Claude).await;
+        wait_for(&state, ServerState::Running).await;
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    /// A `claude` signed in once `marker` exists, which `auth login` creates.
+    fn install_claude_that_signs_in(manager: &TestManager, marker: &Path) -> AppState {
+        manager.install_fake_cli(
+            Agent::Claude,
+            &format!(
+                r#"case "$1 $2" in
+  "auth login") echo 'Visit: https://claude.com/cai/oauth/authorize?code=true'; read code; touch {marker} ;;
+  "auth status") if [ -f {marker} ]; then echo '{SIGNED_IN}'; else echo '{{"loggedIn":false}}'; fi ;;
+  "remote-control "*) echo 'https://claude.ai/code?environment=env_test'; exec sleep 60 ;;
+esac"#,
+                marker = marker.display()
+            ),
+        );
+        let state = manager.state.clone();
+        fs::create_dir_all(&state.projects.0).expect("projects directory is created");
+        state
+    }
+
+    async fn sign_in_through_the_api(manager: &TestManager, cookie: &str) {
+        let started = manager
+            .post("/api/v1/agents/claude/login", "", Some(cookie))
+            .await;
+        assert_eq!(started.status(), StatusCode::OK);
+        let submitted = manager
+            .post(
+                "/api/v1/agents/claude/login/code",
+                r#"{"code": "good"}"#,
+                Some(cookie),
+            )
+            .await;
+        assert_eq!(submitted.status(), StatusCode::NO_CONTENT);
+    }
+
+    fn servers_started(manager: &TestManager) -> usize {
+        manager
+            .fake_cli_runs(Agent::Claude)
+            .iter()
+            .filter(|run| run.starts_with("remote-control"))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn signing_in_through_the_api_starts_a_waiting_server_once() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = install_claude_that_signs_in(&manager, &directory.path().join("signed-in"));
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Waiting).await;
+        let mut events = Box::pin(state.events.stream());
+        let remote_control = Arc::clone(&state.remote_control);
+        let projects = state.projects.0.clone();
+        let states_seen = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while let Some(event) = events.next().await {
+                if let ManagerEvent::Changed {
+                    topic: Topic::RemoteControl,
+                    ..
+                } = event
+                    && let Some(status) = remote_control.status_of(&projects)
+                {
+                    seen.push(status.state);
+                }
+            }
+            seen
+        });
+
+        sign_in_through_the_api(&manager, &cookie).await;
+        wait_for(&state, ServerState::Running).await;
+        sleep(Duration::from_secs(2)).await;
+        state.events.close();
+        let seen = states_seen.await.expect("states are collected");
+        assert!(!seen.contains(&ServerState::Stopping), "{seen:?}");
+        assert_eq!(seen.last(), Some(&ServerState::Running), "{seen:?}");
+        assert_eq!(servers_started(&manager), 1);
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn signing_in_through_the_api_restarts_a_running_server() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let marker = directory.path().join("signed-in");
+        fs::write(&marker, "").expect("marker is written");
+        let state = install_claude_that_signs_in(&manager, &marker);
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Running).await;
+        assert_eq!(servers_started(&manager), 1);
+
+        sign_in_through_the_api(&manager, &cookie).await;
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .expect("the deadline fits");
+        while servers_started(&manager) < 2 {
+            assert!(Instant::now() < deadline, "the server did not start again");
+            sleep(Duration::from_millis(50)).await;
+        }
         wait_for(&state, ServerState::Running).await;
 
         state.remote_control.begin_shut_down();
