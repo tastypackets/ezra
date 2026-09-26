@@ -1,6 +1,7 @@
 import type { RemoteControlStatus, ServerState } from "@ezra/client";
 import { Link } from "@tanstack/react-router";
 import { ExternalLinkIcon } from "lucide-react";
+import prettyBytes from "pretty-bytes";
 
 import { Badge } from "@/components/ui/badge";
 import type { badgeVariants } from "@/components/ui/badge";
@@ -43,6 +44,11 @@ export function RemoteControlCard({ status }: { status: RemoteControlStatus }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <StateHint status={status} />
+        {typeof status.memory_bytes === "number" ? (
+          <p className="text-muted-foreground">
+            {REMOTE_CONTROL_DESCRIPTIONS.memory(prettyBytes(status.memory_bytes))}
+          </p>
+        ) : null}
         {status.state === "retrying" && status.last_error ? (
           <p className="text-destructive">
             {REMOTE_CONTROL_DESCRIPTIONS.last_stop}:{" "}

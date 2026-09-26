@@ -33,6 +33,7 @@ const RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 const FIRST_RETRY_DELAY: Duration = Duration::from_secs(5);
 const LONGEST_RETRY_DELAY: Duration = Duration::from_secs(300);
 const HEALTHY_RUN: Duration = Duration::from_secs(600);
+const USAGE_INTERVAL: Duration = Duration::from_secs(15);
 const OUTPUT_LINES_KEPT: usize = 20;
 const OUTPUT_LINES_REPORTED: usize = 5;
 const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 7] = [
@@ -124,6 +125,17 @@ pub struct RemoteControlStatus {
     pub restarts: u32,
     /// The device the Claude app lists this server under, the container's hostname.
     pub device: Option<String>,
+    /// Memory the server and its sessions use, with shared memory counted once. Absent while no
+    /// server process runs.
+    pub memory_bytes: Option<u64>,
+}
+
+impl RemoteControlStatus {
+    fn enter(&mut self, state: ServerState) {
+        self.state = state;
+        self.url = None;
+        self.memory_bytes = None;
+    }
 }
 
 /// The shared handle the API reads statuses from and signals changes through.
@@ -528,8 +540,7 @@ impl AppState {
                         directory.display()
                     );
                     self.remote_control.update(&directory, |status| {
-                        status.state = ServerState::Retrying;
-                        status.url = None;
+                        status.enter(ServerState::Retrying);
                         status.last_error = Some(message);
                         status.restarts = status.restarts.saturating_add(1);
                     });
@@ -547,10 +558,8 @@ impl AppState {
         state: ServerState,
         signals: &mut Signals,
     ) -> RunEnd {
-        self.remote_control.update(directory, |status| {
-            status.state = state;
-            status.url = None;
-        });
+        self.remote_control
+            .update(directory, |status| status.enter(state));
         match signals.wait_for_change(RECHECK_INTERVAL).await {
             Wake::Changed => RunEnd::Reconsidered,
             Wake::ShutDown => RunEnd::ShutDown,
@@ -628,6 +637,8 @@ impl AppState {
         let mut recheck = interval(RECHECK_INTERVAL);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         recheck.reset();
+        let mut usage = interval(USAGE_INTERVAL);
+        usage.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let connected = self
                 .remote_control
@@ -663,6 +674,7 @@ impl AppState {
                         return RunEnd::Reconsidered;
                     }
                 }
+                _ = usage.tick() => server.note_usage(&self.remote_control, &launch.directory).await,
                 () = signals.shutdown.until_set() => {
                     server.stop().await;
                     return RunEnd::ShutDown;
@@ -704,8 +716,7 @@ impl ServerRun {
             )));
         }
         remote_control.update(&launch.directory, |status| {
-            status.state = ServerState::Starting;
-            status.url = None;
+            status.enter(ServerState::Starting);
         });
         Ok(Self {
             child,
@@ -730,6 +741,16 @@ impl ServerRun {
         }
         self.stop_reading().await;
         self.output.describe_exit(exit)
+    }
+
+    async fn note_usage(&self, remote_control: &RemoteControl, directory: &Path) {
+        let Some(ProcessGroup(group)) = self.group else {
+            return;
+        };
+        let memory = tokio::task::spawn_blocking(move || ProcessGroup(group).memory())
+            .await
+            .ok();
+        remote_control.update(directory, |status| status.memory_bytes = memory);
     }
 
     async fn stop_reading(&mut self) {
@@ -767,6 +788,54 @@ impl ProcessGroup {
 
     fn is_gone(&self) -> bool {
         killpg(self.0, None) == Err(Errno::ESRCH)
+    }
+
+    /// The proportional memory of every process in the group, in bytes.
+    fn memory(&self) -> u64 {
+        Process::all()
+            .filter(|process| process.group() == Some(self.0))
+            .filter_map(|process| process.proportional_memory())
+            .fold(0, u64::saturating_add)
+    }
+}
+
+/// A process as /proc describes it.
+struct Process(PathBuf);
+
+impl Process {
+    fn all() -> impl Iterator<Item = Self> {
+        fs::read_dir("/proc")
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.parse::<u32>().is_ok())
+            })
+            .map(|entry| Self(entry.path()))
+    }
+
+    fn group(&self) -> Option<Pid> {
+        let stat = fs::read_to_string(self.0.join("stat")).ok()?;
+        let (_, after_name) = stat.rsplit_once(')')?;
+        let group = after_name.split_whitespace().nth(2)?.parse().ok()?;
+        Some(Pid::from_raw(group))
+    }
+
+    /// Resident memory with each shared page split between the processes sharing it.
+    fn proportional_memory(&self) -> Option<u64> {
+        let rollup = fs::read_to_string(self.0.join("smaps_rollup")).ok()?;
+        let kilobytes: u64 = rollup
+            .lines()
+            .find_map(|line| line.strip_prefix("Pss:"))?
+            .trim()
+            .strip_suffix("kB")?
+            .trim()
+            .parse()
+            .ok()?;
+        kilobytes.checked_mul(1024)
     }
 }
 
@@ -1144,6 +1213,37 @@ mod tests {
 
         state.remote_control.begin_shut_down();
         supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_group_counts_the_memory_of_all_its_processes() {
+        let mut leader = Command::new("sh")
+            .args(["-c", "sleep 30 & sleep 30"])
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("group starts");
+        let group = ProcessGroup(Pid::from_raw(
+            leader
+                .id()
+                .and_then(|id| i32::try_from(id).ok())
+                .expect("leader has a pid"),
+        ));
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .expect("the deadline fits");
+        while Process::all()
+            .filter(|process| process.group() == Some(group.0))
+            .count()
+            < 2
+        {
+            assert!(Instant::now() < deadline, "the group did not start");
+            sleep(Duration::from_millis(20)).await;
+        }
+        assert!(group.memory() > 0);
+
+        group.terminate(&mut leader).await;
+        assert_eq!(group.memory(), 0);
     }
 
     #[tokio::test]

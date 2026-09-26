@@ -1182,6 +1182,15 @@
             ],
             "description": "The end of the server's output when it last stopped unexpectedly."
           },
+          "memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Memory the server and its sessions use, with shared memory counted once. Absent while no\nserver process runs.",
+            "minimum": 0
+          },
           "restarts": {
             "type": "integer",
             "format": "int32",
