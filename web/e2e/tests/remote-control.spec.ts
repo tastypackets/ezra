@@ -84,7 +84,7 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
     await expect(
       row.getByText("Claude Code's sign-in does not work for Remote Control."),
     ).toBeVisible();
-    await row.getByRole("button", { name: `More actions for ${folder}` }).click();
+    await row.getByRole("button", { name: `More ${folder} actions` }).click();
     await page.getByRole("menuitem", { name: "Show log" }).click();
     const folderLog = page.getByRole("dialog", { name: `${folder} log` });
     await expect(folderLog).toContainText(
