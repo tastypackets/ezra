@@ -1273,6 +1273,7 @@ impl RemoteControlLineExt for str {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use std::io::Write as _;
     use std::ops::Range;
     use std::os::unix::fs::symlink;
 
@@ -1285,18 +1286,32 @@ mod tests {
 
     const SIGNED_IN: &str = r#"{"loggedIn":true}"#;
 
+    /// Writes an executable script without this process holding it open for writing.
+    fn write_script(path: &Path, script: &str) {
+        let mut writer = std::process::Command::new("sh")
+            .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("sh starts");
+        writer
+            .stdin
+            .take()
+            .expect("stdin is piped")
+            .write_all(script.as_bytes())
+            .expect("script is sent");
+        assert!(writer.wait().expect("sh ends").success());
+    }
+
     /// A `claude` that is signed in and whose Remote Control runs `server`.
     fn fake_claude(manager: &TestManager, directory: &Path, server: &str) -> AppState {
         let script = directory.join("claude");
-        fs::write(
+        write_script(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\ncase \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) {server} ;;\nesac\n"
             ),
-        )
-        .expect("script is written");
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
-            .expect("script is executable");
+        );
         manager
             .state
             .install_paths
@@ -1474,16 +1489,13 @@ mod tests {
         let versions = state.install_paths.versions_directory(Agent::Claude);
         fs::create_dir_all(&versions).expect("versions directory is created");
         let script = versions.join(version);
-        fs::write(
+        write_script(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\ncase \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) echo {version} >> {starts}; {server} ;;\nesac\n",
                 starts = directory.join("starts").display()
             ),
-        )
-        .expect("script is written");
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
-            .expect("script is executable");
+        );
         state
             .install_paths
             .command(Agent::Claude)
@@ -2041,15 +2053,13 @@ mod tests {
             directory.path(),
             "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
         );
-        let script = directory.path().join("claude");
-        fs::write(
-            &script,
-            format!(
+        write_script(
+            &directory.path().join("claude"),
+            &format!(
                 "#!/bin/sh\ncase \"$1\" in\n  auth) if [ -f {marker} ]; then echo '{SIGNED_IN}'; else echo '{{\"loggedIn\":false}}'; fi ;;\n  remote-control) echo 'https://claude.ai/code?environment=env_test'; exec sleep 60 ;;\nesac\n",
                 marker = marker.display()
             ),
-        )
-        .expect("script is written");
+        );
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Waiting).await;
 
