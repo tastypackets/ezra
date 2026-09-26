@@ -17,7 +17,7 @@ export const agentsQueryOptions = queryOptions({
   refetchInterval: (query) => pollInterval(query.state.data),
 });
 
-function pollInterval(agents: AgentStatus[] | undefined): number | false {
+export function pollInterval(agents: AgentStatus[] | undefined): number | false {
   if (agents?.some((agent) => agent.install_progress)) {
     return INSTALL_POLL_MS;
   }

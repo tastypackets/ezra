@@ -31,7 +31,7 @@ export function seedInitialData(queryClient: QueryClient): void {
   element.remove();
 }
 
-function isInitialData(value: unknown): value is InitialData {
+export function isInitialData(value: unknown): value is InitialData {
   if (
     typeof value !== "object" ||
     value === null ||

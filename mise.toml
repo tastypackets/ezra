@@ -38,6 +38,11 @@ description = "Type-check and build the manager web app into web/app/dist"
 dir = "web"
 run = "pnpm build"
 
+[tasks."web:test"]
+description = "Run the web app's unit tests"
+dir = "web"
+run = "pnpm test"
+
 [tasks."web:lint"]
 description = "Lint, format-check and type-check the web workspace"
 dir = "web"
