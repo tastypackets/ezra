@@ -1,5 +1,9 @@
-import { logOutOfGitHub, startGitHubLogin, updateCommitIdentity } from "@ezra/client";
-import type { CommitIdentity, GitStatus } from "@ezra/client";
+import type { GitStatus } from "@ezra/client";
+import {
+  logOutOfGitHubMutation,
+  startGitHubLoginMutation,
+  updateCommitIdentityMutation,
+} from "@ezra/client/react-query.gen";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
@@ -13,16 +17,15 @@ export function useGitActions() {
     queryClient.invalidateQueries({ queryKey: gitStatusQueryOptions.queryKey });
 
   const startGitHubSignIn = useMutation({
-    mutationFn: async () => startGitHubLogin(),
+    ...startGitHubLoginMutation(),
     onSettled: refreshGit,
   });
   const signOutOfGitHub = useMutation({
-    mutationFn: async () => logOutOfGitHub(),
+    ...logOutOfGitHubMutation(),
     onSettled: refreshGit,
   });
   const saveIdentity = useMutation({
-    mutationFn: async (identity: CommitIdentity) =>
-      (await updateCommitIdentity({ body: identity })).data,
+    ...updateCommitIdentityMutation(),
     onMutate: () => queryClient.cancelQueries({ queryKey: gitStatusQueryOptions.queryKey }),
     onSuccess: (identity) => {
       queryClient.setQueryData(gitStatusQueryOptions.queryKey, (status: GitStatus | undefined) =>

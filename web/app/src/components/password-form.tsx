@@ -1,5 +1,4 @@
 import { useForm } from "@tanstack/react-form";
-import type { UseMutationResult } from "@tanstack/react-query";
 import { useId } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -14,7 +13,9 @@ export interface PasswordFormProps {
   description: string;
   submitLabel: string;
   autoComplete: "new-password" | "current-password";
-  mutation: UseMutationResult<unknown, unknown, string>;
+  submit: (password: string) => Promise<unknown>;
+  /** Why the last submit failed, if it did. */
+  error: unknown;
   /** Runs after the password is accepted. The form stays busy until it resolves. */
   onSuccess: () => Promise<void>;
 }
@@ -25,7 +26,8 @@ export function PasswordForm({
   description,
   submitLabel,
   autoComplete,
-  mutation,
+  submit,
+  error,
   onSuccess,
 }: PasswordFormProps) {
   const passwordId = useId();
@@ -33,14 +35,14 @@ export function PasswordForm({
     defaultValues: { password: "" },
     onSubmit: async ({ value }) => {
       try {
-        await mutation.mutateAsync(value.password);
+        await submit(value.password);
       } catch {
         return;
       }
       await onSuccess();
     },
   });
-  const failure = mutation.isError ? errorMessage(mutation.error) : undefined;
+  const failure = error ? errorMessage(error) : undefined;
   return (
     <Card className="mx-auto mt-16 max-w-sm">
       <CardHeader>

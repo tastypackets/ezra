@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { gitStatusQueryOptions } from "@/queries/git-queries";
-import { claudeSettingsQueryOptions } from "@/queries/settings-queries";
+import { getClaudeSettingsOptions } from "@ezra/client/react-query.gen";
 
 import { ClaudeSettingsCard } from "./-components/claude-settings-card";
 import { GitCard } from "./-components/git-card";
@@ -9,7 +9,7 @@ import { GitCard } from "./-components/git-card";
 export const Route = createFileRoute("/_signed-in/settings")({
   loader: async ({ context }) => {
     await Promise.all([
-      context.queryClient.ensureQueryData(claudeSettingsQueryOptions),
+      context.queryClient.ensureQueryData(getClaudeSettingsOptions()),
       context.queryClient.ensureQueryData(gitStatusQueryOptions),
     ]);
   },

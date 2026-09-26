@@ -281,6 +281,9 @@ importers:
       '@hey-api/openapi-ts':
         specifier: 0.0.0-next-20260824173136
         version: 0.0.0-next-20260824173136
+      '@tanstack/react-query':
+        specifier: 5.104.0
+        version: 5.104.0(react@19.3.0)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

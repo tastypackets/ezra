@@ -1,10 +1,4 @@
-import { listFolders } from "@ezra/client";
+import { listFoldersOptions } from "@ezra/client/react-query.gen";
 import { queryOptions } from "@tanstack/react-query";
 
-import { FOLDERS } from "./query-keys";
-
-export const foldersQueryOptions = queryOptions({
-  queryKey: [FOLDERS],
-  queryFn: async () => (await listFolders()).data,
-  staleTime: 5_000,
-});
+export const foldersQueryOptions = queryOptions({ ...listFoldersOptions(), staleTime: 5_000 });

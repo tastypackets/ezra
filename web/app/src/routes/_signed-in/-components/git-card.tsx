@@ -65,7 +65,7 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
             variant="outline"
             size="sm"
             loading={signOutOfGitHub.isPending}
-            onClick={() => signOutOfGitHub.mutate()}
+            onClick={() => signOutOfGitHub.mutate({})}
           >
             {GIT_DESCRIPTIONS.sign_out}
           </Button>
@@ -74,7 +74,7 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
           <Button
             size="sm"
             loading={startGitHubSignIn.isPending}
-            onClick={() => startGitHubSignIn.mutate()}
+            onClick={() => startGitHubSignIn.mutate({})}
           >
             {GIT_DESCRIPTIONS.sign_in}
           </Button>
@@ -98,7 +98,7 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
               variant="outline"
               size="sm"
               loading={startGitHubSignIn.isPending}
-              onClick={() => startGitHubSignIn.mutate()}
+              onClick={() => startGitHubSignIn.mutate({})}
             >
               {GIT_DESCRIPTIONS.start_over}
             </Button>
@@ -135,7 +135,7 @@ function IdentityForm({ identity }: { identity: CommitIdentity }) {
     defaultValues: { name: identity.name ?? "", email: identity.email ?? "" },
     onSubmit: async ({ value, formApi }) => {
       try {
-        const saved = await saveIdentity.mutateAsync(value);
+        const saved = await saveIdentity.mutateAsync({ body: value });
         formApi.reset({ name: saved.name ?? "", email: saved.email ?? "" });
       } catch {
         return;

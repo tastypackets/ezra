@@ -57,7 +57,7 @@ export function FoldersCard() {
 }
 
 function FolderRow({ folder }: { folder: FolderStatus }) {
-  const { chooseToServe } = useFolderActions(folder.name);
+  const { chooseToServe } = useFolderActions();
   const detail = folder.git ? folder.git.repository : FOLDERS_DESCRIPTIONS.not_git;
   const server = folder.remote_control;
   const switchId = `serve-${folder.name}`;
@@ -97,9 +97,11 @@ function FolderRow({ folder }: { folder: FolderStatus }) {
         <div className="flex items-center gap-2">
           <Switch
             id={switchId}
-            checked={chooseToServe.isPending ? chooseToServe.variables : folder.serve}
+            checked={chooseToServe.isPending ? chooseToServe.variables.body.serve : folder.serve}
             disabled={chooseToServe.isPending}
-            onCheckedChange={(serve) => chooseToServe.mutate(serve)}
+            onCheckedChange={(serve) =>
+              chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
+            }
             aria-label={FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
           />
           <Label htmlFor={switchId} className="text-muted-foreground">

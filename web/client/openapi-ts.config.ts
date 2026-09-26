@@ -9,5 +9,6 @@ export default defineConfig({
       baseUrl: false,
       throwOnError: true,
     },
+    "@tanstack/react-query",
   ],
 });

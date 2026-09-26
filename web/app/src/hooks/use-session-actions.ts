@@ -1,8 +1,8 @@
-import { logIn, logOut, setUpPassword } from "@ezra/client";
+import { logInMutation, logOutMutation, setUpPasswordMutation } from "@ezra/client/react-query.gen";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 
-import { AGENTS } from "@/queries/query-keys";
+import { agentsQueryOptions } from "@/queries/agent-queries";
 import { sessionQueryOptions } from "@/queries/session-queries";
 
 /** Setting the password, signing in and signing out. Each updates the cached session. */
@@ -13,7 +13,7 @@ export function useSessionActions() {
     queryClient.setQueryData(sessionQueryOptions.queryKey, { claimed: true, authenticated: true });
 
   const setUp = useMutation({
-    mutationFn: async (password: string) => setUpPassword({ body: { password } }),
+    ...setUpPasswordMutation(),
     onSuccess: markSignedIn,
     onError: async () => {
       await queryClient.refetchQueries({ queryKey: sessionQueryOptions.queryKey });
@@ -21,17 +21,17 @@ export function useSessionActions() {
     },
   });
   const signIn = useMutation({
-    mutationFn: async (password: string) => logIn({ body: { password } }),
+    ...logInMutation(),
     onSuccess: markSignedIn,
   });
   const signOut = useMutation({
-    mutationFn: async () => logOut(),
+    ...logOutMutation(),
     onSuccess: () => {
       queryClient.setQueryData(sessionQueryOptions.queryKey, {
         claimed: true,
         authenticated: false,
       });
-      queryClient.removeQueries({ queryKey: [AGENTS] });
+      queryClient.removeQueries({ queryKey: agentsQueryOptions.queryKey });
     },
   });
   return { setUp, signIn, signOut };

@@ -27,7 +27,8 @@ function LoginPage() {
       description={SESSION_DESCRIPTIONS.login_description}
       submitLabel={SESSION_DESCRIPTIONS.login_submit}
       autoComplete="current-password"
-      mutation={signIn}
+      submit={(password) => signIn.mutateAsync({ body: { password } })}
+      error={signIn.error}
       onSuccess={() => navigate({ to: "/" })}
     />
   );

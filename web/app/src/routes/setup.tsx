@@ -24,7 +24,8 @@ function SetupPage() {
       description={SESSION_DESCRIPTIONS.setup_description}
       submitLabel={SESSION_DESCRIPTIONS.setup_submit}
       autoComplete="new-password"
-      mutation={setUp}
+      submit={(password) => setUp.mutateAsync({ body: { password } })}
+      error={setUp.error}
       onSuccess={() => navigate({ to: "/" })}
     />
   );

@@ -1,8 +1,6 @@
-import { listAgents } from "@ezra/client";
 import type { AgentStatus } from "@ezra/client";
+import { listAgentsOptions } from "@ezra/client/react-query.gen";
 import { queryOptions } from "@tanstack/react-query";
-
-import { AGENTS } from "./query-keys";
 
 /** Poll interval while a download is running, fast enough for a moving percentage. */
 export const INSTALL_POLL_MS = 500;
@@ -13,8 +11,7 @@ const RETRYING_POLL_MS = 15_000;
 
 /** Every agent's state. Polls only while something is in progress. */
 export const agentsQueryOptions = queryOptions({
-  queryKey: [AGENTS],
-  queryFn: async () => (await listAgents()).data,
+  ...listAgentsOptions(),
   staleTime: 5_000,
   refetchInterval: (query) => pollInterval(query.state.data),
 });

@@ -33,9 +33,7 @@ export function AppHeader() {
             variant="ghost"
             size="sm"
             loading={signOut.isPending}
-            onClick={() =>
-              signOut.mutate(undefined, { onSuccess: () => navigate({ to: "/login" }) })
-            }
+            onClick={() => signOut.mutate({}, { onSuccess: () => navigate({ to: "/login" }) })}
           >
             {SESSION_DESCRIPTIONS.sign_out}
           </Button>

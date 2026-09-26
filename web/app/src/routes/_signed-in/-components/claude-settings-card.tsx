@@ -1,5 +1,8 @@
-import { updateClaudeSettings } from "@ezra/client";
-import type { ClaudeSettingsBody, ReleaseChannel } from "@ezra/client";
+import type { ReleaseChannel } from "@ezra/client";
+import {
+  getClaudeSettingsOptions,
+  updateClaudeSettingsMutation,
+} from "@ezra/client/react-query.gen";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useId } from "react";
@@ -25,8 +28,7 @@ import { toastManager } from "@/components/ui/toast";
 import { AGENT_NAMES } from "@/content/agents";
 import { PERMISSION_MODES, RELEASE_CHANNELS, SETTINGS_DESCRIPTIONS } from "@/content/settings";
 import { errorMessage } from "@/lib/utils";
-import { AGENTS } from "@/queries/query-keys";
-import { claudeSettingsQueryOptions } from "@/queries/settings-queries";
+import { agentsQueryOptions } from "@/queries/agent-queries";
 
 const CHANNEL_ORDER: readonly ReleaseChannel[] = ["latest", "stable"];
 
@@ -41,12 +43,12 @@ export function ClaudeSettingsCard() {
     permissionMode: useId(),
     capacity: useId(),
   };
-  const { data: settings } = useSuspenseQuery(claudeSettingsQueryOptions);
+  const { data: settings } = useSuspenseQuery(getClaudeSettingsOptions());
   const save = useMutation({
-    mutationFn: async (body: ClaudeSettingsBody) => (await updateClaudeSettings({ body })).data,
+    ...updateClaudeSettingsMutation(),
     onSuccess: (saved) => {
-      queryClient.setQueryData(claudeSettingsQueryOptions.queryKey, saved);
-      void queryClient.invalidateQueries({ queryKey: [AGENTS] });
+      queryClient.setQueryData(getClaudeSettingsOptions().queryKey, saved);
+      void queryClient.invalidateQueries({ queryKey: agentsQueryOptions.queryKey });
       toastManager.add({ title: SETTINGS_DESCRIPTIONS.saved });
     },
   });
@@ -54,7 +56,7 @@ export function ClaudeSettingsCard() {
     defaultValues: settings,
     onSubmit: async ({ value, formApi }) => {
       try {
-        formApi.reset(await save.mutateAsync(value));
+        formApi.reset(await save.mutateAsync({ body: value }));
       } catch {
         return;
       }

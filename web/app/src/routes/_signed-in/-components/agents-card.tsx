@@ -143,7 +143,8 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
-  const installNow = () => install.mutate(status.installed_version ?? null);
+  const path = { agent: status.agent };
+  const installNow = () => install.mutate({ path });
   return (
     <div className={cn("flex flex-col gap-1", className)}>
       <div className="flex items-center gap-1">
@@ -153,7 +154,7 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
           </Button>
         ) : null}
         {installed && !installing && !status.logged_in && !status.login_prompt ? (
-          <Button size="sm" loading={signInPending} onClick={() => startSignIn.mutate()}>
+          <Button size="sm" loading={signInPending} onClick={() => startSignIn.mutate({ path })}>
             {AGENTS_DESCRIPTIONS.sign_in}
           </Button>
         ) : null}
@@ -176,7 +177,7 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
                 {AGENTS_DESCRIPTIONS.check_for_update}
               </DropdownMenuItem>
               {status.logged_in ? (
-                <DropdownMenuItem onClick={() => signOut.mutate()}>
+                <DropdownMenuItem onClick={() => signOut.mutate({ path })}>
                   {AGENTS_DESCRIPTIONS.sign_out}
                 </DropdownMenuItem>
               ) : null}

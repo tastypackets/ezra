@@ -35,7 +35,7 @@ export function SignInPanel({ agent, prompt }: SignInPanelProps) {
             variant="outline"
             size="sm"
             loading={restarting}
-            onClick={() => startSignIn.mutate()}
+            onClick={() => startSignIn.mutate({ path: { agent } })}
           >
             {AGENTS_DESCRIPTIONS.start_over}
           </Button>
@@ -58,7 +58,9 @@ function CodeForm({ agent }: { agent: Agent }) {
   const form = useForm({
     defaultValues: { code: "" },
     onSubmit: async ({ value }) => {
-      await submitCode.mutateAsync(value.code).catch(() => undefined);
+      await submitCode
+        .mutateAsync({ path: { agent }, body: { code: value.code } })
+        .catch(() => undefined);
     },
   });
   return (

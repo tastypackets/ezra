@@ -1,5 +1,10 @@
-import { installAgent, logOutAgent, startAgentLogin, submitAgentLoginCode } from "@ezra/client";
 import type { Agent } from "@ezra/client";
+import {
+  installAgentMutation,
+  logOutAgentMutation,
+  startAgentLoginMutation,
+  submitAgentLoginCodeMutation,
+} from "@ezra/client/react-query.gen";
 import {
   useIsMutating,
   useMutation,
@@ -11,23 +16,28 @@ import type { Mutation } from "@tanstack/react-query";
 import { toastManager } from "@/components/ui/toast";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
 import { errorMessage } from "@/lib/utils";
-import { AGENT_ACTION, AGENTS } from "@/queries/query-keys";
+import { agentsQueryOptions } from "@/queries/agent-queries";
+import { AGENT_ACTION } from "@/queries/query-keys";
 
 export type AgentAction = "install" | "start_sign_in" | "submit_code" | "sign_out";
 
 /** Every action on one agent. Each refreshes the agent list when it settles. */
 export function useAgentActions(agent: Agent) {
   const queryClient = useQueryClient();
-  const refreshAgents = () => queryClient.invalidateQueries({ queryKey: [AGENTS] });
+  const refreshAgents = () =>
+    queryClient.invalidateQueries({ queryKey: agentsQueryOptions.queryKey });
   const mutationKey = (action: AgentAction) => [AGENT_ACTION, agent, action];
-  const path = { agent };
 
   const install = useMutation({
+    ...installAgentMutation(),
     mutationKey: mutationKey("install"),
-    mutationFn: async (_versionBefore: string | null) => (await installAgent({ path })).data,
-    onSuccess: (status, versionBefore) => {
+    onMutate: () =>
+      queryClient
+        .getQueryData(agentsQueryOptions.queryKey)
+        ?.find((status) => status.agent === agent)?.installed_version,
+    onSuccess: (status, _variables, versionBefore) => {
       const name = AGENT_NAMES[agent];
-      if (!versionBefore || !status.installed_version) {
+      if (typeof versionBefore !== "string" || !status.installed_version) {
         return;
       }
       toastManager.add({
@@ -40,18 +50,18 @@ export function useAgentActions(agent: Agent) {
     onSettled: refreshAgents,
   });
   const startSignIn = useMutation({
+    ...startAgentLoginMutation(),
     mutationKey: mutationKey("start_sign_in"),
-    mutationFn: async () => startAgentLogin({ path }),
     onSettled: refreshAgents,
   });
   const submitCode = useMutation({
+    ...submitAgentLoginCodeMutation(),
     mutationKey: mutationKey("submit_code"),
-    mutationFn: async (code: string) => submitAgentLoginCode({ path, body: { code } }),
     onSettled: refreshAgents,
   });
   const signOut = useMutation({
+    ...logOutAgentMutation(),
     mutationKey: mutationKey("sign_out"),
-    mutationFn: async () => logOutAgent({ path }),
     onSettled: refreshAgents,
   });
   return { install, startSignIn, submitCode, signOut };

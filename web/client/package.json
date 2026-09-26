@@ -7,13 +7,18 @@
     ".": "./src/index.ts",
     "./types.gen": "./src/types.gen.ts",
     "./sdk.gen": "./src/sdk.gen.ts",
-    "./client.gen": "./src/client.gen.ts"
+    "./client.gen": "./src/client.gen.ts",
+    "./react-query.gen": "./src/@tanstack/react-query.gen.ts"
   },
   "scripts": {
     "generate": "openapi-ts"
   },
   "devDependencies": {
     "@hey-api/openapi-ts": "0.0.0-next-20260824173136",
+    "@tanstack/react-query": "5.104.0",
     "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "5.104.0"
   }
 }
