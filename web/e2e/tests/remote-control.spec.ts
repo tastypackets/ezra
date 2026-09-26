@@ -120,8 +120,8 @@ test("a busy server waits for its sessions before restarting on an update", asyn
   await expect(card.getByText("Running", { exact: true })).toBeVisible();
 });
 
-test("the agents card warns days before Claude Code's sign-in ends", async ({ page }) => {
-  installFakeClaude("2.1.0-e2e", "exit 1");
+/** Writes Claude Code's credentials with a refresh token that stops working in `days`. */
+function writeCredentials(days: number): void {
   const now = Date.now();
   writeInContainer(
     CREDENTIALS,
@@ -130,14 +130,32 @@ test("the agents card warns days before Claude Code's sign-in ends", async ({ pa
         accessToken: "e2e",
         refreshToken: "e2e",
         expiresAt: now + 60 * 60 * 1000,
-        refreshTokenExpiresAt: now + 2 * DAY_MS,
+        refreshTokenExpiresAt: now + days * DAY_MS,
       },
     }),
     "600",
   );
+}
+
+test("the agents card warns days before Claude Code's sign-in ends until it is renewed", async ({
+  page,
+  request,
+}) => {
+  installFakeClaude(
+    "2.1.0-e2e",
+    "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600",
+  );
+  writeCredentials(2);
+  await nudgeRemoteControl(request);
   await page.goto("./");
+  await expect(remoteControlCard(page).getByText("Running", { exact: true })).toBeVisible();
   const claude = page.getByRole("row", { name: /Claude Code/ });
   await expect(claude.getByText("Sign-in ending")).toBeVisible();
   await expect(claude.getByText(/^Sign-in ends /)).toBeVisible();
   await expect(claude.getByRole("button", { name: "Sign in again" })).toBeVisible();
+
+  writeCredentials(30);
+  await nudgeRemoteControl(request);
+  await expect(claude.getByText("Sign-in ending")).toBeHidden();
+  await expect(claude.getByRole("button", { name: "Sign in again" })).toBeHidden();
 });
