@@ -67,7 +67,6 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
       {github.from_environment ? (
         <p className="text-muted-foreground">{GIT_DESCRIPTIONS.from_environment}</p>
       ) : null}
-      {github.failing ? <p className="text-destructive">{GIT_DESCRIPTIONS.failing}</p> : null}
       {failed ? (
         <p role="alert" className="text-destructive">
           {errorMessage(failed.error)}

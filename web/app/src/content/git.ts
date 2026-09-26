@@ -8,7 +8,6 @@ export const GIT_DESCRIPTIONS = {
   signing_in: "Signing in",
   not_confirmed: "Not confirmed",
   from_environment: "Set by the GH_TOKEN or GITHUB_TOKEN variable.",
-  failing: "GitHub did not confirm this sign-in.",
   sign_in: "Sign in to GitHub",
   sign_out: "Sign out",
   start_over: "Start over",

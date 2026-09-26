@@ -2,7 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export interface StateCardProps {
   title: string;
-  description: string;
+  description?: string;
   action: React.ReactNode;
 }
 
@@ -12,7 +12,7 @@ export function StateCard({ title, description, action }: StateCardProps) {
     <Card className="mx-auto mt-16 max-w-sm">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription role="alert">{description}</CardDescription>
+        {description ? <CardDescription role="alert">{description}</CardDescription> : null}
       </CardHeader>
       <CardContent>{action}</CardContent>
     </Card>

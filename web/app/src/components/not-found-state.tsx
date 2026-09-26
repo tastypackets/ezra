@@ -8,7 +8,6 @@ export function NotFoundState() {
   return (
     <StateCard
       title={APP_DESCRIPTIONS.not_found_title}
-      description={APP_DESCRIPTIONS.not_found_description}
       action={
         <Link to="/" className={buttonVariants()}>
           {APP_DESCRIPTIONS.back_to_dashboard}

@@ -9,6 +9,5 @@ export const APP_DESCRIPTIONS = {
   error_title: "This page could not load",
   retry: "Try again",
   not_found_title: "Page not found",
-  not_found_description: "Nothing lives at this address.",
   back_to_dashboard: "Go to the dashboard",
 } as const;
