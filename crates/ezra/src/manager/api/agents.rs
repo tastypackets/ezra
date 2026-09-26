@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::manager::agents::{Agent, InstallProgress};
 use crate::manager::status::AgentStatus;
+use crate::manager::updates::LatestRelease;
 
 #[utoipa::path(
     get,
@@ -29,7 +30,7 @@ pub async fn list(_: Session, State(state): State<AppState>) -> Json<Vec<AgentSt
     operation_id = "installAgent",
     tag = "agents",
     summary = "Install or update an agent",
-    description = "Installs the newest release, or updates to it, and marks the agent configured.",
+    description = "Installs the newest release on the agent's release channel when it is newer than the installed one, and marks the agent configured.",
     params(("agent" = Agent, Path, description = "The agent")),
     responses(
         (status = 200, description = "Installed", body = AgentStatus),
@@ -73,6 +74,7 @@ impl AppState {
 
     async fn install_and_record(&self, agent: Agent) -> Result<(), ApiError> {
         let _one_install_at_a_time = self.install_lock.lock().await;
+        let channel = self.settings.lock().await.release_channel(agent);
         let progress = Arc::new(InstallProgress::default());
         self.installs_in_progress
             .lock()
@@ -80,14 +82,17 @@ impl AppState {
             .insert(agent, Arc::clone(&progress));
         let outcome = self
             .install_paths
-            .install_latest(agent, self.download_tls_verification, &progress)
+            .install_latest(agent, channel, self.download_tls_verification, &progress)
             .await;
         self.installs_in_progress.lock().await.remove(&agent);
         let version = outcome.map_err(|error| {
             ApiError::AgentFailed(format!("could not install {agent}: {error}"))
         })?;
         tracing::info!("{agent} {version} is installed");
-        self.latest_versions.lock().await.insert(agent, version);
+        self.latest_releases
+            .lock()
+            .await
+            .insert(agent, LatestRelease { channel, version });
 
         self.update_settings(|settings| {
             settings.agent_mut(agent).configured = true;

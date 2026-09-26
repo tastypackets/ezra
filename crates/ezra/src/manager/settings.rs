@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::agents::Agent;
+use super::agents::{Agent, ReleaseChannel};
 use super::auth::HashedPassword;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,15 +18,22 @@ pub struct Settings {
 impl Settings {
     pub fn agent(&self, agent: Agent) -> &AgentSettings {
         match agent {
-            Agent::Claude => &self.agents.claude,
+            Agent::Claude => &self.agents.claude.agent,
             Agent::Codex => &self.agents.codex,
         }
     }
 
     pub fn agent_mut(&mut self, agent: Agent) -> &mut AgentSettings {
         match agent {
-            Agent::Claude => &mut self.agents.claude,
+            Agent::Claude => &mut self.agents.claude.agent,
             Agent::Codex => &mut self.agents.codex,
+        }
+    }
+
+    pub fn release_channel(&self, agent: Agent) -> ReleaseChannel {
+        match agent {
+            Agent::Claude => self.agents.claude.release_channel,
+            Agent::Codex => ReleaseChannel::Latest,
         }
     }
 }
@@ -40,9 +47,17 @@ pub struct ManagerSettings {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentsSettings {
     #[serde(default)]
-    pub claude: AgentSettings,
+    pub claude: ClaudeSettings,
     #[serde(default)]
     pub codex: AgentSettings,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeSettings {
+    #[serde(flatten)]
+    pub agent: AgentSettings,
+    #[serde(default)]
+    pub release_channel: ReleaseChannel,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,8 +139,25 @@ mod tests {
             ..Settings::default()
         };
         settings.agent_mut(Agent::Codex).configured = true;
+        settings.agents.claude.release_channel = ReleaseChannel::Stable;
         settings.save(&path).expect("settings save");
         assert_eq!(Settings::load(&path).expect("settings load"), settings);
+    }
+
+    #[test]
+    fn claude_settings_sit_in_one_table() {
+        let settings: Settings =
+            toml::from_str("[agents.claude]\nconfigured = true\nrelease_channel = \"stable\"\n")
+                .expect("settings parse");
+        assert!(settings.agent(Agent::Claude).configured);
+        assert_eq!(
+            settings.release_channel(Agent::Claude),
+            ReleaseChannel::Stable
+        );
+        assert_eq!(
+            settings.release_channel(Agent::Codex),
+            ReleaseChannel::Latest
+        );
     }
 
     #[test]

@@ -125,7 +125,7 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
           size="sm"
           variant={installed && !status.available_update ? "secondary" : "primary"}
           loading={installing}
-          onClick={() => install.mutate()}
+          onClick={() => install.mutate(status.installed_version ?? null)}
         >
           {installLabel(status, installing ? percent : undefined)}
         </Button>
@@ -145,6 +145,11 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
           </Button>
         ) : null}
       </div>
+      {install.isSuccess && install.data.installed_version === install.variables ? (
+        <p role="status" className="text-[0.8125rem] text-ez-muted">
+          {AGENTS_DESCRIPTIONS.up_to_date}
+        </p>
+      ) : null}
       {failure ? (
         <p role="alert" className="max-w-sm text-[0.8125rem] whitespace-normal text-ez-danger">
           {failure}
@@ -163,7 +168,7 @@ function installLabel(status: AgentStatus, percent: number | undefined): string 
   }
   return status.available_update
     ? AGENTS_DESCRIPTIONS.update_to(status.available_update)
-    : AGENTS_DESCRIPTIONS.install_latest;
+    : AGENTS_DESCRIPTIONS.check_for_update;
 }
 
 function agentFacts(status: AgentStatus) {

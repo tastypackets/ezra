@@ -55,10 +55,30 @@ impl Agent {
 
     pub async fn latest_version(
         self,
+        channel: ReleaseChannel,
         tls_verification: TlsVerification,
     ) -> Result<String, InstallError> {
         let client = ReleaseClient::new(tls_verification)?;
-        Ok(Release::latest(self, &client).await?.version)
+        Ok(Release::latest(self, channel, &client).await?.version)
+    }
+}
+
+/// Which Claude Code releases to install: `latest` gets every release as soon as it ships,
+/// `stable` is about a week behind and skips releases with major regressions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseChannel {
+    #[default]
+    Latest,
+    Stable,
+}
+
+impl ReleaseChannel {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Latest => "latest",
+            Self::Stable => "stable",
+        }
     }
 }
 
@@ -155,22 +175,28 @@ impl InstallPaths {
         Some(version_path.file_name()?.to_string_lossy().into_owned())
     }
 
-    /// Installs the newest release, or does nothing when it is already installed. Returns the installed version.
+    /// Installs the channel's release when it is newer than the installed one. Returns the
+    /// installed version.
     pub async fn install_latest(
         &self,
         agent: Agent,
+        channel: ReleaseChannel,
         tls_verification: TlsVerification,
         progress: &InstallProgress,
     ) -> Result<String, InstallError> {
         let client = ReleaseClient::new(tls_verification)?;
-        let release = Release::latest(agent, &client).await?;
-        if self.installed_version(agent).as_deref() != Some(release.version.as_str()) {
-            self.install(agent, &release, &client, progress).await?;
-        }
+        let release = Release::latest(agent, channel, &client).await?;
+        let installed_version = match self.installed_version(agent) {
+            Some(installed) if !release.version.is_newer_than(&installed) => installed,
+            _ => {
+                self.install(agent, &release, &client, progress).await?;
+                release.version
+            }
+        };
         if let Some(config_directory) = self.config_directory(agent) {
             fs::create_dir_all(config_directory)?;
         }
-        Ok(release.version)
+        Ok(installed_version)
     }
 
     async fn install(
@@ -256,11 +282,15 @@ struct Release {
 }
 
 impl Release {
-    async fn latest(agent: Agent, client: &ReleaseClient) -> Result<Self, InstallError> {
+    async fn latest(
+        agent: Agent,
+        channel: ReleaseChannel,
+        client: &ReleaseClient,
+    ) -> Result<Self, InstallError> {
         match agent {
             Agent::Claude => {
                 let version = client
-                    .text(&format!("{CLAUDE_RELEASES}/latest"))
+                    .text(&format!("{CLAUDE_RELEASES}/{}", channel.name()))
                     .await?
                     .trim()
                     .to_owned();

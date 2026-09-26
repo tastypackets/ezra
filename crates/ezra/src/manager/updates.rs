@@ -2,10 +2,18 @@ use std::time::Duration;
 
 use tokio::time::MissedTickBehavior;
 
-use super::agents::Agent;
+use super::agents::{Agent, ReleaseChannel};
+use super::settings::SettingsError;
 use super::state::AppState;
 
 const CHECK_INTERVAL: Duration = Duration::from_hours(6);
+
+/// The newest release seen on a channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestRelease {
+    pub channel: ReleaseChannel,
+    pub version: String,
+}
 
 impl AppState {
     pub async fn check_for_updates_regularly(self) {
@@ -19,17 +27,50 @@ impl AppState {
 
     async fn check_for_updates(&self) {
         for agent in Agent::ALL {
-            let Some(installed) = self.install_paths.installed_version(agent) else {
-                continue;
-            };
-            match agent.latest_version(self.download_tls_verification).await {
-                Ok(version) => {
-                    if self.install_paths.installed_version(agent) == Some(installed) {
-                        self.latest_versions.lock().await.insert(agent, version);
-                    }
-                }
-                Err(error) => tracing::warn!("could not check for a newer {agent}: {error}"),
-            }
+            self.check_for_update(agent).await;
         }
+    }
+
+    pub async fn check_for_update(&self, agent: Agent) {
+        let Some(installed) = self.install_paths.installed_version(agent) else {
+            return;
+        };
+        let channel = self.settings.lock().await.release_channel(agent);
+        match agent
+            .latest_version(channel, self.download_tls_verification)
+            .await
+        {
+            Ok(version) => {
+                if self.install_paths.installed_version(agent) == Some(installed) {
+                    self.latest_releases
+                        .lock()
+                        .await
+                        .insert(agent, LatestRelease { channel, version });
+                }
+            }
+            Err(error) => tracing::warn!("could not check for a newer {agent}: {error}"),
+        }
+    }
+
+    /// Saves the channel, and when it changed checks it once any running install is done.
+    pub async fn set_claude_release_channel(
+        &self,
+        channel: ReleaseChannel,
+    ) -> Result<(), SettingsError> {
+        let mut changed = false;
+        self.update_settings(|settings| {
+            changed = settings.agents.claude.release_channel != channel;
+            settings.agents.claude.release_channel = channel;
+            Ok::<(), SettingsError>(())
+        })
+        .await?;
+        if changed {
+            let checking = self.clone();
+            tokio::spawn(async move {
+                drop(checking.install_lock.lock().await);
+                checking.check_for_update(Agent::Claude).await;
+            });
+        }
+        Ok(())
     }
 }

@@ -22,7 +22,8 @@ export function useAgentActions(agent: Agent) {
 
   const install = useMutation({
     mutationKey: mutationKey("install"),
-    mutationFn: async () => installAgent({ path, throwOnError: true }),
+    mutationFn: async (_versionBefore: string | null) =>
+      (await installAgent({ path, throwOnError: true })).data,
     onSettled: refreshAgents,
   });
   const startSignIn = useMutation({

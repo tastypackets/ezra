@@ -1,6 +1,7 @@
 mod agents;
 mod login;
 pub mod session;
+mod settings;
 #[cfg(test)]
 pub mod test_support;
 
@@ -32,6 +33,10 @@ pub fn router(state: AppState) -> Router {
             post(login::submit_code),
         )
         .route("/api/v1/agents/{agent}/logout", post(login::log_out))
+        .route(
+            "/api/v1/agents/claude/settings",
+            get(settings::claude).put(settings::update_claude),
+        )
         .route("/api", any(not_found))
         .route("/api/", any(not_found))
         .route("/api/{*path}", any(not_found))
@@ -120,6 +125,8 @@ pub struct ErrorBody {
         login::start,
         login::submit_code,
         login::log_out,
+        settings::claude,
+        settings::update_claude,
     )
 )]
 pub struct ApiDoc;

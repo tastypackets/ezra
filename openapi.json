@@ -45,13 +45,84 @@
         }
       }
     },
+    "/api/v1/agents/claude/settings": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get Claude Code settings",
+        "operationId": "getClaudeSettings",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaudeSettingsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Change Claude Code settings",
+        "description": "Saves the settings. Changing the release channel never downgrades the installed version.",
+        "operationId": "updateClaudeSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaudeSettingsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaudeSettingsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents/{agent}/install": {
       "post": {
         "tags": [
           "agents"
         ],
         "summary": "Install or update an agent",
-        "description": "Installs the newest release, or updates to it, and marks the agent configured.",
+        "description": "Installs the newest release on the agent's release channel when it is newer than the installed one, and marks the agent configured.",
         "operationId": "installAgent",
         "parameters": [
           {
@@ -513,6 +584,18 @@
           }
         }
       },
+      "ClaudeSettingsBody": {
+        "type": "object",
+        "description": "How the manager installs and updates Claude Code.",
+        "required": [
+          "release_channel"
+        ],
+        "properties": {
+          "release_channel": {
+            "$ref": "#/components/schemas/ReleaseChannel"
+          }
+        }
+      },
       "CodeBody": {
         "type": "object",
         "required": [
@@ -590,6 +673,14 @@
             "type": "string"
           }
         }
+      },
+      "ReleaseChannel": {
+        "type": "string",
+        "description": "Which Claude Code releases to install: `latest` gets every release as soon as it ships,\n`stable` is about a week behind and skips releases with major regressions.",
+        "enum": [
+          "latest",
+          "stable"
+        ]
       },
       "SessionStatus": {
         "type": "object",

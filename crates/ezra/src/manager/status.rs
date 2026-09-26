@@ -58,13 +58,22 @@ impl AgentStatus {
             .await
             .get(&agent)
             .map(|progress| progress.snapshot());
+        let (configured, channel) = {
+            let settings = state.settings.lock().await;
+            (
+                settings.agent(agent).configured,
+                settings.release_channel(agent),
+            )
+        };
         let installed_version = state.install_paths.installed_version(agent);
         let available_update = match (
             &installed_version,
-            state.latest_versions.lock().await.get(&agent),
+            state.latest_releases.lock().await.get(&agent),
         ) {
-            (Some(installed), Some(latest)) if latest.is_newer_than(installed) => {
-                Some(latest.clone())
+            (Some(installed), Some(latest))
+                if latest.channel == channel && latest.version.is_newer_than(installed) =>
+            {
+                Some(latest.version.clone())
             }
             _ => None,
         };
@@ -72,7 +81,7 @@ impl AgentStatus {
         let config_directory = state.install_paths.config_directory(agent);
         Self {
             agent,
-            configured: state.settings.lock().await.agent(agent).configured,
+            configured,
             installed_version,
             logged_in: sign_in.logged_in,
             account: sign_in.account,
@@ -110,7 +119,9 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::manager::agents::ReleaseChannel;
     use crate::manager::api::test_support::TestManager;
+    use crate::manager::updates::LatestRelease;
 
     fn write(path: &Path) {
         fs::create_dir_all(path.parent().expect("test paths have a parent"))
@@ -147,7 +158,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_newer_release_is_an_available_update() {
+    async fn a_newer_release_on_the_chosen_channel_is_an_available_update() {
         let manager = TestManager::new();
         let binaries = tempfile::tempdir().expect("temporary directory");
         let installed = binaries.path().join("2.1.0");
@@ -158,23 +169,32 @@ mod tests {
             .command(Agent::Claude)
             .replace_symlink(&installed)
             .expect("command link is created");
+        let latest = |channel, version: &str| LatestRelease {
+            channel,
+            version: version.to_owned(),
+        };
         manager
             .state
-            .latest_versions
+            .latest_releases
             .lock()
             .await
-            .insert(Agent::Codex, "0.157.1".to_owned());
+            .insert(Agent::Codex, latest(ReleaseChannel::Latest, "0.157.1"));
         let codex = AgentStatus::gather(Agent::Codex, &manager.state).await;
         assert_eq!(codex.available_update, None);
-        for (latest, expected) in [("2.1.1", Some("2.1.1")), ("2.1.0", None), ("2.0.9", None)] {
+        for (release, expected) in [
+            (latest(ReleaseChannel::Latest, "2.1.1"), Some("2.1.1")),
+            (latest(ReleaseChannel::Latest, "2.1.0"), None),
+            (latest(ReleaseChannel::Latest, "2.0.9"), None),
+            (latest(ReleaseChannel::Stable, "2.1.1"), None),
+        ] {
             manager
                 .state
-                .latest_versions
+                .latest_releases
                 .lock()
                 .await
-                .insert(Agent::Claude, latest.to_owned());
+                .insert(Agent::Claude, release.clone());
             let status = AgentStatus::gather(Agent::Claude, &manager.state).await;
-            assert_eq!(status.available_update.as_deref(), expected, "{latest}");
+            assert_eq!(status.available_update.as_deref(), expected, "{release:?}");
         }
     }
 

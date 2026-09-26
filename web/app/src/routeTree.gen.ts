@@ -9,13 +9,14 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
+import { Route as SignedInRouteImport } from './routes/_signed-in'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
+import { Route as SignedInIndexRouteImport } from './routes/_signed-in/index'
+import { Route as SignedInSettingsRouteImport } from './routes/_signed-in/settings'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const SignedInRoute = SignedInRouteImport.update({
+  id: '/_signed-in',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -28,44 +29,64 @@ const SetupRoute = SetupRouteImport.update({
   path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SignedInIndexRoute = SignedInIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SignedInRoute,
+} as any)
+const SignedInSettingsRoute = SignedInSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => SignedInRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
+  '/': typeof SignedInIndexRoute
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/settings': typeof SignedInSettingsRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/settings': typeof SignedInSettingsRoute
+  '/': typeof SignedInIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
+  '/_signed-in': typeof SignedInRouteWithChildren
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
+  '/_signed-in/settings': typeof SignedInSettingsRoute
+  '/_signed-in/': typeof SignedInIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/setup'
+  fullPaths: '/' | '/login' | '/setup' | '/settings'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/setup'
-  id: '__root__' | '/' | '/login' | '/setup'
+  to: '/login' | '/setup' | '/settings' | '/'
+  id:
+    | '__root__'
+    | '/_signed-in'
+    | '/login'
+    | '/setup'
+    | '/_signed-in/settings'
+    | '/_signed-in/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
+  SignedInRoute: typeof SignedInRouteWithChildren
   LoginRoute: typeof LoginRoute
   SetupRoute: typeof SetupRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
+    '/_signed-in': {
+      id: '/_signed-in'
+      path: ''
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+      preLoaderRoute: typeof SignedInRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -82,11 +103,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_signed-in/': {
+      id: '/_signed-in/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof SignedInIndexRouteImport
+      parentRoute: typeof SignedInRoute
+    }
+    '/_signed-in/settings': {
+      id: '/_signed-in/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SignedInSettingsRouteImport
+      parentRoute: typeof SignedInRoute
+    }
   }
 }
 
+interface SignedInRouteChildren {
+  SignedInSettingsRoute: typeof SignedInSettingsRoute
+  SignedInIndexRoute: typeof SignedInIndexRoute
+}
+
+const SignedInRouteChildren: SignedInRouteChildren = {
+  SignedInSettingsRoute: SignedInSettingsRoute,
+  SignedInIndexRoute: SignedInIndexRoute,
+}
+
+const SignedInRouteWithChildren = SignedInRoute._addFileChildren(
+  SignedInRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
+  SignedInRoute: SignedInRouteWithChildren,
   LoginRoute: LoginRoute,
   SetupRoute: SetupRoute,
 }

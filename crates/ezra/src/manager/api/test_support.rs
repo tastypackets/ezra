@@ -78,6 +78,17 @@ impl TestManager {
         .await
     }
 
+    pub async fn put(&self, path: &str, body: &str, cookie: Option<&str>) -> Response {
+        let request = Request::put(path).header(header::CONTENT_TYPE, "application/json");
+        self.send(
+            request
+                .with_cookie(cookie)
+                .body(Body::from(body.to_owned()))
+                .expect("request builds"),
+        )
+        .await
+    }
+
     pub async fn get(&self, path: &str, cookie: Option<&str>) -> Response {
         self.send(
             Request::get(path)

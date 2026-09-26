@@ -8,6 +8,7 @@ use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
 use super::login::LoginProcess;
 use super::settings::{Settings, SettingsError};
+use super::updates::LatestRelease;
 
 /// Shared by the API and the pages.
 #[derive(Clone)]
@@ -20,7 +21,7 @@ pub struct AppState {
     pub logins: Arc<Mutex<HashMap<Agent, LoginProcess>>>,
     pub download_tls_verification: TlsVerification,
     pub installs_in_progress: Arc<Mutex<HashMap<Agent, Arc<InstallProgress>>>>,
-    pub latest_versions: Arc<Mutex<HashMap<Agent, String>>>,
+    pub latest_releases: Arc<Mutex<HashMap<Agent, LatestRelease>>>,
 }
 
 impl AppState {
@@ -39,7 +40,7 @@ impl AppState {
             logins: Arc::default(),
             download_tls_verification,
             installs_in_progress: Arc::default(),
-            latest_versions: Arc::default(),
+            latest_releases: Arc::default(),
         }
     }
 

@@ -4,3 +4,5 @@ export const SESSION = "session";
 export const AGENTS = "agents";
 /** Mutation key prefix of every action on an agent: `[AGENT_ACTION, agent, action]`. */
 export const AGENT_ACTION = "agent_action";
+/** How the manager installs and updates Claude Code. */
+export const CLAUDE_SETTINGS = "claude_settings";
