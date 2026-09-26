@@ -99,6 +99,7 @@ pub async fn log_out_of_github(
     state.refuse_environment_sign_in()?;
     state.github_login.lock().await.take();
     state.git_tools.log_out_of_github().await?;
+    state.note_github_account(None);
     tracing::info!("GitHub is signed out");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -151,6 +152,11 @@ impl AppState {
             };
         }
         let sign_in = self.git_tools.github_sign_in().await;
+        self.note_github_account(
+            sign_in
+                .signed_in
+                .then(|| sign_in.account.clone().unwrap_or_default()),
+        );
         GitStatus {
             github: GitHubStatus {
                 signed_in: sign_in.signed_in,
@@ -182,9 +188,23 @@ impl AppState {
 
     /// Covers sign-ins made outside the manager, such as `gh auth login` in a terminal.
     pub async fn lend_github_sign_in_at_start(self) {
-        if self.git_tools.github_sign_in().await.signed_in {
+        let sign_in = self.git_tools.github_sign_in().await;
+        self.note_github_account(
+            sign_in
+                .signed_in
+                .then(|| sign_in.account.unwrap_or_default()),
+        );
+        if sign_in.signed_in {
             self.lend_github_sign_in_to_git().await;
         }
+    }
+
+    fn note_github_account(&self, account: Option<String>) {
+        self.github_account.send_if_modified(|current| {
+            let changed = *current != account;
+            *current = account;
+            changed
+        });
     }
 
     async fn lend_github_sign_in_to_git(&self) {

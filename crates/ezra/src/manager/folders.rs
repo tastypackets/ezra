@@ -84,14 +84,22 @@ impl ProjectsDirectory {
     }
 
     /// Rewrites the managed block in `AGENTS.md` when the folders changed, keeping everything else.
-    pub fn describe_folders_for_agents(&self, folders: &[Folder]) -> io::Result<()> {
+    pub fn describe_folders_for_agents(
+        &self,
+        folders: &[Folder],
+        github_account: Option<&str>,
+    ) -> io::Result<()> {
         let path = self.0.join("AGENTS.md");
         let existing = match fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
             Err(error) => return Err(error),
         };
-        let updated = existing.with_folders_block(&FoldersBlock(folders).to_markdown());
+        let block = FoldersBlock {
+            folders,
+            github_account,
+        };
+        let updated = existing.with_folders_block(&block.to_markdown());
         if updated == existing {
             return Ok(());
         }
@@ -100,21 +108,31 @@ impl ProjectsDirectory {
 }
 
 /// The part of `/projects/AGENTS.md` the manager owns.
-struct FoldersBlock<'folders>(&'folders [Folder]);
+struct FoldersBlock<'block> {
+    folders: &'block [Folder],
+    github_account: Option<&'block str>,
+}
 
 impl FoldersBlock<'_> {
     fn to_markdown(&self) -> String {
         let mut markdown = format!(
             "{BLOCK_START}\n\
-             ## Projects in this box\n\n\
-             Each folder in this directory is its own project. Clone new repositories here. \
-             This list updates itself.\n\n"
+             This file applies only when the working directory is /projects. Inside a project \
+             folder, ignore it.\n\
+             /projects holds the projects in this box, one per folder.\n"
         );
-        if self.0.is_empty() {
+        match self.github_account {
+            Some("") => markdown.push_str("gh is signed in to GitHub.\n"),
+            Some(account) => {
+                markdown.push_str(&format!("gh is signed in to GitHub as {account}.\n"))
+            }
+            None => {}
+        }
+        if self.folders.is_empty() {
             markdown.push_str("No projects yet.\n");
         } else {
             markdown.push_str("| Folder | Repository | Branch |\n| --- | --- | --- |\n");
-            for folder in self.0 {
+            for folder in self.folders {
                 let git = folder.git.clone().unwrap_or_default();
                 markdown.push_str(&format!(
                     "| {} | {} | {} |\n",
@@ -358,13 +376,18 @@ impl AppState {
     pub async fn describe_folders_regularly(self) {
         let mut rescan = interval(RESCAN_INTERVAL);
         rescan.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut github_account = self.github_account.subscribe();
         let mut known: Vec<Folder> = Vec::new();
         loop {
-            rescan.tick().await;
+            tokio::select! {
+                _ = rescan.tick() => {}
+                _ = github_account.changed() => {}
+            }
             let projects = self.projects.clone();
+            let account = github_account.borrow_and_update().clone();
             let described = tokio::task::spawn_blocking(move || {
                 let folders = projects.folders()?;
-                projects.describe_folders_for_agents(&folders)?;
+                projects.describe_folders_for_agents(&folders, account.as_deref())?;
                 Ok::<_, io::Error>(folders)
             })
             .await;
@@ -520,7 +543,7 @@ mod tests {
             Some(("https://github.com/zeke/app.git", "main")),
         )];
         projects
-            .describe_folders_for_agents(&folders)
+            .describe_folders_for_agents(&folders, None)
             .expect("block is written");
         let first = fs::read_to_string(&agents).expect("file is read");
         assert!(
@@ -534,10 +557,15 @@ mod tests {
 
         fs::write(&agents, format!("{first}\nAfter the block.\n")).expect("file is written");
         projects
-            .describe_folders_for_agents(&[])
+            .describe_folders_for_agents(&[], Some("zeke"))
             .expect("block is written");
         let second = fs::read_to_string(&agents).expect("file is read");
         assert!(second.contains("No projects yet."), "{second}");
+        assert!(
+            second.contains("gh is signed in to GitHub as zeke."),
+            "{second}"
+        );
+        assert!(!first.contains("gh is signed in"), "{first}");
         assert!(!second.contains("| app |"), "{second}");
         assert!(
             second.ends_with("<!-- ezra:folders:end -->\n\nAfter the block.\n"),
@@ -566,11 +594,11 @@ mod tests {
             git: None,
         }];
         projects
-            .describe_folders_for_agents(&folders)
+            .describe_folders_for_agents(&folders, None)
             .expect("block is written");
         let first = fs::read_to_string(directory.path().join("AGENTS.md")).expect("file is read");
         projects
-            .describe_folders_for_agents(&folders)
+            .describe_folders_for_agents(&folders, None)
             .expect("block is written");
         let second = fs::read_to_string(directory.path().join("AGENTS.md")).expect("file is read");
         assert_eq!(first, second);

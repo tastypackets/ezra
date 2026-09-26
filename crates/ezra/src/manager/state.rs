@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
@@ -28,6 +28,8 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
+    /// The GitHub account gh is signed in as, from the last check. None when signed out.
+    pub github_account: Arc<watch::Sender<Option<String>>>,
     pub projects: ProjectsDirectory,
 }
 
@@ -52,6 +54,7 @@ impl AppState {
             git_tools: Arc::new(git_tools),
             github_login: Arc::default(),
             remote_control: Arc::default(),
+            github_account: Arc::new(watch::Sender::new(None)),
             projects: ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY)),
         }
     }
