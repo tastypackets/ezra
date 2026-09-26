@@ -11,6 +11,7 @@ import {
 } from "./manager.ts";
 
 const CONNECTED = "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600";
+const REJECTED = "echo 'Error: You must be logged in to use Remote Control.' >&2; exit 1";
 const DAY_MS = 86_400_000;
 
 function projectsRow(page: Page) {
@@ -26,10 +27,7 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
   request,
 }, testInfo) => {
   const folder = `rejected-${testInfo.retry}`;
-  installFakeClaude(
-    "2.1.0-e2e",
-    "echo 'Error: You must be logged in to use Remote Control.' >&2; exit 1",
-  );
+  installFakeClaude("2.1.0-e2e", REJECTED);
   await nudgeRemoteControl(request);
   inContainer("git", "init", "--quiet", `/projects/${folder}`);
   try {
@@ -50,9 +48,15 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
     await expect(log).toBeHidden();
 
     const row = page.getByRole("listitem").filter({ hasText: folder });
-    await expect(
-      row.getByText("Claude Code's sign-in does not work for Remote Control."),
-    ).toBeVisible();
+    const problem = row.getByText("Claude Code's sign-in does not work for Remote Control.");
+    await expect(problem).toBeVisible();
+    expect(
+      await problem.evaluate((note) => note.getBoundingClientRect().top),
+    ).toBeGreaterThanOrEqual(
+      await row
+        .getByRole("group", { name: "Claude Code" })
+        .evaluate((group) => group.getBoundingClientRect().bottom),
+    );
     await row.getByRole("button", { name: `More ${folder} actions` }).click();
     await page.getByRole("menuitem", { name: "Show log" }).click();
     const folderLog = page.getByRole("dialog", { name: `${folder} log` });
@@ -180,4 +184,33 @@ test("Claude Code's parts are hidden until it is installed", async ({
   } finally {
     inContainer("rmdir", `/projects/${folder}`);
   }
+});
+
+test.describe("on a phone", () => {
+  test.use({ viewport: { width: 360, height: 780 } });
+
+  test("a folder's server problem sits under its Claude Code group", async ({
+    page,
+    request,
+  }, testInfo) => {
+    const folder = `problem-${testInfo.retry}`;
+    installFakeClaude("2.1.0-e2e", REJECTED);
+    await nudgeRemoteControl(request);
+    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    try {
+      await page.goto("./");
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      const problem = row.getByText("Claude Code's sign-in does not work for Remote Control.");
+      await expect(problem).toBeVisible();
+      expect(
+        await problem.evaluate((note) => note.getBoundingClientRect().top),
+      ).toBeGreaterThanOrEqual(
+        await row
+          .getByRole("group", { name: "Claude Code" })
+          .evaluate((group) => group.getBoundingClientRect().bottom),
+      );
+    } finally {
+      inContainer("rm", "-rf", `/projects/${folder}`);
+    }
+  });
 });

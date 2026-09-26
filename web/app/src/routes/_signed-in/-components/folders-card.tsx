@@ -221,78 +221,84 @@ function FolderRow({ folder, server, claudeInstalled }: FolderRowProps) {
   const failure = chooseToServe.error;
   const switchLabelId = useId();
   return (
-    <li className="flex items-start gap-2 py-3 first:pt-0 last:pb-0 sm:items-center">
-      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-3">
-            <span className="min-w-0 font-medium break-all">{folder.name}</span>
-            {folder.git?.branch ? (
-              <span className="min-w-0 font-mono text-xs break-all text-muted-foreground">
-                {folder.git.branch}
-              </span>
-            ) : null}
-            {folder.git?.worktrees ? (
-              <span className="text-xs text-muted-foreground">
-                {FOLDERS_DESCRIPTIONS.worktrees(folder.git.worktrees)}
-              </span>
-            ) : null}
+    <li className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0">
+      <div className="flex items-start gap-2 sm:items-center">
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
+            <div className="flex flex-wrap items-baseline gap-x-3">
+              <span className="min-w-0 font-medium break-all">{folder.name}</span>
+              {folder.git?.branch ? (
+                <span className="min-w-0 font-mono text-xs break-all text-muted-foreground">
+                  {folder.git.branch}
+                </span>
+              ) : null}
+              {folder.git?.worktrees ? (
+                <span className="text-xs text-muted-foreground">
+                  {FOLDERS_DESCRIPTIONS.worktrees(folder.git.worktrees)}
+                </span>
+              ) : null}
+            </div>
+            {detail ? <span className="truncate text-muted-foreground">{detail}</span> : null}
           </div>
-          {detail ? <span className="truncate text-muted-foreground">{detail}</span> : null}
-          {server ? <ServerNotes status={server} /> : null}
-          {failure ? (
-            <p role="alert" className="text-destructive">
-              {errorMessage(failure)}
-            </p>
+          {claudeInstalled ? (
+            <ClaudeCodeGroup name={folder.name} server={server}>
+              <Switch
+                checked={
+                  chooseToServe.isPending ? chooseToServe.variables.body.serve : folder.serve
+                }
+                disabled={chooseToServe.isPending}
+                onCheckedChange={(serve) =>
+                  chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
+                }
+                aria-labelledby={switchLabelId}
+                className="ml-auto sm:ml-0"
+              />
+              <span id={switchLabelId} className="sr-only">
+                {FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
+              </span>
+            </ClaudeCodeGroup>
           ) : null}
         </div>
-        {claudeInstalled ? (
-          <ClaudeCodeGroup name={folder.name} server={server}>
-            <Switch
-              checked={chooseToServe.isPending ? chooseToServe.variables.body.serve : folder.serve}
-              disabled={chooseToServe.isPending}
-              onCheckedChange={(serve) =>
-                chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
-              }
-              aria-labelledby={switchLabelId}
-              className="ml-auto sm:ml-0"
-            />
-            <span id={switchLabelId} className="sr-only">
-              {FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
-            </span>
-          </ClaudeCodeGroup>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={FOLDERS_DESCRIPTIONS.more_actions(folder.name)}
+              />
+            }
+          >
+            <EllipsisIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {claudeInstalled ? (
+              <>
+                <DropdownMenuItem onClick={() => setOptionsOpen(true)}>
+                  {FOLDERS_DESCRIPTIONS.claude_options}
+                </DropdownMenuItem>
+                {server ? (
+                  <DropdownMenuItem onClick={() => setLogOpen(true)}>
+                    {REMOTE_CONTROL_DESCRIPTIONS.show_log}
+                  </DropdownMenuItem>
+                ) : null}
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
+            <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
+              {FOLDERS_DESCRIPTIONS.delete}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      <div className="flex flex-col gap-0.5 empty:hidden">
+        {server ? <ServerNotes status={server} /> : null}
+        {failure ? (
+          <p role="alert" className="text-destructive">
+            {errorMessage(failure)}
+          </p>
         ) : null}
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={FOLDERS_DESCRIPTIONS.more_actions(folder.name)}
-            />
-          }
-        >
-          <EllipsisIcon />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {claudeInstalled ? (
-            <>
-              <DropdownMenuItem onClick={() => setOptionsOpen(true)}>
-                {FOLDERS_DESCRIPTIONS.claude_options}
-              </DropdownMenuItem>
-              {server ? (
-                <DropdownMenuItem onClick={() => setLogOpen(true)}>
-                  {REMOTE_CONTROL_DESCRIPTIONS.show_log}
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuSeparator />
-            </>
-          ) : null}
-          <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
-            {FOLDERS_DESCRIPTIONS.delete}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
       <ClaudeOptionsDialog folder={folder} open={optionsOpen} onOpenChange={setOptionsOpen} />
       <DeleteFolderDialog
         folder={folder}
