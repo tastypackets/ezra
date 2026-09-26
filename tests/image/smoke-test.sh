@@ -126,16 +126,18 @@ check_version_command "jq" jq --version
 check_version_command "git-lfs" git lfs version
 check_version_command "protoc" protoc --version
 check_version_command "yarn" yarn --version
-check_succeeds "pnpm is the pinned pnpm, not corepack" grep --quiet "/installs/pnpm/" "$(command -v pnpm)"
+check_succeeds "pnpm is the pinned pnpm, not corepack" grep --quiet "/installs/pnpm/" /usr/local/bin/pnpm
+check_equals "node runs through the mise shims" "/usr/local/share/agent-box/shims/node" "$(command -v node)"
+check_equals "git-lfs bypasses mise" "/usr/local/bin/git-lfs" "$(command -v git-lfs)"
 check_succeeds "pnpx is not on PATH" bash -c '! command -v pnpx'
 check_succeeds "install.sh is not on PATH" bash -c '! command -v install.sh'
 check_succeeds "git-lfs filters registered system-wide" git config --system --get filter.lfs.process
 
-untrusted_project_directory="$(mktemp --directory)"
-printf '[env]\nEXAMPLE = "1"\n' >"${untrusted_project_directory}/mise.toml"
-check_succeeds "tools work inside a repo with an untrusted mise.toml" \
-    bash -c "cd '${untrusted_project_directory}' && node --version && pnpm --version && jq --version && git lfs version"
-rm --recursive --force "${untrusted_project_directory}"
+project_directory="$(mktemp --directory --tmpdir=/projects)"
+printf '[env]\nEXAMPLE = "1"\n' >"${project_directory}/mise.toml"
+check_succeeds "tools work inside a project with its own mise.toml" \
+    bash -c "cd '${project_directory}' && node --version && pnpm --version && jq --version && git lfs version"
+rm --recursive --force "${project_directory}"
 
 protoc_work_directory="$(mktemp --directory)"
 cat >"${protoc_work_directory}/event.proto" <<'PROTO'

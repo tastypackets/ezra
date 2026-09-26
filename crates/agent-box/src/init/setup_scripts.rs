@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub const SETUP_SCRIPTS_DIRECTORY: &str = "/etc/agent-box/setup.d";
+const AGENT_MISE_DIRECTORY_VARIABLES: [&str; 3] =
+    ["MISE_DATA_DIR", "MISE_CONFIG_DIR", "MISE_STATE_DIR"];
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SetupScripts {
@@ -59,7 +61,11 @@ pub fn run_all() {
     }
     for path in &scripts.executable {
         tracing::info!("running {}", path.display());
-        match Command::new(path).stdin(Stdio::null()).status() {
+        let mut script = Command::new(path);
+        for variable in AGENT_MISE_DIRECTORY_VARIABLES {
+            script.env_remove(variable);
+        }
+        match script.stdin(Stdio::null()).status() {
             Ok(status) if status.success() => {}
             Ok(status) => tracing::warn!("{} failed with {status}", path.display()),
             Err(error) => tracing::warn!("could not run {} ({error})", path.display()),

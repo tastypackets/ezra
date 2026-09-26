@@ -166,10 +166,14 @@ RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
     <<'EOF'
 set -euo pipefail
 mise install --system
+install --directory /usr/local/share/agent-box/shims
 for tool_executable in node npm npx pnpm pn pnx corepack yarn yarnpkg gh yq uv uvx jq git-lfs protoc; do
     tool_path="$(mise which "${tool_executable}")"
     printf '#!/bin/sh\nexec %s "$@"\n' "'${tool_path}'" >"/usr/local/bin/${tool_executable}"
     chmod 0755 "/usr/local/bin/${tool_executable}"
+    if [[ ${tool_executable} != git-lfs ]]; then
+        ln --symbolic /usr/local/bin/mise "/usr/local/share/agent-box/shims/${tool_executable}"
+    fi
 done
 git lfs install --system --skip-repo
 rm --recursive --force /root/.local/share/mise /root/.local/state/mise
@@ -196,6 +200,12 @@ useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev
 install --directory --owner=dev --group=dev /config /projects
 install --directory /etc/agent-box/setup.d
 EOF
+
+ENV MISE_DATA_DIR=/config/mise \
+    MISE_CONFIG_DIR=/config/mise \
+    MISE_STATE_DIR=/config/mise/state \
+    MISE_TRUSTED_CONFIG_PATHS=/projects \
+    PATH=/config/mise/shims:/usr/local/share/agent-box/shims:${PATH}
 
 COPY --from=agent-box-build /out/agent-box /usr/local/bin/agent-box
 
