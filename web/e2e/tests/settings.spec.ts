@@ -69,6 +69,8 @@ test("Remote Control settings are saved and shown on the dashboard", async ({ pa
   const serve = claude.getByRole("switch", { name: "Serve to the Claude app" });
   const mode = page.getByRole("combobox", { name: "Permission mode" });
   const capacity = claude.getByLabel("Sessions per folder");
+  await expect(capacity).toHaveValue("");
+  await expect(capacity).toHaveAttribute("placeholder", "Claude Code's default");
 
   await serve.setChecked(false);
   await mode.fill("plan");
@@ -91,7 +93,7 @@ test("Remote Control settings are saved and shown on the dashboard", async ({ pa
   await serve.setChecked(true);
   await mode.fill("auto");
   await page.keyboard.press("Escape");
-  await capacity.fill("4");
+  await capacity.fill("");
   await claude.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 });
@@ -101,9 +103,9 @@ test("a setting Claude cannot take is refused next to its field", async ({ page 
   const claude = card(page, "Claude Code");
   const capacity = claude.getByRole("spinbutton", { name: "Sessions per folder" });
   await capacity.fill("40");
-  await expect(claude.getByText("Enter a number from 1 to 32.")).toBeVisible();
+  await expect(claude.getByText("Enter a number from 1 to 32, or leave it empty.")).toBeVisible();
   await expect(capacity).toHaveAccessibleDescription(
-    "Each session is its own Claude Code process, about 150 to 300 MB. Enter a number from 1 to 32.",
+    "Each session is its own Claude Code process, about 150 to 300 MB. Enter a number from 1 to 32, or leave it empty.",
   );
   await expect(capacity).toHaveAttribute("aria-invalid", "true");
 

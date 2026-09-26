@@ -1,5 +1,12 @@
 import type { ServerProblem, ServerState } from "@ezra/client";
 
+function sessionCount(sessions: number, capacity: number | null | undefined): string {
+  if (capacity != null) {
+    return `${sessions} of ${capacity} sessions`;
+  }
+  return sessions === 1 ? "1 session" : `${sessions} sessions`;
+}
+
 export const REMOTE_CONTROL_DESCRIPTIONS = {
   title: "Remote Control",
   open: "Open claude.ai/code",
@@ -9,9 +16,10 @@ export const REMOTE_CONTROL_DESCRIPTIONS = {
   running_hint: (device: string) => `In the Claude app, open ${device}.`,
   running_hint_without_device: "In the Claude app, open this box.",
   last_stop: "Last stop",
-  usage: (sessions: number, capacity: number, memory: string) =>
-    `${sessions} of ${capacity} sessions running, using ${memory} of memory.`,
-  sessions: (sessions: number, capacity: number) => `${sessions} of ${capacity} sessions`,
+  usage: (sessions: number, capacity: number | null | undefined, memory: string) =>
+    `${sessionCount(sessions, capacity)} running, using ${memory} of memory.`,
+  sessions: (sessions: number, capacity: number | null | undefined) =>
+    sessionCount(sessions, capacity),
   memory_hint: "Memory this server and its sessions use.",
   more_actions: "More Remote Control actions",
   show_log: "Show log",

@@ -70,9 +70,10 @@ pub struct RemoteControlSettings {
     /// The permission mode for sessions started from the Claude app, such as `auto`.
     #[schema(required = true)]
     pub permission_mode: String,
-    /// The most sessions each server runs at once, from 1 to 32.
+    /// The most sessions each server runs at once, from 1 to 32. Absent uses Claude Code's
+    /// default.
     #[schema(required = true, minimum = 1, maximum = 32)]
-    pub capacity: u32,
+    pub capacity: Option<u32>,
     /// Whether repositories that appear in /projects start with their switch on.
     #[schema(required = true)]
     pub serve_repositories: bool,
@@ -86,7 +87,10 @@ impl RemoteControlSettings {
         let mode = self.permission_mode.trim();
         if mode.is_empty() || mode.contains(char::is_whitespace) {
             Some("the permission mode must be one word")
-        } else if !(1..=Self::MOST_SESSIONS).contains(&self.capacity) {
+        } else if self
+            .capacity
+            .is_some_and(|capacity| !(1..=Self::MOST_SESSIONS).contains(&capacity))
+        {
             Some("capacity must be from 1 to 32")
         } else {
             None
@@ -104,7 +108,7 @@ impl Default for RemoteControlSettings {
         Self {
             enabled: true,
             permission_mode: "auto".to_owned(),
-            capacity: 4,
+            capacity: None,
             serve_repositories: true,
         }
     }
@@ -252,8 +256,8 @@ pub struct PendingUpdate {
 pub struct ServerUsage {
     /// Sessions running now.
     pub sessions: u32,
-    /// The most sessions the server runs at once.
-    pub capacity: u32,
+    /// The most sessions the server runs at once, absent when Claude Code's default applies.
+    pub capacity: Option<u32>,
     /// Memory the server and its sessions use, with shared memory counted once.
     pub memory_bytes: u64,
 }
@@ -504,7 +508,7 @@ struct Launch {
     spawn: SpawnMode,
     log: ServerLog,
     permission_mode: String,
-    capacity: u32,
+    capacity: Option<u32>,
 }
 
 impl Launch {
@@ -512,13 +516,13 @@ impl Launch {
         let mut command = Command::new(&self.claude);
         command
             .current_dir(&self.directory)
-            .args([
-                "remote-control",
-                "--spawn",
-                self.spawn.argument(),
-                "--capacity",
-            ])
-            .arg(self.capacity.to_string())
+            .args(["remote-control", "--spawn", self.spawn.argument()])
+            .args(
+                self.capacity
+                    .map(|capacity| ["--capacity".to_owned(), capacity.to_string()])
+                    .into_iter()
+                    .flatten(),
+            )
             .arg("--permission-mode")
             .arg(&self.permission_mode)
             .arg("--debug-file")
@@ -1204,7 +1208,7 @@ impl ProcessGroup {
     }
 
     /// The leader's live children are its sessions, and the whole group counts for memory.
-    fn usage(&self, capacity: u32) -> ServerUsage {
+    fn usage(&self, capacity: Option<u32>) -> ServerUsage {
         let mut usage = ServerUsage {
             sessions: 0,
             capacity,
@@ -1677,7 +1681,7 @@ mod tests {
             spawn: SpawnMode::SameDir,
             log: ServerLog(directory.join("logs/projects")),
             permission_mode: "auto".to_owned(),
-            capacity: 4,
+            capacity: Some(4),
         }
     }
 
@@ -1691,6 +1695,22 @@ mod tests {
         let command = launch.command();
         let arguments: Vec<_> = command.as_std().get_args().take(3).collect();
         assert_eq!(arguments, ["remote-control", "--spawn", "worktree"]);
+    }
+
+    #[test]
+    fn claude_code_picks_the_capacity_when_none_is_set() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let launch = Launch {
+            capacity: None,
+            ..launch(directory.path())
+        };
+        let command = launch.command();
+        assert!(
+            !command
+                .as_std()
+                .get_args()
+                .any(|argument| argument == "--capacity")
+        );
     }
 
     #[test]
@@ -1918,7 +1938,7 @@ mod tests {
         assert!(updated.is_update_of(&running));
         assert!(!running.is_update_of(&running));
         let resized = Launch {
-            capacity: 8,
+            capacity: Some(8),
             ..updated.clone()
         };
         assert!(!resized.is_update_of(&running));
@@ -1929,7 +1949,7 @@ mod tests {
         let usage = |sessions| {
             Some(ServerUsage {
                 sessions,
-                capacity: 4,
+                capacity: Some(4),
                 memory_bytes: 1,
             })
         };
@@ -2063,16 +2083,16 @@ mod tests {
         let deadline = Instant::now()
             .checked_add(Duration::from_secs(5))
             .expect("the deadline fits");
-        while group.usage(4).sessions < 2 {
+        while group.usage(Some(4)).sessions < 2 {
             assert!(Instant::now() < deadline, "the group did not start");
             sleep(Duration::from_millis(20)).await;
         }
-        let usage = group.usage(4);
-        assert_eq!((usage.sessions, usage.capacity), (2, 4));
+        let usage = group.usage(Some(4));
+        assert_eq!((usage.sessions, usage.capacity), (2, Some(4)));
         assert!(usage.memory_bytes > 0);
 
         group.terminate(&mut leader).await;
-        assert_eq!(group.usage(4).memory_bytes, 0);
+        assert_eq!(group.usage(Some(4)).memory_bytes, 0);
     }
 
     #[tokio::test]

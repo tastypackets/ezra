@@ -16,7 +16,8 @@ export const SETTINGS_DESCRIPTIONS = {
   show_permission_modes: "Show permission modes",
   capacity: "Sessions per folder",
   capacity_hint: "Each session is its own Claude Code process, about 150 to 300 MB.",
-  capacity_range: "Enter a number from 1 to 32.",
+  capacity_default: "Claude Code's default",
+  capacity_range: "Enter a number from 1 to 32, or leave it empty.",
   save: "Save",
   saved: "Claude Code settings saved.",
 } as const;

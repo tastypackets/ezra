@@ -137,7 +137,7 @@ mod tests {
             RemoteControlSettings {
                 enabled: false,
                 permission_mode: "plan".to_owned(),
-                capacity: 2,
+                capacity: Some(2),
                 serve_repositories: true,
             }
         );

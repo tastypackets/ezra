@@ -2058,10 +2058,13 @@
         ],
         "properties": {
           "capacity": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The most sessions each server runs at once, from 1 to 32.",
-            "default": 4,
+            "description": "The most sessions each server runs at once, from 1 to 32. Absent uses Claude Code's\ndefault.",
+            "default": null,
             "maximum": 32,
             "minimum": 1
           },
@@ -2208,14 +2211,16 @@
         "description": "What a running server and its sessions use.",
         "required": [
           "sessions",
-          "capacity",
           "memory_bytes"
         ],
         "properties": {
           "capacity": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32",
-            "description": "The most sessions the server runs at once.",
+            "description": "The most sessions the server runs at once, absent when Claude Code's default applies.",
             "minimum": 0
           },
           "memory_bytes": {

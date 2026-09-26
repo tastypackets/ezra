@@ -176,7 +176,7 @@ export function ClaudeSettingsCard() {
                   name="remote_control.capacity"
                   validators={{
                     onChange: ({ value }) =>
-                      Number.isInteger(value) && value >= 1 && value <= 32
+                      value == null || (Number.isInteger(value) && value >= 1 && value <= 32)
                         ? undefined
                         : SETTINGS_DESCRIPTIONS.capacity_range,
                   }}
@@ -195,8 +195,13 @@ export function ClaudeSettingsCard() {
                           min={1}
                           max={32}
                           name={field.name}
-                          value={Number.isNaN(field.state.value) ? "" : field.state.value}
-                          onChange={(event) => field.handleChange(event.target.valueAsNumber)}
+                          placeholder={SETTINGS_DESCRIPTIONS.capacity_default}
+                          value={field.state.value ?? ""}
+                          onChange={(event) =>
+                            field.handleChange(
+                              event.target.value === "" ? null : event.target.valueAsNumber,
+                            )
+                          }
                           onBlur={field.handleBlur}
                           aria-invalid={Boolean(error)}
                           aria-describedby={
