@@ -80,6 +80,7 @@ apt-get install --yes --no-install-recommends \
     rsync \
     sed \
     strace \
+    sudo-rs \
     tar \
     time \
     tini \

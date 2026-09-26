@@ -2,58 +2,11 @@
 //! Build the image first, then run: `cargo test -- --ignored`
 //! (set `AGENT_BOX_TEST_IMAGE` to test an image other than `agent-box:dev`).
 
-use std::process::{Command, Output};
+mod common;
+
 use std::time::{Duration, Instant};
 
-fn image_name() -> String {
-    std::env::var("AGENT_BOX_TEST_IMAGE").unwrap_or_else(|_| "agent-box:dev".to_owned())
-}
-
-fn docker(arguments: &[&str]) -> Output {
-    Command::new("docker")
-        .args(arguments)
-        .output()
-        .expect("docker can be executed")
-}
-
-fn run_in_image(docker_options: &[&str], container_command: &[&str]) -> Output {
-    let image = image_name();
-    let mut arguments = vec!["run", "--rm"];
-    arguments.extend_from_slice(docker_options);
-    arguments.push(&image);
-    arguments.extend_from_slice(container_command);
-    docker(&arguments)
-}
-
-fn stdout_of(output: &Output) -> String {
-    assert!(
-        output.status.success(),
-        "container failed with {}: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
-}
-
-fn stderr_of(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).trim().to_owned()
-}
-
-fn unique_name(purpose: &str) -> String {
-    format!("agent-box-test-{purpose}-{}", std::process::id())
-}
-
-/// Removes a Docker container or volume created by a test, even if the test panics.
-struct DockerResource {
-    kind: &'static str,
-    name: String,
-}
-
-impl Drop for DockerResource {
-    fn drop(&mut self) {
-        docker(&[self.kind, "rm", "--force", &self.name]);
-    }
-}
+use common::{DockerResource, docker, process_status_field, run_in_image, stderr_of, stdout_of};
 
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
@@ -93,13 +46,12 @@ fn operator_home_is_respected() {
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn no_capabilities_remain() {
-    let status = stdout_of(&run_in_image(&[], &["cat", "/proc/self/status"]));
     for capability_set in ["CapInh", "CapPrm", "CapEff", "CapAmb"] {
-        let line = status
-            .lines()
-            .find(|line| line.starts_with(capability_set))
-            .unwrap_or_else(|| panic!("{capability_set} missing from /proc/self/status"));
-        assert!(line.ends_with("0000000000000000"), "{line}");
+        assert_eq!(
+            process_status_field(&[], capability_set),
+            "0000000000000000",
+            "{capability_set}"
+        );
     }
 }
 
@@ -155,21 +107,7 @@ fn missing_command_exits_127() {
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn docker_stop_delivers_sigterm_to_the_command() {
-    let container = DockerResource {
-        kind: "container",
-        name: unique_name("stop"),
-    };
-    let image = image_name();
-    let started = docker(&[
-        "run",
-        "--detach",
-        "--name",
-        &container.name,
-        &image,
-        "sleep",
-        "infinity",
-    ]);
-    assert!(started.status.success(), "{}", stderr_of(&started));
+    let container = DockerResource::start_container("stop", &[], &["sleep", "infinity"]);
 
     let stop_started_at = Instant::now();
     assert!(
@@ -227,10 +165,7 @@ fn read_only_root_filesystem_starts() {
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn fresh_named_volume_at_config_is_writable() {
-    let volume = DockerResource {
-        kind: "volume",
-        name: unique_name("config"),
-    };
+    let volume = DockerResource::volume("config");
     let mount = format!("{}:/config", volume.name);
     assert!(
         run_in_image(&["--volume", &mount], &["test", "-w", "/config"])

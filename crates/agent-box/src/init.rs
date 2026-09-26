@@ -3,6 +3,7 @@ mod exec;
 mod groups;
 mod privileges;
 mod stdio;
+mod sudo;
 
 use std::env;
 use std::ffi::{NulError, OsStr, OsString};
@@ -13,6 +14,7 @@ use nix::errno::Errno;
 use nix::unistd::{AccessFlags, Uid, User, access};
 
 use environment::{AccountDetails, EnvironmentOverride};
+use sudo::{SUDO_POLICY_VARIABLE, SudoPolicy};
 
 const AGENT_USER_NAME: &str = "dev";
 const DIRECTORIES_AGENT_MUST_WRITE: [&str; 2] = ["/config", "/projects"];
@@ -36,6 +38,10 @@ pub enum InitError {
     PrivilegesStillRecoverable,
     #[error("could not clear the inheritable capability set: {0}")]
     ClearCapabilities(#[from] caps::errors::CapsError),
+    #[error("{SUDO_POLICY_VARIABLE} must be \"full\" or \"off\" (unset means off), not {0:?}")]
+    InvalidSudoPolicy(String),
+    #[error("could not set no_new_privs: {0}")]
+    NoNewPrivileges(Errno),
     #[error("could not prepare {path} as HOME: {source}")]
     TemporaryHome {
         path: String,
@@ -56,16 +62,19 @@ pub fn run(program: &OsStr, arguments: &[OsString]) -> ExitCode {
 }
 
 fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
+    let sudo_policy =
+        SudoPolicy::from_environment_value(env::var_os(SUDO_POLICY_VARIABLE).as_deref())?;
     let environment_overrides = if Uid::effective().is_root() {
-        become_agent_user()?
+        become_agent_user(sudo_policy)?
     } else {
-        adopt_invoking_user()?
+        adopt_invoking_user(sudo_policy)?
     };
+    sudo::restrict_process_tree(sudo_policy)?;
     warn_about_unwritable_directories();
     Ok(environment_overrides)
 }
 
-fn become_agent_user() -> Result<Vec<EnvironmentOverride>, InitError> {
+fn become_agent_user(sudo_policy: SudoPolicy) -> Result<Vec<EnvironmentOverride>, InitError> {
     let agent = look_up_user_by_name(AGENT_USER_NAME)?.ok_or(InitError::AgentUserMissing)?;
     if agent.uid.is_root() || agent.gid.as_raw() == 0 {
         return Err(InitError::AgentUserIsPrivileged);
@@ -77,11 +86,12 @@ fn become_agent_user() -> Result<Vec<EnvironmentOverride>, InitError> {
         env::var_os("HOME").as_deref(),
         &AccountDetails::from(&agent),
     );
+    sudo::configure_sudoers(sudo_policy, &agent.name);
     privileges::drop_to(&agent, &supplementary_groups)?;
     Ok(environment_overrides)
 }
 
-fn adopt_invoking_user() -> Result<Vec<EnvironmentOverride>, InitError> {
+fn adopt_invoking_user(sudo_policy: SudoPolicy) -> Result<Vec<EnvironmentOverride>, InitError> {
     let uid = Uid::effective();
     let invoking_user = User::from_uid(uid).map_err(|source| InitError::Lookup {
         subject: format!("uid {uid}"),
@@ -101,6 +111,11 @@ fn adopt_invoking_user() -> Result<Vec<EnvironmentOverride>, InitError> {
         None => Vec::new(),
     };
 
+    if sudo_policy == SudoPolicy::Full {
+        tracing::info!(
+            "{SUDO_POLICY_VARIABLE}=full has no effect when the container starts as uid {uid}"
+        );
+    }
     privileges::clear_inheritable_capabilities()?;
     Ok(environment_overrides)
 }
