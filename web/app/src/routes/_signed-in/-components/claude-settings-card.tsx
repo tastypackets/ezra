@@ -29,6 +29,7 @@ import { AGENT_NAMES } from "@/content/agents";
 import { PERMISSION_MODES, RELEASE_CHANNELS, SETTINGS_DESCRIPTIONS } from "@/content/settings";
 import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions } from "@/queries/agent-queries";
+import { foldersQueryOptions } from "@/queries/folder-queries";
 
 const CHANNEL_ORDER: readonly ReleaseChannel[] = ["latest", "stable"];
 
@@ -38,8 +39,8 @@ export function ClaudeSettingsCard() {
   const ids = {
     enabled: useId(),
     enabledLabel: useId(),
-    serveFolders: useId(),
-    serveFoldersLabel: useId(),
+    serveRepositories: useId(),
+    serveRepositoriesLabel: useId(),
     permissionMode: useId(),
     capacity: useId(),
   };
@@ -49,6 +50,7 @@ export function ClaudeSettingsCard() {
     onSuccess: (saved) => {
       queryClient.setQueryData(getClaudeSettingsOptions().queryKey, saved);
       void queryClient.invalidateQueries({ queryKey: agentsQueryOptions.queryKey });
+      void queryClient.invalidateQueries({ queryKey: foldersQueryOptions.queryKey });
       toastManager.add({ title: SETTINGS_DESCRIPTIONS.saved });
     },
   });
@@ -100,21 +102,21 @@ export function ClaudeSettingsCard() {
                   </Field>
                 )}
               </form.Field>
-              <form.Field name="remote_control.serve_folders">
+              <form.Field name="remote_control.serve_repositories">
                 {(field) => (
                   <Field orientation="horizontal">
                     <Switch
-                      id={ids.serveFolders}
-                      aria-labelledby={ids.serveFoldersLabel}
+                      id={ids.serveRepositories}
+                      aria-labelledby={ids.serveRepositoriesLabel}
                       checked={field.state.value}
                       onCheckedChange={field.handleChange}
                     />
                     <FieldContent>
-                      <FieldLabel id={ids.serveFoldersLabel} htmlFor={ids.serveFolders}>
-                        {SETTINGS_DESCRIPTIONS.serve_folders}
+                      <FieldLabel id={ids.serveRepositoriesLabel} htmlFor={ids.serveRepositories}>
+                        {SETTINGS_DESCRIPTIONS.serve_repositories}
                       </FieldLabel>
                       <FieldDescription>
-                        {SETTINGS_DESCRIPTIONS.serve_folders_hint}
+                        {SETTINGS_DESCRIPTIONS.serve_repositories_hint}
                       </FieldDescription>
                     </FieldContent>
                   </Field>

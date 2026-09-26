@@ -65,7 +65,7 @@ mod tests {
 
     use super::super::test_support::{ResponseExt, TestManager};
     use super::*;
-    use crate::manager::folders::{Folder, ProjectsDirectory};
+    use crate::manager::folders::{Folder, GitDetails, ProjectsDirectory};
 
     #[tokio::test]
     async fn folders_need_a_login() {
@@ -90,6 +90,9 @@ mod tests {
 
         let ProjectsDirectory(projects) = &manager.state.projects;
         fs::create_dir_all(projects.join("app")).expect("folder is created");
+        fs::create_dir_all(projects.join("repo/.git")).expect("repository is created");
+        fs::write(projects.join("repo/.git/HEAD"), "ref: refs/heads/main\n")
+            .expect("HEAD is written");
         let folders: Vec<FolderStatus> = manager
             .get("/api/v1/folders", Some(&cookie))
             .await
@@ -97,14 +100,27 @@ mod tests {
             .await;
         assert_eq!(
             folders,
-            [FolderStatus {
-                folder: Folder {
-                    name: "app".to_owned(),
-                    git: None,
+            [
+                FolderStatus {
+                    folder: Folder {
+                        name: "app".to_owned(),
+                        git: None,
+                    },
+                    serve: false,
+                    remote_control: None,
                 },
-                serve: false,
-                remote_control: None,
-            }]
+                FolderStatus {
+                    folder: Folder {
+                        name: "repo".to_owned(),
+                        git: Some(GitDetails {
+                            branch: Some("main".to_owned()),
+                            repository: None,
+                        }),
+                    },
+                    serve: true,
+                    remote_control: None,
+                },
+            ]
         );
     }
 
@@ -123,7 +139,8 @@ mod tests {
             )
             .await;
         assert_eq!(chosen.status(), StatusCode::NO_CONTENT);
-        assert!(manager.state.serves_folder("app").await);
+        let app = manager.state.projects.find("app").expect("folder is found");
+        assert!(manager.state.serves_folder(&app).await);
 
         let unknown = manager
             .put(

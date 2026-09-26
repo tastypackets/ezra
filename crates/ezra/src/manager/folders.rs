@@ -88,6 +88,17 @@ impl ProjectsDirectory {
         self.0.join(name)
     }
 
+    /// The top-level folder called `name`, when there is one.
+    pub fn find(&self, name: &str) -> Option<Folder> {
+        let path = self.folder(name);
+        fs::symlink_metadata(&path)
+            .is_ok_and(|metadata| metadata.is_dir())
+            .then(|| Folder {
+                name: name.to_owned(),
+                git: GitCheckout::in_folder(&path).details(),
+            })
+    }
+
     /// Top-level folders sorted by name. Hidden folders, and ones that vanish or cannot be read
     /// while listing, are left out.
     pub fn folders(&self) -> io::Result<Vec<Folder>> {
@@ -351,7 +362,7 @@ impl AppState {
         let mut statuses = Vec::new();
         for folder in self.folders().await? {
             statuses.push(FolderStatus {
-                serve: self.serves_folder(&folder.name).await,
+                serve: self.serves_folder(&folder).await,
                 remote_control: self
                     .remote_control
                     .status_of(&self.projects.folder(&folder.name)),

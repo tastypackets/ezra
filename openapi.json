@@ -1132,7 +1132,7 @@
           "enabled",
           "permission_mode",
           "capacity",
-          "serve_folders"
+          "serve_repositories"
         ],
         "properties": {
           "capacity": {
@@ -1153,10 +1153,10 @@
             "description": "The permission mode for sessions started from the Claude app, such as `auto`.",
             "default": "auto"
           },
-          "serve_folders": {
+          "serve_repositories": {
             "type": "boolean",
-            "description": "Serve folders in /projects that have no choice of their own.",
-            "default": false
+            "description": "Serve the repositories in /projects that have no choice of their own.",
+            "default": true
           }
         }
       },

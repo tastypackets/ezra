@@ -20,6 +20,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval, sleep, timeout, timeout
 use utoipa::ToSchema;
 
 use super::agents::Agent;
+use super::folders::Folder;
 use super::login::{AgentCli, StrExt};
 use super::state::AppState;
 
@@ -57,9 +58,9 @@ pub struct RemoteControlSettings {
     /// The most sessions each server runs at once, from 1 to 32.
     #[schema(required = true, minimum = 1, maximum = 32)]
     pub capacity: u32,
-    /// Serve folders in /projects that have no choice of their own.
+    /// Serve the repositories in /projects that have no choice of their own.
     #[schema(required = true)]
-    pub serve_folders: bool,
+    pub serve_repositories: bool,
 }
 
 impl RemoteControlSettings {
@@ -89,7 +90,7 @@ impl Default for RemoteControlSettings {
             enabled: true,
             permission_mode: "auto".to_owned(),
             capacity: 4,
-            serve_folders: false,
+            serve_repositories: true,
         }
     }
 }
@@ -450,14 +451,14 @@ impl AppState {
     }
 
     /// Whether the folder is served, by its own choice or by default.
-    pub async fn serves_folder(&self, name: &str) -> bool {
+    pub async fn serves_folder(&self, folder: &Folder) -> bool {
         let settings = self.settings.lock().await;
         let claude = &settings.agents.claude;
         claude
             .folders
-            .get(name)
+            .get(&folder.name)
             .copied()
-            .unwrap_or(claude.remote_control.serve_folders)
+            .unwrap_or(claude.remote_control.serve_repositories && folder.git.is_some())
     }
 
     async fn served_folder_names(&self) -> Vec<String> {
@@ -477,7 +478,7 @@ impl AppState {
         };
         let mut served = Vec::new();
         for folder in folders {
-            if self.serves_folder(&folder.name).await {
+            if self.serves_folder(&folder).await {
                 served.push(folder.name);
             }
         }
@@ -568,11 +569,13 @@ impl AppState {
         if !settings.enabled {
             return Wanted::Off;
         }
-        if let Served::Folder(name) = served
-            && (!self.serves_folder(name).await
-                || !fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.is_dir()))
-        {
-            return Wanted::Off;
+        if let Served::Folder(name) = served {
+            let Some(folder) = self.projects.find(name) else {
+                return Wanted::Off;
+            };
+            if !self.serves_folder(&folder).await {
+                return Wanted::Off;
+            }
         }
         if AgentCli::installed(Agent::Claude, &self.install_paths).is_err() {
             return Wanted::Waiting;
