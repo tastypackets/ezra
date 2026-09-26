@@ -68,7 +68,7 @@ test("Remote Control settings are saved and shown on the dashboard", async ({ pa
   const claude = card(page, "Claude Code");
   const serve = claude.getByRole("switch", { name: "Serve to the Claude app" });
   const mode = page.getByRole("combobox", { name: "Permission mode" });
-  const capacity = claude.getByLabel("Sessions at once");
+  const capacity = claude.getByLabel("Sessions per folder");
 
   await serve.setChecked(false);
   await mode.fill("plan");
@@ -99,7 +99,7 @@ test("Remote Control settings are saved and shown on the dashboard", async ({ pa
 test("a setting Claude cannot take is refused next to its field", async ({ page }) => {
   await page.goto("./settings");
   const claude = card(page, "Claude Code");
-  const capacity = claude.getByRole("spinbutton", { name: "Sessions at once" });
+  const capacity = claude.getByRole("spinbutton", { name: "Sessions per folder" });
   await capacity.fill("40");
   await expect(claude.getByText("Enter a number from 1 to 32.")).toBeVisible();
   await expect(capacity).toHaveAccessibleDescription(

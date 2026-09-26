@@ -14,7 +14,7 @@ export const SETTINGS_DESCRIPTIONS = {
   permission_mode_hint: "Sessions started from the Claude app keep this mode.",
   permission_mode_word: "Enter one word, such as auto.",
   show_permission_modes: "Show permission modes",
-  capacity: "Sessions at once",
+  capacity: "Sessions per folder",
   capacity_hint: "Each session is its own Claude Code process, about 150 to 300 MB.",
   capacity_range: "Enter a number from 1 to 32.",
   save: "Save",
