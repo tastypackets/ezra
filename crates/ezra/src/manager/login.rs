@@ -225,7 +225,7 @@ impl LoginProcess {
                 self.prompt = Some(prompt.clone());
                 return Some(prompt);
             }
-            if self.has_finished() {
+            if self.outcome().is_some() {
                 return None;
             }
             sleep(PROMPT_POLL_INTERVAL).await;
@@ -234,10 +234,6 @@ impl LoginProcess {
 
     pub fn prompt(&self) -> Option<&LoginPrompt> {
         self.prompt.as_ref()
-    }
-
-    pub fn has_finished(&mut self) -> bool {
-        self.outcome().is_some()
     }
 
     /// `None` while it runs, then whether it succeeded.

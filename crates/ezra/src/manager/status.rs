@@ -49,7 +49,7 @@ impl AgentStatus {
             let mut logins = state.logins.lock().await;
             if logins
                 .get_mut(&agent)
-                .is_some_and(|login| login.has_finished())
+                .is_some_and(|login| login.outcome().is_some())
             {
                 logins.remove(&agent);
             }
