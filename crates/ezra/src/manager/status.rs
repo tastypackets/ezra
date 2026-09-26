@@ -3,7 +3,7 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 use super::agents::{Agent, DownloadProgress, VersionExt};
-use super::login::{ClaudeCredentials, LoginPrompt};
+use super::login::LoginPrompt;
 use super::state::AppState;
 
 /// One agent's install and sign-in state.
@@ -73,13 +73,7 @@ impl AgentStatus {
             _ => None,
         };
         let sign_in = state.agent_checks.sign_in(agent).unwrap_or_default();
-        let config_directory = state.install_paths.config_directory(agent);
-        let sign_in_ends_at = match (agent, config_directory) {
-            (Agent::Claude, Some(directory)) if sign_in.logged_in => {
-                ClaudeCredentials::read(directory).sign_in_ends_at()
-            }
-            _ => None,
-        };
+        let sign_in_ends_at = state.agent_checks.sign_in_ends_at(agent);
         Self {
             agent,
             configured,

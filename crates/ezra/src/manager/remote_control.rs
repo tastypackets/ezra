@@ -1289,7 +1289,7 @@ mod tests {
     use std::ops::Range;
     use std::os::unix::fs::symlink;
 
-    use futures_util::StreamExt;
+    use futures_util::{Stream, StreamExt};
 
     use super::*;
     use crate::manager::api::test_support::TestManager;
@@ -1335,6 +1335,17 @@ mod tests {
         let mut state = manager.state.clone();
         state.projects = ProjectsDirectory(served);
         state
+    }
+
+    /// The topics published until nothing more arrives for 100 ms.
+    async fn published(events: &mut (impl Stream<Item = ManagerEvent> + Unpin)) -> Vec<Topic> {
+        let mut topics = Vec::new();
+        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
+            if let ManagerEvent::Changed { topic, .. } = event {
+                topics.push(topic);
+            }
+        }
+        topics
     }
 
     async fn wait_for(state: &AppState, wanted: ServerState) -> RemoteControlStatus {
@@ -2292,12 +2303,7 @@ esac"#,
             .await
             .expect("the choice is saved");
         wait_in(&state, &app, ServerState::Waiting).await;
-        let mut published = Vec::new();
-        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
-            if let ManagerEvent::Changed { topic, .. } = event {
-                published.push(topic);
-            }
-        }
+        let published = published(&mut events).await;
         assert!(published.contains(&Topic::RemoteControl), "{published:?}");
 
         state.remote_control.begin_shut_down();
@@ -2347,12 +2353,7 @@ esac"#,
             sleep(Duration::from_millis(50)).await;
         }
 
-        let mut published = Vec::new();
-        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
-            if let ManagerEvent::Changed { topic, .. } = event {
-                published.push(topic);
-            }
-        }
+        let published = published(&mut events).await;
         for expected in [Topic::Folders, Topic::RemoteControl] {
             assert!(
                 published.contains(&expected),

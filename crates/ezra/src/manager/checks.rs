@@ -2,12 +2,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use time::OffsetDateTime;
 use tokio::sync::{Mutex, watch};
 use tokio::time::{Instant, sleep, timeout};
 
 use super::agents::{Agent, InstallPaths};
 use super::events::{Events, Topic};
-use super::login::{AgentCli, SignInStatus};
+use super::login::{AgentCli, ClaudeCredentials, SignInStatus};
 use crate::path_ext::PathExt;
 
 const SIGN_IN_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -25,6 +26,7 @@ struct AgentCheck {
     /// When the check that gave the last answer started, locked while the CLI runs.
     answered_check_started: Mutex<Option<Instant>>,
     sign_in: watch::Sender<Option<SignInStatus>>,
+    sign_in_ends_at: watch::Sender<Option<OffsetDateTime>>,
     config_bytes: watch::Sender<Option<u64>>,
 }
 
@@ -33,6 +35,7 @@ impl AgentCheck {
         Self {
             answered_check_started: Mutex::new(None),
             sign_in: watch::Sender::new(None),
+            sign_in_ends_at: watch::Sender::new(None),
             config_bytes: watch::Sender::new(None),
         }
     }
@@ -56,6 +59,11 @@ impl AgentChecks {
 
     pub fn watch_sign_in(&self, agent: Agent) -> watch::Receiver<Option<SignInStatus>> {
         self.of(agent).sign_in.subscribe()
+    }
+
+    /// When a signed-in Claude Code stops working without a new sign-in, when its credentials say.
+    pub fn sign_in_ends_at(&self, agent: Agent) -> Option<OffsetDateTime> {
+        *self.of(agent).sign_in_ends_at.borrow()
     }
 
     /// Absent until measured, or when the directory cannot be read.
@@ -90,7 +98,14 @@ impl AgentChecks {
             return;
         };
         *answered_check_started = Some(started);
+        let ends_at = match (agent, self.install_paths.config_directory(agent)) {
+            (Agent::Claude, Some(directory)) if answer.logged_in => {
+                ClaudeCredentials::read(directory).sign_in_ends_at()
+            }
+            _ => None,
+        };
         self.store(&check.sign_in, Some(answer));
+        self.store(&check.sign_in_ends_at, ends_at);
     }
 
     pub async fn measure_config(&self, agent: Agent) {
@@ -167,6 +182,44 @@ mod tests {
             }
         }
         topics
+    }
+
+    #[tokio::test]
+    async fn a_later_sign_in_end_is_published() {
+        let manager = TestManager::new();
+        let checks = &manager.state.agent_checks;
+        manager.install_fake_cli(Agent::Claude, CLAUDE_SIGNED_IN);
+        let credentials = manager
+            .state
+            .install_paths
+            .config_directory(Agent::Claude)
+            .expect("Claude has a config directory")
+            .join(".credentials.json");
+        fs::create_dir_all(credentials.parent().expect("the file has a directory"))
+            .expect("config directory is created");
+        let ending_at = |milliseconds: i64| {
+            fs::write(
+                &credentials,
+                format!(r#"{{"claudeAiOauth":{{"refreshTokenExpiresAt":{milliseconds}}}}}"#),
+            )
+            .expect("credentials are written");
+        };
+        ending_at(1_790_380_800_000);
+        checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
+        let mut events = Box::pin(manager.state.events.stream());
+        events.next().await;
+
+        checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
+        assert_eq!(published(&mut events).await, []);
+        ending_at(1_790_467_200_000);
+        checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
+        assert_eq!(published(&mut events).await, [Topic::Agents]);
+        assert_eq!(
+            checks
+                .sign_in_ends_at(Agent::Claude)
+                .map(OffsetDateTime::unix_timestamp),
+            Some(1_790_467_200)
+        );
     }
 
     #[tokio::test]
