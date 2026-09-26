@@ -1,6 +1,6 @@
 mod agents;
 mod login;
-mod session;
+pub mod session;
 #[cfg(test)]
 mod test_support;
 
@@ -12,6 +12,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::CookieJar;
 use serde::Serialize;
+use utoipa::{OpenApi, ToSchema};
 
 use super::auth::SESSION_COOKIE;
 use super::settings::SettingsError;
@@ -88,7 +89,52 @@ fn internal(error: impl std::fmt::Display) -> ApiError {
     ApiError::Internal(error.to_string())
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
+/// Why a request failed.
+#[derive(Serialize, ToSchema)]
+pub struct ErrorBody {
     error: String,
+}
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "EZ Remote Agent",
+        description = "Installs, signs in and runs coding agents."
+    ),
+    paths(
+        session::status,
+        session::set_up_password,
+        session::log_in,
+        session::log_out,
+        agents::list,
+        agents::install,
+        login::start,
+        login::submit_code,
+        login::log_out,
+    )
+)]
+pub struct ApiDoc;
+
+impl ApiDoc {
+    /// The API description the web client is generated from, as pretty JSON with a trailing newline.
+    pub fn to_json() -> Result<String, serde_json::Error> {
+        let mut json = Self::openapi().to_pretty_json()?;
+        json.push('\n');
+        Ok(json)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openapi_spec_is_fresh() {
+        let committed = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../openapi.json"));
+        let generated = ApiDoc::to_json().expect("the API description serializes");
+        assert!(
+            generated == committed,
+            "openapi.json is out of date, run `mise run generate-schema`"
+        );
+    }
 }

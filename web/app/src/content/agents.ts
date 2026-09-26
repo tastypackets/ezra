@@ -1,0 +1,41 @@
+import type { Agent } from "@ezra/client";
+
+export const AGENT_NAMES: Record<Agent, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+};
+
+export const AGENTS_DESCRIPTIONS = {
+  title: "Agents",
+  description: "Each agent's install and sign-in state.",
+  column_agent: "Agent",
+  column_status: "Status",
+  column_version: "Version",
+  column_account: "Account",
+  column_sessions: "Sessions",
+  column_saved_data: "Saved data",
+  column_actions: "Actions",
+  saved_data_hint: "Sign-in, settings and sessions the CLI keeps on /config, not the CLI itself",
+  unavailable: "unavailable",
+  status_not_installed: "Not installed",
+  status_signed_out: "Signed out",
+  status_signing_in: "Signing in",
+  status_signed_in: "Signed in",
+  install: "Install",
+  update: "Update",
+  sign_in: "Sign in",
+  sign_out: "Sign out",
+  sign_in_title: "Sign in to",
+  sign_in_description: "Finish these steps in any browser.",
+  step_open: "Open the sign-in page",
+  step_enter_code: "Enter this code",
+  step_paste_code: "Paste the code shown after you approve",
+  code_placeholder: "Code",
+  code_label: "Code",
+  finish_sign_in: "Finish sign-in",
+  waiting_for_website: "Waiting for you to finish on the website",
+  start_over: "Start over",
+  copy: "Copy",
+  copied: "Copied",
+  action_failed: "The request failed.",
+} as const;

@@ -3,7 +3,31 @@ rust = { version = "1.98.1", components = "clippy,rustfmt", targets = "x86_64-un
 node = "26"
 pnpm = "12.6.0"
 
-[tasks.ui]
-description = "Type-check and build the manager page assets into ui/dist"
-dir = "ui"
-run = ["pnpm install --frozen-lockfile", "pnpm build"]
+[tasks.generate-schema]
+description = "Regenerate the committed openapi.json from the Rust API"
+run = "cargo run --locked --quiet -- openapi openapi.json"
+
+[tasks."web:install"]
+description = "Install the web workspace dependencies"
+dir = "web"
+run = "pnpm install --frozen-lockfile"
+
+[tasks."web:generate"]
+description = "Generate the TypeScript API client from openapi.json"
+dir = "web"
+run = "pnpm generate"
+
+[tasks."web:build"]
+description = "Type-check and build the manager web app into web/app/dist"
+dir = "web"
+run = "pnpm build"
+
+[tasks."web:lint"]
+description = "Lint and format-check the web app"
+dir = "web"
+run = "pnpm lint"
+
+[tasks."web:e2e"]
+description = "Run the Playwright tests against the ezra:dev image"
+dir = "web"
+run = "pnpm test:e2e"

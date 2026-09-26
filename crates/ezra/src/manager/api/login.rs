@@ -3,7 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 
-use super::{ApiError, AppState, Session};
+use utoipa::ToSchema;
+
+use super::{ApiError, AppState, ErrorBody, Session};
 use crate::manager::agents::Agent;
 use crate::manager::login::{AgentCli, LoginError, LoginPrompt};
 
@@ -19,12 +21,26 @@ impl From<LoginError> for ApiError {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CodeBody {
     code: String,
 }
 
-/// Starts signing in, replacing any unfinished attempt, and returns the link to open.
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{agent}/login",
+    operation_id = "startAgentLogin",
+    tag = "agents",
+    summary = "Start signing in",
+    description = "Starts the agent's sign-in, replacing any unfinished one, and returns the link to open.",
+    params(("agent" = Agent, Path, description = "The agent")),
+    responses(
+        (status = 200, description = "Sign-in started", body = LoginPrompt),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "The agent is not installed", body = ErrorBody),
+        (status = 502, description = "The agent did not show a sign-in link", body = ErrorBody)
+    )
+)]
 pub async fn start(
     _: Session,
     State(state): State<AppState>,
@@ -38,7 +54,23 @@ pub async fn start(
     Ok(Json(prompt))
 }
 
-/// Hands the code Claude shows after website sign-in to `claude auth login`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{agent}/login/code",
+    operation_id = "submitAgentLoginCode",
+    tag = "agents",
+    summary = "Finish Claude sign-in",
+    description = "Passes the code Claude shows after website sign-in to the waiting sign-in.",
+    params(("agent" = Agent, Path, description = "The agent, only claude takes a code")),
+    request_body = CodeBody,
+    responses(
+        (status = 204, description = "Signed in"),
+        (status = 400, description = "The agent does not take a code", body = ErrorBody),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "No sign-in is in progress", body = ErrorBody),
+        (status = 502, description = "The sign-in did not finish", body = ErrorBody)
+    )
+)]
 pub async fn submit_code(
     _: Session,
     State(state): State<AppState>,
@@ -59,6 +91,21 @@ pub async fn submit_code(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{agent}/logout",
+    operation_id = "logOutAgent",
+    tag = "agents",
+    summary = "Sign the agent out",
+    description = "Signs the agent's CLI out of its account.",
+    params(("agent" = Agent, Path, description = "The agent")),
+    responses(
+        (status = 204, description = "Signed out"),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "The agent is not installed", body = ErrorBody),
+        (status = 502, description = "The CLI could not sign out", body = ErrorBody)
+    )
+)]
 pub async fn log_out(
     _: Session,
     State(state): State<AppState>,

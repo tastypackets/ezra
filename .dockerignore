@@ -2,5 +2,6 @@
 tmp
 target
 tests
-ui/node_modules
-ui/dist
+web/**/node_modules
+web/app/dist
+web/client/src

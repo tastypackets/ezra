@@ -1,0 +1,19 @@
+{
+  "name": "@ezra/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types.gen": "./src/types.gen.ts",
+    "./sdk.gen": "./src/sdk.gen.ts",
+    "./client.gen": "./src/client.gen.ts"
+  },
+  "scripts": {
+    "generate": "openapi-ts"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.0.0-next-20260824173136",
+    "typescript": "catalog:"
+  }
+}

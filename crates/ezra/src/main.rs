@@ -6,6 +6,7 @@ mod process_ext;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -27,6 +28,9 @@ enum Command {
     },
     /// Serve the manager API over HTTPS
     Manager,
+    /// Write the manager's OpenAPI description to OUTPUT
+    #[command(hide = true)]
+    Openapi { output: PathBuf },
 }
 
 fn main() -> ExitCode {
@@ -39,6 +43,7 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Init { program, arguments } => init::run(&program, &arguments),
         Command::Manager => manager::run(),
+        Command::Openapi { output } => manager::write_openapi(&output),
     }
 }
 

@@ -7,16 +7,20 @@ ARG RUST_VERSION=1.98.1
 ARG NODE_VERSION=26
 ARG PNPM_VERSION=12.6.0
 
-FROM node:${NODE_VERSION}-slim AS ezra-ui
+FROM node:${NODE_VERSION}-slim AS ezra-web
 
 ARG PNPM_VERSION
-WORKDIR /ui
+WORKDIR /src/web
 RUN npm install --global "pnpm@${PNPM_VERSION}"
-COPY ui/package.json ui/pnpm-lock.yaml ui/pnpm-workspace.yaml ./
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
-COPY ui/tsconfig.json ui/playwright.config.ts ./
-COPY ui/src ./src
-COPY ui/e2e ./e2e
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+COPY web/app/package.json app/
+COPY web/client/package.json client/
+COPY web/e2e/package.json e2e/
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter "@ezra/app..."
+COPY openapi.json /src/openapi.json
+COPY web/client/openapi-ts.config.ts client/
+COPY web/app app
 RUN pnpm build
 
 FROM rust:${RUST_VERSION}-slim-trixie AS ezra-build
@@ -35,7 +39,6 @@ EOF
 RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     --mount=type=bind,source=Cargo.lock,target=Cargo.lock \
     --mount=type=bind,source=crates,target=crates \
-    --mount=type=bind,from=ezra-ui,source=/ui/dist,target=ui/dist \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     <<'EOF'
@@ -231,6 +234,7 @@ ENV MISE_DATA_DIR=/config/mise \
     PATH=/home/dev/.local/bin:/config/mise/shims:/usr/local/share/ezra/shims:${PATH}
 
 COPY --from=ezra-build /out/ezra /usr/local/bin/ezra
+COPY --from=ezra-web /src/web/app/dist /usr/local/share/ezra/web
 
 EXPOSE 8443
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/ezra", "init", "--"]

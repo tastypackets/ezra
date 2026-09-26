@@ -1,0 +1,15 @@
+{
+  "name": "ezra-web",
+  "private": true,
+  "packageManager": "pnpm@12.6.0",
+  "scripts": {
+    "generate": "pnpm --filter @ezra/client generate",
+    "build": "pnpm generate && pnpm --filter @ezra/app build",
+    "lint": "pnpm --filter @ezra/app lint",
+    "format": "pnpm --filter @ezra/app format",
+    "test:e2e": "pnpm --filter @ezra/e2e test"
+  },
+  "devDependencies": {
+    "@tanstack/cli": "0.71.0"
+  }
+}

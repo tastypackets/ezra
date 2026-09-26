@@ -2,16 +2,17 @@ mod agents;
 mod api;
 mod auth;
 mod login;
-mod pages;
 mod settings;
 mod state;
 mod status;
 mod tls;
+mod web;
 
 use std::env;
+use std::fs;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -26,6 +27,7 @@ use agents::TlsVerification;
 const STATE_DIRECTORY: &str = "/config/ezra";
 const TLS_VERIFY_VARIABLE: &str = "EZRA_TLS_VERIFY";
 const DEFAULT_PORT: u16 = 8443;
+const DEFAULT_WEB_DIRECTORY: &str = "/usr/local/share/ezra/web";
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +57,7 @@ async fn serve() -> Result<(), ManagerError> {
     let ManagerOptions {
         port,
         tls_verification,
+        web_directory,
     } = ManagerOptions::from_environment()?;
     if tls_verification == TlsVerification::Off {
         tracing::warn!(
@@ -92,7 +95,7 @@ async fn serve() -> Result<(), ManagerError> {
         tls_verification,
     );
     tokio::spawn(state.clone().reinstall_configured_agents());
-    let app = api::router(state.clone()).merge(pages::router(state));
+    let app = api::router(state.clone()).merge(web::router(state, web_directory));
     axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
         .handle(handle)
         .serve(app.into_make_service())
@@ -107,6 +110,9 @@ struct ManagerOptions {
     port: u16,
     #[serde(rename = "tls_verify")]
     tls_verification: TlsVerification,
+    /// The built web app, served from disk.
+    #[serde(rename = "web_dir")]
+    web_directory: PathBuf,
 }
 
 impl Default for ManagerOptions {
@@ -114,6 +120,7 @@ impl Default for ManagerOptions {
         Self {
             port: DEFAULT_PORT,
             tls_verification: TlsVerification::default(),
+            web_directory: PathBuf::from(DEFAULT_WEB_DIRECTORY),
         }
     }
 }
@@ -138,6 +145,20 @@ impl HandleExt for Handle<SocketAddr> {
     }
 }
 
+/// Writes the API description the web client is generated from.
+pub fn write_openapi(output: &Path) -> ExitCode {
+    let written = api::ApiDoc::to_json()
+        .map_err(io::Error::other)
+        .and_then(|json| fs::write(output, json));
+    match written {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!("could not write {}: {error}", output.display());
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +175,7 @@ mod tests {
             ManagerOptions {
                 port: 8443,
                 tls_verification: TlsVerification::On,
+                web_directory: PathBuf::from("/usr/local/share/ezra/web"),
             }
         );
     }

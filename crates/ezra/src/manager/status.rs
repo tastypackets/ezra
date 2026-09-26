@@ -2,23 +2,29 @@ use std::io;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::agents::{Agent, DownloadProgress};
 use super::login::{LoginPrompt, SignInStatus};
 use super::state::AppState;
 use crate::path_ext::PathExt;
 
-/// Everything shown about one agent. Details read from the CLI or its files are `None`
-/// when they cannot be read, for example after a CLI changes how it stores sessions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One agent's install and sign-in state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct AgentStatus {
     pub agent: Agent,
+    /// Installed through the manager at least once.
     pub configured: bool,
+    /// Absent when the agent is not installed.
     pub installed_version: Option<String>,
     pub logged_in: bool,
+    /// The signed-in account as the CLI reports it, absent when unknown.
     pub account: Option<String>,
+    /// Present while a sign-in is waiting for the person signing in.
     pub login_prompt: Option<LoginPrompt>,
+    /// Saved sessions, absent when they cannot be counted.
     pub session_count: Option<u64>,
+    /// Bytes the agent keeps on /config, absent when they cannot be measured.
     pub config_disk_bytes: Option<u64>,
     /// Present while an install or update is downloading.
     pub install_progress: Option<DownloadProgress>,

@@ -4,32 +4,61 @@ use axum::http::StatusCode;
 use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, AppState, internal};
+use utoipa::ToSchema;
+
+use super::{ApiError, AppState, ErrorBody, internal};
 use crate::manager::auth::{HashedPassword, SESSION_COOKIE};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct SessionStatus {
-    claimed: bool,
-    authenticated: bool,
+    /// A password has been set.
+    pub claimed: bool,
+    /// This request carries a signed-in session.
+    pub authenticated: bool,
 }
 
-#[derive(Deserialize)]
+impl SessionStatus {
+    pub async fn of(state: &AppState, cookies: &CookieJar) -> Self {
+        Self {
+            claimed: state.settings.lock().await.manager.password_hash.is_some(),
+            authenticated: state
+                .is_session(cookies.get(SESSION_COOKIE).map(|cookie| cookie.value())),
+        }
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct PasswordBody {
     password: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/session",
+    operation_id = "getSession",
+    tag = "session",
+    summary = "Session status",
+    description = "Returns whether a password is set and whether this request is signed in.",
+    responses((status = 200, description = "Session status", body = SessionStatus))
+)]
 pub async fn status(State(state): State<AppState>, cookies: CookieJar) -> Json<SessionStatus> {
-    let claimed = state.settings.lock().await.manager.password_hash.is_some();
-    let authenticated = cookies
-        .get(SESSION_COOKIE)
-        .is_some_and(|cookie| state.sessions.is_active(cookie.value()));
-    Json(SessionStatus {
-        claimed,
-        authenticated,
-    })
+    Json(SessionStatus::of(&state, &cookies).await)
 }
 
-/// The first visitor chooses the password.
+#[utoipa::path(
+    post,
+    path = "/api/v1/setup",
+    operation_id = "setUpPassword",
+    tag = "session",
+    summary = "Set the password",
+    description = "Sets the manager password when none is set yet, and signs this browser in.",
+    request_body = PasswordBody,
+    responses(
+        (status = 204, description = "Password set and signed in"),
+        (status = 400, description = "Empty password", body = ErrorBody),
+        (status = 409, description = "A password is already set", body = ErrorBody)
+    )
+)]
 pub async fn set_up_password(
     State(state): State<AppState>,
     cookies: CookieJar,
@@ -51,6 +80,20 @@ pub async fn set_up_password(
     state.start_session(cookies)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/login",
+    operation_id = "logIn",
+    tag = "session",
+    summary = "Sign in",
+    description = "Checks the manager password and signs this browser in.",
+    request_body = PasswordBody,
+    responses(
+        (status = 204, description = "Signed in"),
+        (status = 401, description = "Wrong password", body = ErrorBody),
+        (status = 409, description = "No password is set yet", body = ErrorBody)
+    )
+)]
 pub async fn log_in(
     State(state): State<AppState>,
     cookies: CookieJar,
@@ -66,6 +109,15 @@ pub async fn log_in(
     state.start_session(cookies)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/logout",
+    operation_id = "logOut",
+    tag = "session",
+    summary = "Sign out",
+    description = "Ends this browser's session.",
+    responses((status = 204, description = "Signed out"))
+)]
 pub async fn log_out(State(state): State<AppState>, cookies: CookieJar) -> (CookieJar, StatusCode) {
     if let Some(cookie) = cookies.get(SESSION_COOKIE) {
         state.sessions.end(cookie.value());

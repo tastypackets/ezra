@@ -1,17 +1,42 @@
 use axum::Json;
 use axum::extract::{Path, State};
 
-use super::{ApiError, AppState, Session};
+use super::{ApiError, AppState, ErrorBody, Session};
 use std::sync::Arc;
 
 use crate::manager::agents::{Agent, InstallProgress};
 use crate::manager::status::AgentStatus;
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/agents",
+    operation_id = "listAgents",
+    tag = "agents",
+    summary = "List agents",
+    description = "Returns every agent with its install and sign-in state.",
+    responses(
+        (status = 200, description = "Agents", body = Vec<AgentStatus>),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody)
+    )
+)]
 pub async fn list(_: Session, State(state): State<AppState>) -> Json<Vec<AgentStatus>> {
     Json(AgentStatus::gather_all(&state).await)
 }
 
-/// Installs the newest release, or updates to it, and marks the agent configured.
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{agent}/install",
+    operation_id = "installAgent",
+    tag = "agents",
+    summary = "Install or update an agent",
+    description = "Installs the newest release, or updates to it, and marks the agent configured.",
+    params(("agent" = Agent, Path, description = "The agent")),
+    responses(
+        (status = 200, description = "Installed", body = AgentStatus),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 502, description = "The download or checksum failed", body = ErrorBody)
+    )
+)]
 pub async fn install(
     _: Session,
     State(state): State<AppState>,

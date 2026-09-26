@@ -15,7 +15,6 @@ clap = { version = "4.6.7", features = ["derive"] }
 config = { version = "0.15", default-features = false, features = ["toml"] }
 flate2 = "1.1.10"
 getrandom = "0.4"
-maud = { version = "0.27.0", features = ["axum"] }
 nix = { version = "0.31.3", features = ["user", "fs", "process", "hostname"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "http2", "system-proxy"] }
@@ -28,8 +27,10 @@ thiserror = "2.0.21"
 time = "0.3"
 tokio = { version = "1.53.1", features = ["rt", "macros", "signal", "net", "time", "sync", "fs", "process", "io-util"] }
 toml = "1.1.6"
+tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+utoipa = { version = "6.0.0", features = ["axum_extras"] }
 
 [lints]
 workspace = true

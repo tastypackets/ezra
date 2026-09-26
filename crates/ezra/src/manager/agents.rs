@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
+use utoipa::ToSchema;
 
 use crate::path_ext::PathExt;
 
@@ -20,7 +21,8 @@ const CODEX_PACKAGE: &str = "codex-package-x86_64-unknown-linux-musl.tar.gz";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// A command-line coding agent the manager can install and run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
     Claude,
@@ -35,14 +37,6 @@ impl fmt::Display for Agent {
 
 impl Agent {
     pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
-
-    /// The product name shown on the page.
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code",
-            Self::Codex => "Codex",
-        }
-    }
 
     fn command_name(self) -> &'static str {
         match self {
@@ -433,22 +427,13 @@ impl InstallProgress {
     }
 }
 
-/// How far a download has got, `total_bytes` absent when the server does not say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// How far a download has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct DownloadProgress {
+    /// Bytes received so far.
     pub received_bytes: u64,
+    /// Size of the download in bytes, absent when the server does not say.
     pub total_bytes: Option<u64>,
-}
-
-impl DownloadProgress {
-    /// Whole percent received, capped at 100, when the total is known.
-    pub fn percent(self) -> Option<u64> {
-        let percent = self
-            .received_bytes
-            .checked_mul(100)?
-            .checked_div(self.total_bytes?)?;
-        Some(percent.min(100))
-    }
 }
 
 #[cfg(test)]
@@ -459,18 +444,6 @@ mod tests {
         fs::create_dir_all(path.parent().expect("test paths have a parent"))
             .expect("parent directory is created");
         fs::write(path, "").expect("test file is written");
-    }
-
-    #[test]
-    fn download_percent_needs_a_total() {
-        let progress = |received_bytes, total_bytes| DownloadProgress {
-            received_bytes,
-            total_bytes,
-        };
-        assert_eq!(progress(0, None).percent(), None);
-        assert_eq!(progress(0, Some(0)).percent(), None);
-        assert_eq!(progress(50, Some(200)).percent(), Some(25));
-        assert_eq!(progress(300, Some(200)).percent(), Some(100));
     }
 
     #[test]

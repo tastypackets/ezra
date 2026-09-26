@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::time::{sleep, timeout};
+use utoipa::ToSchema;
 
 use super::agents::{Agent, InstallPaths};
 use crate::process_ext::OutputExt;
@@ -115,9 +116,11 @@ impl AgentCli {
 }
 
 /// What the person signing in needs: a link to open, and for Codex a code to type there.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct LoginPrompt {
+    /// The sign-in page to open.
     pub url: String,
+    /// The one-time code to enter on that page, Codex only.
     pub code: Option<String>,
 }
 

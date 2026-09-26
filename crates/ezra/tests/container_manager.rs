@@ -102,26 +102,6 @@ fn docker_stop_shuts_the_manager_down_cleanly() {
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
-fn page_walks_from_password_to_dashboard() {
-    let container = DockerResource::start_container("manager-page", &[], &[]);
-    wait_for_manager(&container, 8443);
-    let page = || stdout_of(&curl_in(&container, &["--fail", "https://localhost:8443/"]));
-
-    assert!(page().contains("Set a password"));
-    for asset in ["app.js", "app.css"] {
-        let url = format!("https://localhost:8443/assets/{asset}");
-        assert!(!stdout_of(&curl_in(&container, &["--fail", &url])).is_empty());
-    }
-
-    assert_eq!(set_password(&container), "204");
-    let dashboard = page();
-    assert!(dashboard.contains("Claude Code"), "{dashboard}");
-    assert!(dashboard.contains("Codex"), "{dashboard}");
-    assert!(dashboard.contains("Not installed"), "{dashboard}");
-}
-
-#[test]
-#[ignore = "needs Docker and a built ezra image"]
 fn turning_off_download_certificate_checks_is_logged() {
     let container =
         DockerResource::start_container("manager-tls-off", &["--env", "EZRA_TLS_VERIFY=off"], &[]);
