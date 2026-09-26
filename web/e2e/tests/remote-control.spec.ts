@@ -42,10 +42,8 @@ async function removeFakeClaude(request: APIRequestContext): Promise<void> {
   await nudgeRemoteControl(request);
 }
 
-function remoteControlCard(page: Page) {
-  return page.locator("section[data-slot=card]", {
-    has: page.getByRole("heading", { name: /^Remote Control/, level: 2 }),
-  });
+function projectsRow(page: Page) {
+  return page.getByRole("listitem").filter({ hasText: "All projects" });
 }
 
 test.afterEach(async ({ request }) => {
@@ -65,12 +63,12 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
   inContainer("git", "init", "--quiet", `/projects/${folder}`);
   try {
     await page.goto("./");
-    const card = remoteControlCard(page);
+    const projects = projectsRow(page);
     await expect(
-      card.getByText("Claude Code's sign-in does not work for Remote Control."),
+      projects.getByText("Claude Code's sign-in does not work for Remote Control."),
     ).toBeVisible();
 
-    await card.getByRole("button", { name: "More Remote Control actions" }).click();
+    await projects.getByRole("button", { name: "More /projects actions" }).click();
     await page.getByRole("menuitem", { name: "Show log" }).click();
     const log = page.getByRole("dialog", { name: "/projects log" });
     await expect(log).toContainText("/config/ezra/remote-control/projects/server.log");
@@ -92,7 +90,7 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
     );
     await folderLog.getByRole("button", { name: "Close" }).click();
 
-    await card.getByRole("button", { name: "Sign in again" }).click();
+    await projects.getByRole("button", { name: "Sign in again" }).click();
     await expect(page.getByRole("heading", { name: "Sign in to Claude Code" })).toBeVisible();
   } finally {
     inContainer("rm", "-rf", `/projects/${folder}`);
@@ -108,17 +106,17 @@ test("a busy server waits for its sessions before restarting on an update", asyn
   installFakeClaude("2.1.0-e2e", server);
   await nudgeRemoteControl(request);
   await page.goto("./");
-  const card = remoteControlCard(page);
-  await expect(card.getByText("Running", { exact: true })).toBeVisible();
+  const projects = projectsRow(page);
+  await expect(projects.getByText("Running", { exact: true })).toBeVisible();
 
   installFakeClaude("2.1.1-e2e", server);
   await nudgeRemoteControl(request);
   await expect(
-    card.getByText(
+    projects.getByText(
       /^Restarts on Claude Code 2\.1\.1-e2e once no sessions run, by .+ at the latest\.$/,
     ),
   ).toBeVisible();
-  await expect(card.getByText("Running", { exact: true })).toBeVisible();
+  await expect(projects.getByText("Running", { exact: true })).toBeVisible();
 });
 
 /** Writes Claude Code's credentials with a refresh token that stops working in `days`. */
@@ -149,7 +147,7 @@ test("the agents card warns days before Claude Code's sign-in ends until it is r
   writeCredentials(2);
   await nudgeRemoteControl(request);
   await page.goto("./");
-  await expect(remoteControlCard(page).getByText("Running", { exact: true })).toBeVisible();
+  await expect(projectsRow(page).getByText("Running", { exact: true })).toBeVisible();
   const claude = page.getByRole("row", { name: /Claude Code/ });
   await expect(claude.getByText("Sign-in ending")).toBeVisible();
   await expect(claude.getByText(/^Sign-in ends /)).toBeVisible();

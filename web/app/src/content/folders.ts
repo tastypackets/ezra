@@ -3,8 +3,9 @@ import type { SpawnMode } from "@ezra/client";
 export const FOLDERS_DESCRIPTIONS = {
   title: "Folders",
   empty: "No projects yet.",
+  projects: "All projects",
+  projects_path: "/projects",
   not_git: "Not a git repository",
-  serve: "Claude app",
   serve_label: (folder: string) => `Serve ${folder} in the Claude app`,
   worktrees: (count: number) => (count === 1 ? "1 worktree" : `${count} worktrees`),
   more_actions: (folder: string) => `More ${folder} actions`,

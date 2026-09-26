@@ -157,7 +157,12 @@ test("a new repository starts with its switch on", async ({ page }, testInfo) =>
 
 test("Remote Control waits for Claude Code", async ({ page }) => {
   await page.goto("./");
-  await expect(page.getByText("Starts once Claude Code is installed and signed in.")).toBeVisible();
+  const projects = page.getByRole("listitem").filter({ hasText: "All projects" });
+  await expect(projects.getByText("Waiting")).toBeVisible();
+  await expect(
+    projects.getByText("Starts once Claude Code is installed and signed in."),
+  ).toBeVisible();
+  await expect(page.getByRole("row", { name: /Claude Code/ })).toContainText("Waiting");
 });
 
 test("hovering Settings loads its data before the click", async ({ page }) => {

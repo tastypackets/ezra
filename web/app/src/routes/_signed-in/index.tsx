@@ -7,7 +7,6 @@ import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { AgentsCard } from "./-components/agents-card";
 import { FoldersCard } from "./-components/folders-card";
-import { RemoteControlCard } from "./-components/remote-control-card";
 import { SignInPanel } from "./-components/sign-in-panel";
 
 export const Route = createFileRoute("/_signed-in/")({
@@ -35,7 +34,6 @@ function DashboardPage() {
           <SignInPanel key={status.agent} agent={status.agent} prompt={status.login_prompt} />
         ) : null,
       )}
-      <RemoteControlCard overview={remoteControl} />
       <FoldersCard />
     </div>
   );

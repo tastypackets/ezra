@@ -8,21 +8,15 @@ function sessionCount(sessions: number, capacity?: number | null): string {
 }
 
 export const REMOTE_CONTROL_DESCRIPTIONS = {
-  title: "Remote Control",
-  open: "Open claude.ai/code",
   off_hint: "Turned off in Settings.",
   waiting_hint: "Starts once Claude Code is installed and signed in.",
-  starting_hint: "Connecting to Claude.",
   running_hint: (device: string) => `In the Claude app, open ${device}.`,
   running_hint_without_device: "In the Claude app, open this box.",
   last_stop: "Last stop",
-  usage: (sessions: number, capacity: number | null | undefined, memory: string) =>
-    `${sessionCount(sessions, capacity)} running, using ${memory} of memory.`,
   sessions: sessionCount,
   summary: (servers: number, sessions: number) =>
     `${servers === 1 ? "1 server" : `${servers} servers`}, ${sessionCount(sessions)}`,
   memory_hint: "Memory this server and its sessions use.",
-  more_actions: "More Remote Control actions",
   show_log: "Show log",
   sign_in_again: "Sign in again",
   update_waiting: (version: string, time: string) =>

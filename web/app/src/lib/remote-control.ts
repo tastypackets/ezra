@@ -1,6 +1,16 @@
-import type { RemoteControlOverview } from "@ezra/client";
+import type { RemoteControlOverview, ServerState } from "@ezra/client";
 
+import type { BadgeVariant } from "@/components/ui/badge";
 import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-control";
+
+export const SERVER_BADGES: Record<ServerState, BadgeVariant> = {
+  off: "secondary",
+  waiting: "secondary",
+  starting: "warning",
+  running: "success",
+  retrying: "warning",
+  stopping: "warning",
+};
 
 /** Remote Control in a few words: off, waiting, or its servers and their sessions. */
 export function remoteControlSummary({ projects, folders }: RemoteControlOverview): string {
