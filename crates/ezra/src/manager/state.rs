@@ -71,8 +71,10 @@ impl AppState {
         let mut settings = self.settings.lock().await;
         let mut updated_settings = settings.clone();
         change(&mut updated_settings)?;
-        updated_settings.save(&self.settings_path)?;
-        *settings = updated_settings;
+        if updated_settings != *settings {
+            updated_settings.save(&self.settings_path)?;
+            *settings = updated_settings;
+        }
         Ok(())
     }
 

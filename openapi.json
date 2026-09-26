@@ -1269,7 +1269,7 @@
           },
           "serve_repositories": {
             "type": "boolean",
-            "description": "Serve the repositories in /projects that have no choice of their own.",
+            "description": "Turn on the switch of each repository that appears in /projects.",
             "default": true
           }
         }

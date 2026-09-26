@@ -60,7 +60,7 @@ pub struct RemoteControlSettings {
     /// The most sessions each server runs at once, from 1 to 32.
     #[schema(required = true, minimum = 1, maximum = 32)]
     pub capacity: u32,
-    /// Serve the repositories in /projects that have no choice of their own.
+    /// Turn on the switch of each repository that appears in /projects.
     #[schema(required = true)]
     pub serve_repositories: bool,
 }
@@ -502,7 +502,7 @@ impl AppState {
         true
     }
 
-    /// Whether the folder is served, by its own choice or by default.
+    /// Whether the folder's switch is on. A repository not recorded yet gets the default.
     pub async fn serves_folder(&self, folder: &Folder) -> bool {
         let settings = self.settings.lock().await;
         let claude = &settings.agents.claude;

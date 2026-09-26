@@ -65,7 +65,10 @@ mod tests {
 
     use super::super::test_support::{ResponseExt, TestManager};
     use super::*;
+    use std::collections::BTreeMap;
+
     use crate::manager::folders::{Folder, GitDetails, ProjectsDirectory};
+    use crate::manager::settings::SettingsError;
 
     #[tokio::test]
     async fn folders_need_a_login() {
@@ -120,6 +123,60 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn new_repositories_get_the_default_and_keep_it() {
+        let manager = TestManager::new();
+        let ProjectsDirectory(projects) = &manager.state.projects;
+        fs::create_dir_all(projects.join("notes")).expect("folder is created");
+        fs::create_dir_all(projects.join("repo/.git")).expect("repository is created");
+        manager
+            .state
+            .update_settings(|settings| {
+                settings
+                    .agents
+                    .claude
+                    .folders
+                    .insert("gone".to_owned(), true);
+                Ok::<(), SettingsError>(())
+            })
+            .await
+            .expect("settings save");
+        let folders = manager.state.folders().await.expect("folders are listed");
+        assert!(
+            manager
+                .state
+                .record_folder_choices(&folders)
+                .await
+                .expect("recorded")
+        );
+        assert_eq!(
+            manager.state.settings.lock().await.agents.claude.folders,
+            BTreeMap::from([("repo".to_owned(), true)])
+        );
+
+        manager
+            .state
+            .update_settings(|settings| {
+                settings.agents.claude.remote_control.serve_repositories = false;
+                Ok::<(), SettingsError>(())
+            })
+            .await
+            .expect("settings save");
+        assert!(
+            !manager
+                .state
+                .record_folder_choices(&folders)
+                .await
+                .expect("recorded")
+        );
+        let repo = manager
+            .state
+            .projects
+            .find("repo")
+            .expect("repository is found");
+        assert!(manager.state.serves_folder(&repo).await);
     }
 
     #[tokio::test]

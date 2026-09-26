@@ -396,7 +396,29 @@ impl AppState {
         Ok(())
     }
 
-    /// Keeps the folder list in `/projects/AGENTS.md` current, and servers in step with it.
+    /// Gives repositories seen for the first time the default choice, and drops the choices of
+    /// folders that are gone. True when the choices changed.
+    pub async fn record_folder_choices(&self, folders: &[Folder]) -> Result<bool, SettingsError> {
+        let mut changed = false;
+        self.update_settings(|settings| {
+            let serve_repositories = settings.agents.claude.remote_control.serve_repositories;
+            let choices = &mut settings.agents.claude.folders;
+            let before = choices.clone();
+            choices.retain(|name, _| folders.iter().any(|folder| folder.name == *name));
+            for folder in folders.iter().filter(|folder| folder.git.is_some()) {
+                choices
+                    .entry(folder.name.clone())
+                    .or_insert(serve_repositories);
+            }
+            changed = *choices != before;
+            Ok::<(), SettingsError>(())
+        })
+        .await?;
+        Ok(changed)
+    }
+
+    /// Keeps the folder list in `/projects/AGENTS.md` and the folder choices current, and servers
+    /// in step with them.
     pub async fn describe_folders_regularly(self) {
         let mut rescan = interval(RESCAN_INTERVAL);
         rescan.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -421,7 +443,14 @@ impl AppState {
             .await;
             match described {
                 Ok(Ok(folders)) => {
-                    if folders != known {
+                    let recorded =
+                        self.record_folder_choices(&folders)
+                            .await
+                            .unwrap_or_else(|error| {
+                                tracing::warn!("could not record the folder choices: {error}");
+                                false
+                            });
+                    if recorded || folders != known {
                         known = folders;
                         self.remote_control.reconsider();
                         self.events.publish(Topic::Folders);
