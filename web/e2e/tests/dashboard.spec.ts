@@ -69,6 +69,17 @@ test("an agent row keeps keyboard focus on its one button", async ({ page }) => 
   await expect(signIn).toBeFocused();
   await expect(signIn).toHaveAccessibleDescription("Claude Code");
 
+  const more = row.getByRole("button", { name: "More Claude Code actions" });
+  await page.keyboard.press("Tab");
+  await expect(more).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "Check for update" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Claude Code is up to date.")).toBeVisible();
+  await expect(more).toBeFocused();
+
+  await page.keyboard.press("Shift+Tab");
+  await expect(signIn).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Sign in to Claude Code" })).toBeFocused();
   await page.getByRole("textbox", { name: "Code" }).fill("code");
@@ -78,7 +89,7 @@ test("an agent row keeps keyboard focus on its one button", async ({ page }) => 
   await update.focus();
   await page.keyboard.press("Enter");
   await expect(update).toBeHidden();
-  await expect(row.getByRole("button", { name: "More Claude Code actions" })).toBeFocused();
+  await expect(more).toBeFocused();
 });
 
 test("a folder's switch and server follow changes made elsewhere", async ({ page }, testInfo) => {

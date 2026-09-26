@@ -29,7 +29,7 @@ import {
   useAgentActionPending,
   useAgentActions,
 } from "@/hooks/use-agent-actions";
-import { nextAgentStep } from "@/lib/agent-steps";
+import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
 import { downloadPercent } from "@/lib/utils";
 
 type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
@@ -171,7 +171,7 @@ function AgentActions({
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
   const path = { agent: status.agent };
   const installNow = () => install.mutate({ path });
-  const menuInstall = installed && step !== "install";
+  const menuInstall = menuOffersInstall(status, step);
   return (
     <div className={cn("flex flex-col gap-1", className)}>
       <div className="flex items-center gap-1">
@@ -190,7 +190,7 @@ function AgentActions({
                 : installLabel(status)}
           </Button>
         ) : null}
-        {menuInstall || status.logged_in ? (
+        {installed ? (
           <DropdownMenu>
             <DropdownMenuTrigger
               ref={menuTrigger}
@@ -207,7 +207,9 @@ function AgentActions({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-auto">
               {menuInstall ? (
-                <DropdownMenuItem onClick={installNow}>{installLabel(status)}</DropdownMenuItem>
+                <DropdownMenuItem disabled={installing} onClick={installNow}>
+                  {installLabel(status)}
+                </DropdownMenuItem>
               ) : null}
               {status.logged_in ? (
                 <DropdownMenuItem onClick={() => signOut.mutate({ path })}>

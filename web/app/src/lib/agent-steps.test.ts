@@ -1,7 +1,7 @@
 import type { AgentStatus } from "@ezra/client";
 import { describe, expect, it } from "vitest";
 
-import { nextAgentStep } from "./agent-steps";
+import { menuOffersInstall, nextAgentStep } from "./agent-steps";
 
 const missing: AgentStatus = { agent: "claude", configured: false, logged_in: false };
 const signedOut: AgentStatus = { ...missing, configured: true, installed_version: "2.1.283" };
@@ -33,5 +33,24 @@ describe("nextAgentStep", () => {
   it("has no step for an agent that is signed in and up to date, or signing in", () => {
     expect(nextAgentStep(signedIn, false)).toBeUndefined();
     expect(nextAgentStep({ ...signedOut, login_prompt: prompt }, false)).toBeUndefined();
+  });
+});
+
+describe("menuOffersInstall", () => {
+  it("keeps the install step in a signed-out agent's menu while it runs", () => {
+    expect(menuOffersInstall(signedOut, nextAgentStep(signedOut, false))).toBe(true);
+    expect(menuOffersInstall(signedOut, nextAgentStep(signedOut, true))).toBe(true);
+  });
+
+  it("leaves the install step to the button when Sign out fills the menu", () => {
+    const update = { ...signedIn, available_update: "2.1.284" };
+    expect(menuOffersInstall(update, nextAgentStep(update, false))).toBe(false);
+    expect(menuOffersInstall(signedIn, nextAgentStep(signedIn, true))).toBe(false);
+    expect(menuOffersInstall(signedIn, nextAgentStep(signedIn, false))).toBe(true);
+  });
+
+  it("offers the install step to an agent signing in, even when the button shows it", () => {
+    const signingIn = { ...signedOut, login_prompt: prompt, available_update: "2.1.284" };
+    expect(menuOffersInstall(signingIn, nextAgentStep(signingIn, false))).toBe(true);
   });
 });

@@ -12,3 +12,11 @@ export function nextAgentStep(status: AgentStatus, installing: boolean): AgentSt
   }
   return status.available_update ? "install" : undefined;
 }
+
+/**
+ * Whether an installed agent's menu offers the install step, which it does unless the button
+ * shows it and the menu has Sign out.
+ */
+export function menuOffersInstall(status: AgentStatus, step: AgentStep | undefined): boolean {
+  return step !== "install" || !status.logged_in;
+}
