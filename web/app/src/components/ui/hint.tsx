@@ -6,10 +6,7 @@ export interface HintProps {
   children: React.ReactNode;
 }
 
-/**
- * Underlined text with a short explanation. Opens on hover, and on tap or keyboard press, since
- * tooltips never open on touch screens.
- */
+/** Underlined text that opens a short explanation on hover, tap or keyboard press. */
 function Hint({ content, children }: HintProps) {
   return (
     <Popover>

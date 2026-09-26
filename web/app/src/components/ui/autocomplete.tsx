@@ -22,8 +22,8 @@ export interface AutocompleteProps {
 }
 
 /**
- * A text input that suggests known values and takes any other, such as settings a CLI may learn
- * before the manager does. The list stays closed while nothing matches.
+ * A text input that suggests known values and accepts any other. The list stays closed while
+ * nothing matches.
  */
 function Autocomplete({
   id,
