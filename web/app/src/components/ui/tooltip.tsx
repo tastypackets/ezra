@@ -1,27 +1,34 @@
-import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
+import { Popover } from "@base-ui/react/popover";
 
 export interface TooltipProps {
-  content: React.ReactNode;
+  /** Plain text, which also names the popup for screen readers. */
+  content: string;
   children: React.ReactNode;
 }
 
-/** A hint shown on hover or focus of its underlined trigger text. */
+/**
+ * A hint on underlined trigger text. Opens on hover, and on tap or keyboard press, since Base UI
+ * tooltips never open on touch screens.
+ */
 export function Tooltip({ content, children }: TooltipProps) {
   return (
-    <BaseTooltip.Root>
-      <BaseTooltip.Trigger
-        render={<span />}
-        className="cursor-help underline decoration-ez-border-strong decoration-dotted underline-offset-4"
+    <Popover.Root>
+      <Popover.Trigger
+        openOnHover
+        className="inline-flex cursor-help underline decoration-ez-border-strong decoration-dotted underline-offset-4"
       >
         {children}
-      </BaseTooltip.Trigger>
-      <BaseTooltip.Portal>
-        <BaseTooltip.Positioner sideOffset={6}>
-          <BaseTooltip.Popup className="max-w-64 rounded-md bg-ez-text px-2.5 py-1.5 text-xs text-ez-surface shadow-ez-card">
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner sideOffset={6}>
+          <Popover.Popup
+            aria-label={content}
+            className="max-w-64 rounded-md bg-ez-text px-2.5 py-1.5 text-xs text-ez-surface shadow-ez-card outline-none"
+          >
             {content}
-          </BaseTooltip.Popup>
-        </BaseTooltip.Positioner>
-      </BaseTooltip.Portal>
-    </BaseTooltip.Root>
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

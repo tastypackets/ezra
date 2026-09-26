@@ -2,7 +2,7 @@ import type { Agent, LoginPrompt } from "@ezra/client";
 import { useForm } from "@tanstack/react-form";
 import { ExternalLink } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonClassName } from "@/components/ui/button";
 import { Card, CardFooter, CardHeader } from "@/components/ui/card";
 import { CopyButton } from "@/components/ui/copy-button";
 import { Field, TextInput } from "@/components/ui/field";
@@ -26,14 +26,15 @@ export function SignInPanel({ agent, prompt }: SignInPanelProps) {
       />
       <ol className="divide-y divide-ez-border px-5">
         <Step number={1} title={AGENTS_DESCRIPTIONS.step_open}>
-          <Button
-            size="sm"
-            render={<a href={prompt.url} target="_blank" rel="noopener noreferrer" />}
-            nativeButton={false}
+          <a
+            href={prompt.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonClassName({ size: "sm" })}
           >
             {siteOf(prompt.url)}
             <ExternalLink aria-hidden="true" className="size-3.5" />
-          </Button>
+          </a>
         </Step>
         {prompt.code ? (
           <Step number={2} title={AGENTS_DESCRIPTIONS.step_enter_code}>

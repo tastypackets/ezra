@@ -35,8 +35,8 @@
   --ez-text: #111827;
   --ez-text-soft: #374151;
   --ez-muted: #6b7280;
-  --ez-accent: #3b82f6;
-  --ez-accent-hover: #2563eb;
+  --ez-accent: #2563eb;
+  --ez-accent-hover: #1d4ed8;
   --ez-on-accent: #ffffff;
   --ez-focus: rgb(59 130 246 / 0.35);
   --ez-good: #047857;
@@ -59,7 +59,6 @@
     --ez-text: #f9fafb;
     --ez-text-soft: #d1d5db;
     --ez-muted: #9ca3af;
-    --ez-accent-hover: #60a5fa;
     --ez-good: #34d399;
     --ez-good-soft: rgb(16 185 129 / 0.12);
     --ez-pending: #fbbf24;

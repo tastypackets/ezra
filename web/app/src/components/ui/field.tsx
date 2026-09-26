@@ -15,12 +15,16 @@ export interface FieldProps {
 /** Label and error wrapper for one control. */
 export function Field({ label, error, hideLabel = false, children, className }: FieldProps) {
   return (
-    <BaseField.Root className={cn("flex flex-col gap-1", className)}>
+    <BaseField.Root invalid={Boolean(error)} className={cn("flex flex-col gap-1", className)}>
       <BaseField.Label className={cn("font-medium text-ez-text-soft", hideLabel && "sr-only")}>
         {label}
       </BaseField.Label>
       {children}
-      {error ? <p className="text-[0.8125rem] text-ez-danger">{error}</p> : null}
+      {error ? (
+        <BaseField.Error match role="alert" className="text-[0.8125rem] text-ez-danger">
+          {error}
+        </BaseField.Error>
+      ) : null}
     </BaseField.Root>
   );
 }
@@ -34,7 +38,7 @@ export function TextInput({ className, ...props }: TextInputProps) {
   return (
     <BaseInput
       className={cn(
-        "h-9 w-full rounded-md border border-ez-border-strong bg-ez-surface px-3 text-ez-text shadow-ez-card outline-none focus:border-ez-accent focus:ring-3 focus:ring-ez-focus",
+        "h-9 w-full rounded-md border border-ez-border-strong bg-ez-surface px-3 text-base text-ez-text shadow-ez-card outline-none focus:border-ez-accent focus:ring-3 focus:ring-ez-focus data-invalid:border-ez-danger sm:text-sm",
         className,
       )}
       {...props}
