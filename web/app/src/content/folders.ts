@@ -55,7 +55,7 @@ export const CLAUDE_OPTIONS_DESCRIPTIONS = {
   spawn: "New sessions work in",
   permission_mode: "Permission mode",
   permission_mode_default: (mode: string) => `Default: ${mode}`,
-  permission_mode_word: "Enter one word, such as plan, or leave it empty.",
+  permission_mode_unknown: "Choose a listed mode, or leave it empty.",
   capacity: "Sessions at once",
   capacity_default: (capacity: number | null | undefined) =>
     capacity == null ? "Default: Claude Code's" : `Default: ${capacity}`,

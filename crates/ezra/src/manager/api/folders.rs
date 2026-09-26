@@ -529,6 +529,11 @@ mod tests {
                 r#"{"spawn":"same-dir","permission_mode":"two words"}"#,
                 StatusCode::BAD_REQUEST,
             ),
+            (
+                "repo",
+                r#"{"spawn":"same-dir","permission_mode":"yolo"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
         ] {
             let refused = manager
                 .put(

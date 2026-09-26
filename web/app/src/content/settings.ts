@@ -11,8 +11,8 @@ export const SETTINGS_DESCRIPTIONS = {
   serve_repositories: "Serve new repositories",
   serve_repositories_hint: "Repositories added to /projects start with their switch on.",
   permission_mode: "Permission mode",
-  permission_mode_hint: "Sessions started from the Claude app keep this mode.",
-  permission_mode_word: "Enter one word, such as auto.",
+  permission_mode_hint: "New sessions from the Claude app start in this mode.",
+  permission_mode_unknown: "Choose one of the listed modes.",
   show_permission_modes: "Show permission modes",
   capacity: "Sessions per folder",
   capacity_hint: "Each session is its own Claude Code process, about 150 to 300 MB.",
@@ -41,3 +41,9 @@ export const PERMISSION_MODES: readonly { value: string; description: string }[]
   { value: "dontAsk", description: "Reads and pre-approved tools, denying the rest." },
   { value: "bypassPermissions", description: "Everything, with no checks." },
 ];
+
+/** Every mode Claude Code takes, `manual` being another name for `default`. */
+export const PERMISSION_MODE_NAMES: ReadonlySet<string> = new Set([
+  ...PERMISSION_MODES.map(({ value }) => value),
+  "manual",
+]);

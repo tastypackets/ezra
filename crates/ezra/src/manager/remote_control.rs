@@ -50,6 +50,17 @@ const LOG_TAIL_LINES: usize = 200;
 const LOG_TAIL_BYTES: u64 = 256 * 1024;
 const SESSION_LOGS_KEPT_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const SESSION_LOGS_LARGEST: u64 = 64 * 1024 * 1024;
+/// The modes `claude remote-control --permission-mode` takes, `manual` being `default`.
+const PERMISSION_MODES: [&str; 7] = [
+    "acceptEdits",
+    "auto",
+    "bypassPermissions",
+    "default",
+    "dontAsk",
+    "manual",
+    "plan",
+];
+const UNKNOWN_PERMISSION_MODE: &str = "Claude Code has no permission mode by that name";
 const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 7] = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -82,9 +93,8 @@ pub struct RemoteControlSettings {
 impl RemoteControlSettings {
     /// `None` when the settings can be passed to Claude, or why not.
     pub fn problem(&self) -> Option<&'static str> {
-        let mode = self.permission_mode.trim();
-        if mode.is_empty() || mode.contains(char::is_whitespace) {
-            Some("the permission mode must be one word")
+        if !PERMISSION_MODES.contains(&self.permission_mode.trim()) {
+            Some(UNKNOWN_PERMISSION_MODE)
         } else if self.capacity.is_some_and(|capacity| capacity < 1) {
             Some("capacity must be at least 1")
         } else {
@@ -149,9 +159,10 @@ impl ClaudeOptions {
         if self
             .permission_mode
             .as_deref()
-            .is_some_and(|mode| mode.contains(char::is_whitespace))
+            .map(str::trim)
+            .is_some_and(|mode| !mode.is_empty() && !PERMISSION_MODES.contains(&mode))
         {
-            Some("the permission mode must be one word")
+            Some(UNKNOWN_PERMISSION_MODE)
         } else if self.capacity.is_some_and(|capacity| capacity < 1) {
             Some("capacity must be at least 1")
         } else {

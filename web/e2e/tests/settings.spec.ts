@@ -115,7 +115,7 @@ test("a setting Claude cannot take is refused next to its field", async ({ page 
   await mode.fill("two words");
   await page.keyboard.press("Escape");
   await expect(mode).toHaveAccessibleDescription(
-    "Sessions started from the Claude app keep this mode. Enter one word, such as auto.",
+    "New sessions from the Claude app start in this mode. Choose one of the listed modes.",
   );
 });
 

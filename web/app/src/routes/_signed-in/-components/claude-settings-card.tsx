@@ -26,7 +26,12 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { toastManager } from "@/components/ui/toast";
 import { AGENT_NAMES } from "@/content/agents";
-import { PERMISSION_MODES, RELEASE_CHANNELS, SETTINGS_DESCRIPTIONS } from "@/content/settings";
+import {
+  PERMISSION_MODE_NAMES,
+  PERMISSION_MODES,
+  RELEASE_CHANNELS,
+  SETTINGS_DESCRIPTIONS,
+} from "@/content/settings";
 import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions } from "@/queries/agent-queries";
 import { foldersQueryOptions } from "@/queries/folder-queries";
@@ -137,9 +142,9 @@ export function ClaudeSettingsCard() {
                   name="remote_control.permission_mode"
                   validators={{
                     onChange: ({ value }) =>
-                      /^\S+$/.test(value.trim())
+                      PERMISSION_MODE_NAMES.has(value.trim())
                         ? undefined
-                        : SETTINGS_DESCRIPTIONS.permission_mode_word,
+                        : SETTINGS_DESCRIPTIONS.permission_mode_unknown,
                   }}
                 >
                   {(field) => {

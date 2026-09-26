@@ -29,7 +29,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { CLAUDE_OPTIONS_DESCRIPTIONS, FOLDERS_DESCRIPTIONS, SPAWN_MODES } from "@/content/folders";
-import { PERMISSION_MODES, SETTINGS_DESCRIPTIONS } from "@/content/settings";
+import { PERMISSION_MODE_NAMES, PERMISSION_MODES, SETTINGS_DESCRIPTIONS } from "@/content/settings";
 import { useFolderActions } from "@/hooks/use-folder-actions";
 import { errorMessage } from "@/lib/utils";
 
@@ -143,9 +143,9 @@ function ClaudeOptionsForm({ folder, onSaved }: { folder: FolderStatus; onSaved:
             name="permission_mode"
             validators={{
               onChange: ({ value }) =>
-                /^\S*$/.test(value.trim())
+                value.trim() === "" || PERMISSION_MODE_NAMES.has(value.trim())
                   ? undefined
-                  : CLAUDE_OPTIONS_DESCRIPTIONS.permission_mode_word,
+                  : CLAUDE_OPTIONS_DESCRIPTIONS.permission_mode_unknown,
             }}
           >
             {(field) => {

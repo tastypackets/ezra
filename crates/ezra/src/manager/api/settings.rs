@@ -155,6 +155,7 @@ mod tests {
         for remote_control in [
             r#"{"enabled":true,"permission_mode":"","capacity":4}"#,
             r#"{"enabled":true,"permission_mode":"auto --x","capacity":4}"#,
+            r#"{"enabled":true,"permission_mode":"Auto","capacity":4}"#,
             r#"{"enabled":true,"permission_mode":"auto","capacity":0}"#,
         ] {
             let body =
