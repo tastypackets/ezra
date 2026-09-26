@@ -1,7 +1,7 @@
-import type { CommitIdentity, GitHubStatus } from "@ezra/client";
+import type { CommitIdentity, GitHubStatus, LoginPrompt } from "@ezra/client";
 import { useForm } from "@tanstack/react-form";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 
 import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Badge } from "@/components/ui/badge";
@@ -53,23 +53,14 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
           <h3 className="font-medium">{GIT_DESCRIPTIONS.github}</h3>
           <Badge variant={state.variant}>{state.label}</Badge>
         </div>
-        {canSignOut ? (
+        {canSignOut || canSignIn ? (
           <Button
-            variant="outline"
+            variant={canSignOut ? "outline" : "default"}
             size="sm"
-            loading={signOutOfGitHub.isPending}
-            onClick={() => signOutOfGitHub.mutate({})}
+            loading={canSignOut ? signOutOfGitHub.isPending : startGitHubSignIn.isPending}
+            onClick={() => (canSignOut ? signOutOfGitHub.mutate({}) : startGitHubSignIn.mutate({}))}
           >
-            {GIT_DESCRIPTIONS.sign_out}
-          </Button>
-        ) : null}
-        {canSignIn ? (
-          <Button
-            size="sm"
-            loading={startGitHubSignIn.isPending}
-            onClick={() => startGitHubSignIn.mutate({})}
-          >
-            {GIT_DESCRIPTIONS.sign_in}
+            {canSignOut ? GIT_DESCRIPTIONS.sign_out : GIT_DESCRIPTIONS.sign_in}
           </Button>
         ) : null}
       </div>
@@ -83,22 +74,54 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
         </p>
       ) : null}
       {github.login_prompt ? (
-        <div className="flex flex-col gap-4 rounded-lg border p-4">
-          <SignInSteps prompt={github.login_prompt} />
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <WaitingForWebsite />
-            <Button
-              variant="outline"
-              size="sm"
-              loading={startGitHubSignIn.isPending}
-              onClick={() => startGitHubSignIn.mutate({})}
-            >
-              {GIT_DESCRIPTIONS.start_over}
-            </Button>
-          </div>
-        </div>
+        <GitHubSignIn
+          prompt={github.login_prompt}
+          startedHere={
+            startGitHubSignIn.isPending || startGitHubSignIn.data?.url === github.login_prompt.url
+          }
+          restarting={startGitHubSignIn.isPending}
+          startOver={() => startGitHubSignIn.mutate({})}
+        />
       ) : null}
     </section>
+  );
+}
+
+function GitHubSignIn({
+  prompt,
+  startedHere,
+  restarting,
+  startOver,
+}: {
+  prompt: LoginPrompt;
+  /** Moves focus here on open, for a sign-in started on this page. */
+  startedHere: boolean;
+  restarting: boolean;
+  startOver: () => void;
+}) {
+  const steps = useRef<HTMLDivElement>(null);
+  const focusOnOpen = useRef(startedHere);
+  useEffect(() => {
+    if (focusOnOpen.current) {
+      steps.current?.focus();
+    }
+  }, []);
+  return (
+    <div
+      ref={steps}
+      tabIndex={-1}
+      role="group"
+      aria-label={GIT_DESCRIPTIONS.sign_in}
+      className="flex flex-col gap-4 rounded-lg border p-4 outline-none"
+    >
+      <SignInSteps prompt={prompt} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <WaitingForWebsite />
+        <Button variant="outline" size="sm" loading={restarting} onClick={startOver}>
+          {GIT_DESCRIPTIONS.start_over}
+        </Button>
+      </div>
+    </div>
   );
 }
 
