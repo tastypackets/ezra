@@ -735,6 +735,158 @@
         }
       }
     },
+    "/api/v1/manager": {
+      "get": {
+        "tags": [
+          "manager"
+        ],
+        "summary": "Get the manager's certificate, sessions and environment",
+        "operationId": "getManager",
+        "responses": {
+          "200": {
+            "description": "Manager state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagerStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/manager/certificate": {
+      "post": {
+        "tags": [
+          "manager"
+        ],
+        "summary": "Replace the certificate with a new self-signed one",
+        "description": "Browsers warn again until the new certificate is accepted.",
+        "operationId": "regenerateCertificate",
+        "responses": {
+          "200": {
+            "description": "The new certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The manager serves no certificate of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/manager/password": {
+      "put": {
+        "tags": [
+          "manager"
+        ],
+        "summary": "Change the manager password",
+        "description": "Signs out every other session.",
+        "operationId": "changePassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChangeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed"
+          },
+          "400": {
+            "description": "Empty new password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong current password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/manager/sessions/end-others": {
+      "post": {
+        "tags": [
+          "manager"
+        ],
+        "summary": "Sign out every other session",
+        "operationId": "endOtherSessions",
+        "responses": {
+          "204": {
+            "description": "Other sessions signed out"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/remote-control": {
       "get": {
         "tags": [
@@ -917,6 +1069,33 @@
           }
         }
       },
+      "CertificateStatus": {
+        "type": "object",
+        "description": "The certificate the manager serves HTTPS with.",
+        "required": [
+          "hostnames",
+          "expires_at",
+          "fingerprint"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it expires, in seconds since the Unix epoch."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "Its SHA-256 fingerprint, as browsers show it."
+          },
+          "hostnames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The hostnames it is valid for."
+          }
+        }
+      },
       "ClaudeSettingsBody": {
         "type": "object",
         "description": "How the manager installs, updates and serves Claude Code.",
@@ -983,6 +1162,57 @@
             "format": "int64",
             "description": "Size of the download in bytes, absent when the server does not say.",
             "minimum": 0
+          }
+        }
+      },
+      "EnvironmentSettings": {
+        "type": "object",
+        "description": "The container settings that come from its environment, read once at start.",
+        "required": [
+          "hostname",
+          "port",
+          "tls_verification",
+          "sudo",
+          "apt_packages",
+          "setup_scripts",
+          "github_token"
+        ],
+        "properties": {
+          "apt_packages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`EZRA_APT_PACKAGES`, installed at every start."
+          },
+          "github_token": {
+            "type": "boolean",
+            "description": "`GH_TOKEN` or `GITHUB_TOKEN` is set."
+          },
+          "hostname": {
+            "type": "string",
+            "description": "The container's hostname."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`EZRA_PORT`, the port the manager listens on inside the container.",
+            "minimum": 0
+          },
+          "setup_scripts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Scripts in /etc/ezra/setup.d, run as root at every start."
+          },
+          "sudo": {
+            "type": "boolean",
+            "description": "`EZRA_SUDO`, whether agents may use sudo."
+          },
+          "tls_verification": {
+            "type": "boolean",
+            "description": "`EZRA_TLS_VERIFY`, whether agent downloads check the server's certificate."
           }
         }
       },
@@ -1189,6 +1419,36 @@
         ],
         "description": "One message on the event stream. Every change raises the revision by one."
       },
+      "ManagerStatus": {
+        "type": "object",
+        "description": "The manager's own settings and state.",
+        "required": [
+          "other_sessions",
+          "environment"
+        ],
+        "properties": {
+          "certificate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CertificateStatus",
+                "description": "Absent when the manager serves no certificate of its own."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "environment": {
+            "$ref": "#/components/schemas/EnvironmentSettings"
+          },
+          "other_sessions": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Signed-in sessions other than this one.",
+            "minimum": 0
+          }
+        }
+      },
       "PasswordBody": {
         "type": "object",
         "required": [
@@ -1196,6 +1456,21 @@
         ],
         "properties": {
           "password": {
+            "type": "string"
+          }
+        }
+      },
+      "PasswordChangeBody": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
             "type": "string"
           }
         }
@@ -1396,7 +1671,8 @@
           "claude_settings",
           "folders",
           "remote_control",
-          "git"
+          "git",
+          "manager"
         ]
       }
     }

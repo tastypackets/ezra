@@ -8,6 +8,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, internal};
 use crate::manager::auth::{HashedPassword, SESSION_COOKIE};
+use crate::manager::events::Topic;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct SessionStatus {
@@ -121,6 +122,7 @@ pub async fn log_in(
 pub async fn log_out(State(state): State<AppState>, cookies: CookieJar) -> (CookieJar, StatusCode) {
     if let Some(cookie) = cookies.get(SESSION_COOKIE) {
         state.sessions.end(cookie.value());
+        state.events.publish(Topic::Manager);
     }
     (
         cookies.remove(Cookie::build(SESSION_COOKIE).path("/")),
@@ -131,6 +133,7 @@ pub async fn log_out(State(state): State<AppState>, cookies: CookieJar) -> (Cook
 impl AppState {
     fn start_session(&self, cookies: CookieJar) -> Result<(CookieJar, StatusCode), ApiError> {
         let token = self.sessions.start().map_err(internal)?;
+        self.events.publish(Topic::Manager);
         Ok((cookies.add(token.into_cookie()), StatusCode::NO_CONTENT))
     }
 }

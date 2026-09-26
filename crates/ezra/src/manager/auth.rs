@@ -6,6 +6,7 @@ use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 pub const SESSION_COOKIE: &str = "session";
 
@@ -55,9 +56,19 @@ impl SessionToken {
 }
 
 /// Logged-in sessions, kept in memory: restarting the manager logs everyone out.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Sessions {
     tokens: Mutex<HashSet<String>>,
+    ended: watch::Sender<u64>,
+}
+
+impl Default for Sessions {
+    fn default() -> Self {
+        Self {
+            tokens: Mutex::default(),
+            ended: watch::Sender::new(0),
+        }
+    }
 }
 
 impl Sessions {
@@ -72,7 +83,46 @@ impl Sessions {
     }
 
     pub fn end(&self, token: &str) {
-        self.tokens().remove(token);
+        if self.tokens().remove(token) {
+            self.note_ended();
+        }
+    }
+
+    /// Ends every session but `kept`, and returns how many ended.
+    pub fn end_others(&self, kept: &str) -> usize {
+        let ended = {
+            let mut tokens = self.tokens();
+            let before = tokens.len();
+            tokens.retain(|token| token == kept);
+            before.saturating_sub(tokens.len())
+        };
+        if ended > 0 {
+            self.note_ended();
+        }
+        ended
+    }
+
+    /// Sessions other than `current`.
+    pub fn others(&self, current: &str) -> usize {
+        self.tokens()
+            .iter()
+            .filter(|token| token.as_str() != current)
+            .count()
+    }
+
+    /// Resolves once `token` is no longer an active session.
+    pub async fn until_ended(&self, token: &str) {
+        let mut ended = self.ended.subscribe();
+        while self.is_active(token) {
+            if ended.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    fn note_ended(&self) {
+        self.ended
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
 
     fn tokens(&self) -> MutexGuard<'_, HashSet<String>> {
@@ -105,6 +155,29 @@ mod tests {
         sessions.end(&first);
         assert!(!sessions.is_active(&first));
         assert!(sessions.is_active(&second));
+    }
+
+    #[tokio::test]
+    async fn other_sessions_end_and_their_waiters_wake() {
+        let sessions = Sessions::default();
+        let kept = sessions.start().expect("session starts").0;
+        let other = sessions.start().expect("session starts").0;
+        sessions.start().expect("session starts");
+        assert_eq!(sessions.others(&kept), 2);
+
+        let waiting = sessions.until_ended(&other);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiting)
+                .await
+                .is_err()
+        );
+        assert_eq!(sessions.end_others(&kept), 2);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("the waiter wakes once its session ends");
+        assert!(sessions.is_active(&kept));
+        assert_eq!(sessions.others(&kept), 0);
     }
 
     #[test]

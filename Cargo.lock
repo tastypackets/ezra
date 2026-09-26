@@ -582,6 +582,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "utoipa",
+ "x509-parser",
 ]
 
 [[package]]

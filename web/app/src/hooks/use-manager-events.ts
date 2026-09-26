@@ -8,6 +8,7 @@ import { queryClient } from "@/lib/query-client";
 import { agentsQueryOptions } from "@/queries/agent-queries";
 import { foldersQueryOptions } from "@/queries/folder-queries";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
+import { managerQueryOptions } from "@/queries/manager-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 /** First wait before reconnecting, doubled after each attempt that gets no event. */
@@ -20,6 +21,7 @@ const TOPIC_QUERIES: Record<Topic, QueryKey> = {
   folders: foldersQueryOptions.queryKey,
   remote_control: remoteControlQueryOptions.queryKey,
   git: gitStatusQueryOptions.queryKey,
+  manager: managerQueryOptions.queryKey,
 };
 
 /** Refetches what the manager says changed, and everything when a connection finds a newer revision. */

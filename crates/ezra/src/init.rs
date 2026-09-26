@@ -1,13 +1,13 @@
-mod apt_packages;
-mod config;
+pub mod apt_packages;
+pub mod config;
 mod environment;
 mod exec;
 mod git;
 mod groups;
 mod privileges;
-mod setup_scripts;
+pub mod setup_scripts;
 mod stdio;
-mod sudo;
+pub mod sudo;
 
 use std::env;
 use std::ffi::{NulError, OsStr, OsString};

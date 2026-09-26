@@ -1,10 +1,17 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use axum_server::tls_rustls::RustlsConfig;
 use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
+use x509_parser::extensions::GeneralName;
+use x509_parser::pem::parse_x509_pem;
 
 const CERTIFICATE_FILE: &str = "certificate.pem";
 const KEY_FILE: &str = "key.pem";
@@ -30,17 +37,53 @@ impl CertificateFiles {
     pub fn ensure_self_signed(directory: &Path, hostname: &str) -> io::Result<Self> {
         let files = Self::in_directory(directory);
         if files.needs_renewal() {
-            let certificate =
-                SelfSignedCertificate::generate(hostname).map_err(io::Error::other)?;
-            fs::create_dir_all(directory)?;
-            fs::write(&files.key, certificate.key_pem)?;
-            fs::write(&files.certificate, certificate.certificate_pem)?;
-            tracing::info!(
-                "created a self-signed certificate in {}, so browsers show a warning until you accept it",
-                directory.display()
-            );
+            files.write_self_signed(hostname)?;
         }
         Ok(files)
+    }
+
+    fn write_self_signed(&self, hostname: &str) -> io::Result<()> {
+        let certificate = SelfSignedCertificate::generate(hostname).map_err(io::Error::other)?;
+        if let Some(directory) = self.certificate.parent() {
+            fs::create_dir_all(directory)?;
+        }
+        fs::write(&self.key, certificate.key_pem)?;
+        fs::write(&self.certificate, certificate.certificate_pem)?;
+        tracing::info!(
+            "created a self-signed certificate in {}, so browsers show a warning until you accept it",
+            self.certificate.display()
+        );
+        Ok(())
+    }
+
+    fn status(&self) -> io::Result<CertificateStatus> {
+        let pem = fs::read(&self.certificate)?;
+        let (_, pem) = parse_x509_pem(&pem).map_err(io::Error::other)?;
+        let certificate = pem.parse_x509().map_err(io::Error::other)?;
+        let hostnames = certificate
+            .subject_alternative_name()
+            .map_err(io::Error::other)?
+            .map(|names| {
+                names
+                    .value
+                    .general_names
+                    .iter()
+                    .filter_map(|name| match name {
+                        GeneralName::DNSName(hostname) => Some((*hostname).to_owned()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(CertificateStatus {
+            hostnames,
+            expires_at: certificate.validity().not_after.timestamp(),
+            fingerprint: Sha256::digest(&pem.contents)
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<Vec<_>>()
+                .join(":"),
+        })
     }
 
     fn needs_renewal(&self) -> bool {
@@ -51,6 +94,50 @@ impl CertificateFiles {
             Ok(age) => age > RENEW_AFTER || !self.key.exists(),
             Err(_) => true,
         }
+    }
+}
+
+/// The certificate the manager serves HTTPS with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CertificateStatus {
+    /// The hostnames it is valid for.
+    pub hostnames: Vec<String>,
+    /// When it expires, in seconds since the Unix epoch.
+    pub expires_at: i64,
+    /// Its SHA-256 fingerprint, as browsers show it.
+    pub fingerprint: String,
+}
+
+/// The certificate on disk and the TLS configuration serving it.
+#[derive(Clone)]
+pub struct ServedCertificate {
+    files: Arc<CertificateFiles>,
+    hostname: String,
+    pub config: RustlsConfig,
+}
+
+impl ServedCertificate {
+    /// Serves the certificate in `directory`, creating or renewing it first when needed.
+    pub async fn load(directory: &Path, hostname: &str) -> io::Result<Self> {
+        let files = CertificateFiles::ensure_self_signed(directory, hostname)?;
+        let config = RustlsConfig::from_pem_file(&files.certificate, &files.key).await?;
+        Ok(Self {
+            files: Arc::new(files),
+            hostname: hostname.to_owned(),
+            config,
+        })
+    }
+
+    pub fn status(&self) -> io::Result<CertificateStatus> {
+        self.files.status()
+    }
+
+    /// Replaces the certificate with a new self-signed one, served from the next connection on.
+    pub async fn regenerate(&self) -> io::Result<()> {
+        self.files.write_self_signed(&self.hostname)?;
+        self.config
+            .reload_from_pem_file(&self.files.certificate, &self.files.key)
+            .await
     }
 }
 
@@ -105,6 +192,38 @@ mod tests {
         CertificateFiles::ensure_self_signed(&tls_directory, "ezra")
             .expect("certificate is reused");
         assert_eq!(read(&files.certificate), first_certificate);
+    }
+
+    #[test]
+    fn status_reads_the_certificate_on_disk() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let files = CertificateFiles::ensure_self_signed(directory.path(), "ezra")
+            .expect("certificate is created");
+        let status = files.status().expect("status is read");
+        assert_eq!(status.hostnames, ["localhost", "ezra"]);
+        let in_819_days = OffsetDateTime::now_utc()
+            .saturating_add(time::Duration::days(VALIDITY_DAYS.saturating_sub(1)))
+            .unix_timestamp();
+        assert!(status.expires_at > in_819_days, "{status:?}");
+        assert_eq!(status.fingerprint.len(), 95, "{status:?}");
+    }
+
+    #[tokio::test]
+    async fn regenerating_serves_a_new_certificate() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let served = ServedCertificate::load(directory.path(), "ezra")
+            .await
+            .expect("certificate is served");
+        let before = served.status().expect("status is read");
+        served
+            .regenerate()
+            .await
+            .expect("certificate is regenerated");
+        assert_ne!(
+            served.status().expect("status is read").fingerprint,
+            before.fingerprint
+        );
     }
 
     #[test]

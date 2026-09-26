@@ -1,6 +1,7 @@
 mod agents;
 mod api;
 mod auth;
+mod environment;
 mod events;
 mod folders;
 mod git;
@@ -23,7 +24,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum_server::Handle;
-use axum_server::tls_rustls::RustlsConfig;
 use serde::Deserialize;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -79,13 +79,9 @@ async fn serve() -> Result<(), ManagerError> {
     let hostname = nix::unistd::gethostname()
         .map(|hostname| hostname.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "localhost".to_owned());
-    let certificate_files =
-        tls::CertificateFiles::ensure_self_signed(&state_directory.join("tls"), &hostname)
-            .map_err(ManagerError::Certificate)?;
-    let tls_config =
-        RustlsConfig::from_pem_file(&certificate_files.certificate, &certificate_files.key)
-            .await
-            .map_err(ManagerError::Certificate)?;
+    let certificate = tls::ServedCertificate::load(&state_directory.join("tls"), &hostname)
+        .await
+        .map_err(ManagerError::Certificate)?;
 
     let handle = Handle::new();
     tracing::info!("manager listening on https://{hostname}:{port}");
@@ -93,14 +89,19 @@ async fn serve() -> Result<(), ManagerError> {
         tracing::info!("no password is set, the first visitor chooses it");
     }
     let home = env::var_os("HOME").unwrap_or_else(|| "/home/dev".into());
-    let state = AppState::new(
+    let git_tools = git::GitTools::from_environment(Path::new(&home));
+    let mut state = AppState::new(
         settings_path,
         settings,
         agents::InstallPaths::under_home(Path::new(&home))
             .with_config_directories_from_environment(),
         tls_verification,
-        git::GitTools::from_environment(Path::new(&home)),
+        git_tools.clone(),
     );
+    state.environment =
+        environment::EnvironmentSettings::read(&hostname, port, tls_verification, &git_tools);
+    let tls_config = certificate.config.clone();
+    state.certificate = Some(certificate);
     tokio::spawn(state.clone().reinstall_configured_agents());
     tokio::spawn(state.clone().check_for_updates_regularly());
     tokio::spawn(state.clone().lend_github_sign_in_at_start());

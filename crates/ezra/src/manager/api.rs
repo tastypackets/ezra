@@ -3,6 +3,7 @@ mod events;
 mod folders;
 mod git;
 mod login;
+mod manager;
 mod remote_control;
 pub mod session;
 mod settings;
@@ -48,6 +49,16 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/folders/{name}/remote-control",
             put(folders::choose_to_serve),
         )
+        .route("/api/v1/manager", get(manager::status))
+        .route("/api/v1/manager/password", put(manager::change_password))
+        .route(
+            "/api/v1/manager/sessions/end-others",
+            post(manager::end_other_sessions),
+        )
+        .route(
+            "/api/v1/manager/certificate",
+            post(manager::regenerate_certificate),
+        )
         .route("/api/v1/git", get(git::status))
         .route("/api/v1/git/github/login", post(git::start_github_login))
         .route("/api/v1/git/github/logout", post(git::log_out_of_github))
@@ -58,18 +69,17 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Extracting this rejects requests that are not logged in.
-pub struct Session;
+/// Extracting this rejects requests that are not logged in. Holds the session's token.
+pub struct Session(pub String);
 
 impl FromRequestParts<AppState> for Session {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let cookies = CookieJar::from_headers(&parts.headers);
-        if state.is_session(cookies.get(SESSION_COOKIE).map(|cookie| cookie.value())) {
-            Ok(Self)
-        } else {
-            Err(ApiError::Unauthorized("log in first"))
+        match cookies.get(SESSION_COOKIE).map(|cookie| cookie.value()) {
+            Some(token) if state.sessions.is_active(token) => Ok(Self(token.to_owned())),
+            _ => Err(ApiError::Unauthorized("log in first")),
         }
     }
 }
@@ -78,6 +88,7 @@ impl FromRequestParts<AppState> for Session {
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized(&'static str),
+    Forbidden(&'static str),
     NotFound(&'static str),
     Conflict(String),
     AgentFailed(String),
@@ -89,6 +100,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.to_owned()),
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.to_owned()),
+            Self::Forbidden(message) => (StatusCode::FORBIDDEN, message.to_owned()),
             Self::NotFound(message) => (StatusCode::NOT_FOUND, message.to_owned()),
             Self::Conflict(message) => (StatusCode::CONFLICT, message),
             Self::AgentFailed(message) => {
@@ -150,6 +162,10 @@ pub struct ErrorBody {
         folders::choose_to_serve,
         remote_control::overview,
         events::stream,
+        manager::status,
+        manager::change_password,
+        manager::end_other_sessions,
+        manager::regenerate_certificate,
     )
 )]
 pub struct ApiDoc;

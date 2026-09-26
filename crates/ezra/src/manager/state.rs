@@ -6,12 +6,14 @@ use tokio::sync::{Mutex, watch};
 
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
+use super::environment::EnvironmentSettings;
 use super::events::Events;
 use super::folders::{PROJECTS_DIRECTORY, ProjectsDirectory};
 use super::git::GitTools;
 use super::login::LoginProcess;
 use super::remote_control::RemoteControl;
 use super::settings::{Settings, SettingsError};
+use super::tls::ServedCertificate;
 use super::updates::LatestRelease;
 
 /// Shared by the API and the pages.
@@ -30,6 +32,9 @@ pub struct AppState {
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
     pub events: Events,
+    /// Absent in tests, which serve plain HTTP.
+    pub certificate: Option<ServedCertificate>,
+    pub environment: EnvironmentSettings,
     /// The GitHub account gh is signed in as, from the last check. None when signed out.
     pub github_account: Arc<watch::Sender<Option<String>>>,
     pub projects: ProjectsDirectory,
@@ -58,6 +63,8 @@ impl AppState {
             github_login: Arc::default(),
             remote_control: Arc::new(RemoteControl::new(events.clone())),
             events,
+            certificate: None,
+            environment: EnvironmentSettings::default(),
             github_account: Arc::new(watch::Sender::new(None)),
             projects: ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY)),
         }
