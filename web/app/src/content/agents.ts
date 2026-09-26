@@ -25,7 +25,7 @@ export const AGENTS_DESCRIPTIONS = {
   update: "Update",
   sign_in: "Sign in",
   sign_out: "Sign out",
-  sign_in_title: "Sign in to",
+  sign_in_title: (agent: string) => `Sign in to ${agent}`,
   sign_in_description: "Finish these steps in any browser.",
   step_open: "Open the sign-in page",
   step_enter_code: "Enter this code",
@@ -37,5 +37,4 @@ export const AGENTS_DESCRIPTIONS = {
   start_over: "Start over",
   copy: "Copy",
   copied: "Copied",
-  action_failed: "The request failed.",
 } as const;

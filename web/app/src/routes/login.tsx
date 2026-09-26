@@ -1,6 +1,5 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 
-import { AppHeader } from "@/components/app-header";
 import { PasswordForm } from "@/components/password-form";
 import { SESSION_DESCRIPTIONS } from "@/content/session";
 import { useSessionActions } from "@/hooks/use-session-actions";
@@ -23,16 +22,13 @@ function LoginPage() {
   const navigate = useNavigate();
   const { signIn } = useSessionActions();
   return (
-    <>
-      <AppHeader signedIn={false} />
-      <PasswordForm
-        title={SESSION_DESCRIPTIONS.login_title}
-        description={SESSION_DESCRIPTIONS.login_description}
-        submitLabel={SESSION_DESCRIPTIONS.login_submit}
-        autoComplete="current-password"
-        mutation={signIn}
-        onSuccess={() => void navigate({ to: "/" })}
-      />
-    </>
+    <PasswordForm
+      title={SESSION_DESCRIPTIONS.login_title}
+      description={SESSION_DESCRIPTIONS.login_description}
+      submitLabel={SESSION_DESCRIPTIONS.login_submit}
+      autoComplete="current-password"
+      mutation={signIn}
+      onSuccess={() => navigate({ to: "/" })}
+    />
   );
 }

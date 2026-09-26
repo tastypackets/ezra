@@ -24,6 +24,20 @@ export interface ButtonProps extends Omit<React.ComponentProps<typeof BaseButton
   className?: string;
 }
 
+export interface ButtonStyle {
+  variant?: keyof typeof VARIANTS;
+  size?: keyof typeof SIZES;
+}
+
+/** The button look, for a link that should look like a button without acting like one. */
+export function buttonClassName({ variant = "secondary", size = "md" }: ButtonStyle): string {
+  return cn(
+    "inline-flex cursor-pointer items-center justify-center gap-2 rounded-md border font-medium whitespace-nowrap shadow-ez-card outline-none tabular-nums transition-colors focus-visible:ring-3 focus-visible:ring-ez-focus disabled:cursor-not-allowed disabled:opacity-60",
+    VARIANTS[variant],
+    SIZES[size],
+  );
+}
+
 export function Button({
   variant = "secondary",
   size = "md",
@@ -36,9 +50,7 @@ export function Button({
     <BaseButton
       aria-busy={loading || undefined}
       className={cn(
-        "inline-flex cursor-pointer items-center justify-center gap-2 rounded-md border font-medium whitespace-nowrap shadow-ez-card outline-none tabular-nums transition-colors focus-visible:ring-3 focus-visible:ring-ez-focus disabled:cursor-not-allowed disabled:opacity-60",
-        VARIANTS[variant],
-        SIZES[size],
+        buttonClassName({ variant, size }),
         loading && "pointer-events-none cursor-progress",
         className,
       )}

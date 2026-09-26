@@ -9,7 +9,6 @@ import { Field, TextInput } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
 import { useAgentActions } from "@/hooks/use-agent-actions";
-import { errorMessage } from "@/lib/utils";
 
 export interface SignInPanelProps {
   agent: Agent;
@@ -22,7 +21,7 @@ export function SignInPanel({ agent, prompt }: SignInPanelProps) {
   return (
     <Card>
       <CardHeader
-        title={`${AGENTS_DESCRIPTIONS.sign_in_title} ${AGENT_NAMES[agent]}`}
+        title={AGENTS_DESCRIPTIONS.sign_in_title(AGENT_NAMES[agent])}
         description={AGENTS_DESCRIPTIONS.sign_in_description}
       />
       <ol className="divide-y divide-ez-border px-5">
@@ -51,7 +50,7 @@ export function SignInPanel({ agent, prompt }: SignInPanelProps) {
           </Step>
         ) : (
           <Step number={2} title={AGENTS_DESCRIPTIONS.step_paste_code}>
-            <CodeForm agent={agent} />
+            <CodeForm key={prompt.url} agent={agent} />
           </Step>
         )}
       </ol>
@@ -98,28 +97,23 @@ function CodeForm({ agent }: { agent: Agent }) {
   const { submitCode } = useAgentActions(agent);
   const form = useForm({
     defaultValues: { code: "" },
-    onSubmit: ({ value }) => submitCode.mutate(value.code),
+    onSubmit: async ({ value }) => {
+      await submitCode.mutateAsync(value.code).catch(() => undefined);
+    },
   });
   return (
     <form
       className="flex max-w-md flex-wrap items-start gap-2"
       onSubmit={(event) => {
         event.preventDefault();
-        void form.handleSubmit();
+        if (!form.state.isSubmitting) {
+          void form.handleSubmit();
+        }
       }}
     >
       <form.Field name="code">
         {(field) => (
-          <Field
-            label={AGENTS_DESCRIPTIONS.code_label}
-            hideLabel
-            className="min-w-48 flex-1"
-            error={
-              submitCode.isError
-                ? errorMessage(submitCode.error, AGENTS_DESCRIPTIONS.action_failed)
-                : undefined
-            }
-          >
+          <Field label={AGENTS_DESCRIPTIONS.code_label} hideLabel className="min-w-48 flex-1">
             <TextInput
               name={field.name}
               value={field.state.value}
@@ -133,9 +127,13 @@ function CodeForm({ agent }: { agent: Agent }) {
           </Field>
         )}
       </form.Field>
-      <Button type="submit" variant="primary" loading={submitCode.isPending}>
-        {AGENTS_DESCRIPTIONS.finish_sign_in}
-      </Button>
+      <form.Subscribe selector={(state) => state.isSubmitting}>
+        {(isSubmitting) => (
+          <Button type="submit" variant="primary" loading={isSubmitting}>
+            {AGENTS_DESCRIPTIONS.finish_sign_in}
+          </Button>
+        )}
+      </form.Subscribe>
     </form>
   );
 }

@@ -13,7 +13,8 @@ export interface PasswordFormProps {
   submitLabel: string;
   autoComplete: "new-password" | "current-password";
   mutation: UseMutationResult<unknown, unknown, string>;
-  onSuccess: () => void;
+  /** Runs after the password is accepted. The form stays busy until it resolves. */
+  onSuccess: () => Promise<void>;
 }
 
 /** A small centered card that submits one password. */
@@ -27,7 +28,14 @@ export function PasswordForm({
 }: PasswordFormProps) {
   const form = useForm({
     defaultValues: { password: "" },
-    onSubmit: ({ value }) => mutation.mutate(value.password, { onSuccess }),
+    onSubmit: async ({ value }) => {
+      try {
+        await mutation.mutateAsync(value.password);
+      } catch {
+        return;
+      }
+      await onSuccess();
+    },
   });
   return (
     <Card className="mx-auto mt-16 max-w-sm p-5">
@@ -37,18 +45,16 @@ export function PasswordForm({
         className="mt-4 flex flex-col gap-3"
         onSubmit={(event) => {
           event.preventDefault();
-          void form.handleSubmit();
+          if (!form.state.isSubmitting) {
+            void form.handleSubmit();
+          }
         }}
       >
         <form.Field name="password">
           {(field) => (
             <Field
               label={SESSION_DESCRIPTIONS.password_label}
-              error={
-                mutation.isError
-                  ? errorMessage(mutation.error, SESSION_DESCRIPTIONS.request_failed)
-                  : undefined
-              }
+              error={mutation.isError ? errorMessage(mutation.error) : undefined}
             >
               <TextInput
                 type="password"
@@ -63,9 +69,13 @@ export function PasswordForm({
             </Field>
           )}
         </form.Field>
-        <Button type="submit" variant="primary" loading={mutation.isPending}>
-          {submitLabel}
-        </Button>
+        <form.Subscribe selector={(state) => state.isSubmitting}>
+          {(isSubmitting) => (
+            <Button type="submit" variant="primary" loading={isSubmitting}>
+              {submitLabel}
+            </Button>
+          )}
+        </form.Subscribe>
       </form>
     </Card>
   );

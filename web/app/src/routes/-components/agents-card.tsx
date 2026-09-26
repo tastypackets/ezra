@@ -8,8 +8,8 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { Cell, HeaderCell, Row, Table } from "@/components/ui/table";
 import { Tooltip } from "@/components/ui/tooltip";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
-import { useAgentActions } from "@/hooks/use-agent-actions";
-import { downloadPercent, errorMessage, formatBytes } from "@/lib/utils";
+import { useAgentActionError, useAgentActions } from "@/hooks/use-agent-actions";
+import { downloadPercent, formatBytes } from "@/lib/utils";
 
 export interface AgentsCardProps {
   agents: AgentStatus[];
@@ -77,7 +77,7 @@ function AgentActions({ status }: { status: AgentStatus }) {
   const installed = Boolean(status.installed_version);
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
   const installing = install.isPending || Boolean(status.install_progress);
-  const failed = [install, startSignIn, signOut].find((mutation) => mutation.isError);
+  const failure = useAgentActionError(status.agent);
   return (
     <div className="inline-flex flex-col items-end gap-1">
       <div className="inline-flex gap-2">
@@ -109,9 +109,9 @@ function AgentActions({ status }: { status: AgentStatus }) {
           </Button>
         ) : null}
       </div>
-      {failed ? (
-        <p className="text-[0.8125rem] whitespace-normal text-ez-danger">
-          {errorMessage(failed.error, AGENTS_DESCRIPTIONS.action_failed)}
+      {failure ? (
+        <p role="alert" className="text-[0.8125rem] whitespace-normal text-ez-danger">
+          {failure}
         </p>
       ) : null}
     </div>
