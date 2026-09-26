@@ -1,6 +1,12 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "react", "import", "unicorn", "oxc"],
+  "jsPlugins": ["eslint-plugin-better-tailwindcss", "./lint/ezra-plugin.js"],
+  "settings": {
+    "better-tailwindcss": {
+      "entryPoint": "src/styles.css"
+    }
+  },
   "categories": {
     "correctness": "error",
     "suspicious": "error"
@@ -15,7 +21,11 @@
       {
         "allow": ["**/*.css"]
       }
-    ]
+    ],
+    "better-tailwindcss/no-unknown-classes": "error",
+    "better-tailwindcss/no-conflicting-classes": "error",
+    "better-tailwindcss/no-duplicate-classes": "error",
+    "ezra/class-strings-via-cn": "error"
   },
   "ignorePatterns": ["src/routeTree.gen.ts", "dist"]
 }

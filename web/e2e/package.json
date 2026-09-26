@@ -4,11 +4,15 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
-    "check": "tsc"
+    "check": "tsc",
+    "lint": "oxlint && oxfmt --check .",
+    "format": "oxfmt --write . && oxlint --fix"
   },
   "devDependencies": {
     "@playwright/test": "catalog:",
     "@types/node": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
     "typescript": "catalog:"
   }
 }

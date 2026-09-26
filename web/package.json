@@ -5,8 +5,8 @@
   "scripts": {
     "generate": "pnpm --filter @ezra/client generate",
     "build": "pnpm generate && pnpm --filter @ezra/app build",
-    "lint": "pnpm --filter @ezra/app lint",
-    "format": "pnpm --filter @ezra/app format",
+    "lint": "pnpm generate && pnpm -r lint && pnpm --filter @ezra/e2e check",
+    "format": "pnpm -r format",
     "test:e2e": "pnpm --filter @ezra/e2e test"
   },
   "devDependencies": {

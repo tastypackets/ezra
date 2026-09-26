@@ -39,7 +39,7 @@ dir = "web"
 run = "pnpm build"
 
 [tasks."web:lint"]
-description = "Lint and format-check the web app"
+description = "Lint, format-check and type-check the web workspace"
 dir = "web"
 run = "pnpm lint"
 

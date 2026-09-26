@@ -1,0 +1,4 @@
+{
+  "printWidth": 100,
+  "ignorePatterns": ["test-results", "playwright-report"]
+}

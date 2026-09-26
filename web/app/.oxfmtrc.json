@@ -1,5 +1,8 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "printWidth": 100,
+  "sortTailwindcss": {
+    "stylesheet": "./src/styles.css"
+  },
   "ignorePatterns": ["src/routeTree.gen.ts", "dist"]
 }
