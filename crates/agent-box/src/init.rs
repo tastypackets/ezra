@@ -3,6 +3,7 @@ mod environment;
 mod exec;
 mod groups;
 mod privileges;
+mod setup_scripts;
 mod stdio;
 mod sudo;
 
@@ -69,6 +70,7 @@ fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
     let requested_packages = requested_apt_packages();
     let environment_overrides = if Uid::effective().is_root() {
         apt_packages::install_missing(&requested_packages);
+        setup_scripts::run_all();
         become_agent_user(sudo_policy)?
     } else {
         adopt_invoking_user(sudo_policy, &requested_packages)?
@@ -134,8 +136,21 @@ fn adopt_invoking_user(
             requested_packages.join(" ")
         );
     }
+    warn_about_ignored_setup_scripts(uid);
     privileges::clear_inheritable_capabilities()?;
     Ok(environment_overrides)
+}
+
+fn warn_about_ignored_setup_scripts(uid: Uid) {
+    let directory = Path::new(setup_scripts::SETUP_SCRIPTS_DIRECTORY);
+    let has_scripts = setup_scripts::setup_scripts_in(directory)
+        .is_ok_and(|scripts| !scripts.executable.is_empty());
+    if has_scripts {
+        tracing::warn!(
+            "{} is ignored when the container starts as uid {uid}",
+            directory.display()
+        );
+    }
 }
 
 fn look_up_user_by_name(user_name: &str) -> Result<Option<User>, InitError> {

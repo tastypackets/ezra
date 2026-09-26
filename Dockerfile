@@ -194,6 +194,7 @@ fi
 groupadd --gid 1000 dev
 useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev
 install --directory --owner=dev --group=dev /config /projects
+install --directory /etc/agent-box/setup.d
 EOF
 
 COPY --from=agent-box-build /out/agent-box /usr/local/bin/agent-box

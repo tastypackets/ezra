@@ -157,6 +157,7 @@ check_equals "runs as dev" "1000:1000:dev" "$(id --user):$(id --group):$(id --us
 check_succeeds "the ubuntu user is gone" bash -c '! getent passwd ubuntu'
 tests_directory="$(dirname "${BASH_SOURCE[0]}")"
 files_owned_by_agent_elsewhere="$(find / -xdev \( -path /proc -o -path /tmp -o -path /home/dev -o -path /config -o -path /projects -o -path "${tests_directory}" \) -prune -o -uid 1000 -print 2>/dev/null || true)"
+check_succeeds "dev cannot add setup scripts" bash -c '! touch /etc/agent-box/setup.d/probe'
 check_equals "nothing outside /home/dev, /config and /projects is owned by uid 1000" "" "${files_owned_by_agent_elsewhere}"
 
 finish
