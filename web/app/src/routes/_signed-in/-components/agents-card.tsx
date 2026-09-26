@@ -205,7 +205,7 @@ function AgentActions({
             >
               {signOutPending ? null : <EllipsisIcon />}
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" className="w-auto">
               {menuInstall ? (
                 <DropdownMenuItem onClick={installNow}>{installLabel(status)}</DropdownMenuItem>
               ) : null}
