@@ -8,7 +8,14 @@ import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Badge } from "@/components/ui/badge";
 import type { badgeVariants } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -32,8 +39,8 @@ export function GitCard() {
       <CardContent className="flex flex-col gap-6">
         <GitHubSection github={git.github} />
         <Separator />
-        <IdentityForm identity={git.identity} />
       </CardContent>
+      <IdentityForm identity={git.identity} />
     </Card>
   );
 }
@@ -170,7 +177,7 @@ function IdentityForm({ identity }: { identity: CommitIdentity }) {
   });
   return (
     <form
-      className="flex flex-col gap-4"
+      className="contents"
       onSubmit={(event) => {
         event.preventDefault();
         if (!form.state.isSubmitting) {
@@ -178,43 +185,48 @@ function IdentityForm({ identity }: { identity: CommitIdentity }) {
         }
       }}
     >
-      <FieldSet>
-        <FieldLegend>{GIT_DESCRIPTIONS.identity}</FieldLegend>
-        <FieldGroup className="grid gap-4 sm:grid-cols-2">
-          <form.Field name="name">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={nameId}>{GIT_DESCRIPTIONS.name}</FieldLabel>
-                <Input
-                  id={nameId}
-                  name={field.name}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                  onBlur={field.handleBlur}
-                  autoComplete="name"
-                />
-              </Field>
-            )}
-          </form.Field>
-          <form.Field name="email">
-            {(field) => (
-              <Field>
-                <FieldLabel htmlFor={emailId}>{GIT_DESCRIPTIONS.email}</FieldLabel>
-                <Input
-                  id={emailId}
-                  type="email"
-                  name={field.name}
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                  onBlur={field.handleBlur}
-                  autoComplete="email"
-                />
-              </Field>
-            )}
-          </form.Field>
-        </FieldGroup>
-      </FieldSet>
-      <div className="flex flex-wrap items-center gap-3">
+      <CardContent>
+        <FieldSet>
+          <FieldLegend>{GIT_DESCRIPTIONS.identity}</FieldLegend>
+          <FieldGroup className="grid gap-4 sm:grid-cols-2">
+            <form.Field name="name">
+              {(field) => (
+                <Field>
+                  <FieldLabel htmlFor={nameId}>{GIT_DESCRIPTIONS.name}</FieldLabel>
+                  <Input
+                    id={nameId}
+                    name={field.name}
+                    value={field.state.value}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                    onBlur={field.handleBlur}
+                    autoComplete="name"
+                  />
+                </Field>
+              )}
+            </form.Field>
+            <form.Field name="email">
+              {(field) => (
+                <Field>
+                  <FieldLabel htmlFor={emailId}>{GIT_DESCRIPTIONS.email}</FieldLabel>
+                  <Input
+                    id={emailId}
+                    type="email"
+                    name={field.name}
+                    value={field.state.value}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                    onBlur={field.handleBlur}
+                    autoComplete="email"
+                  />
+                </Field>
+              )}
+            </form.Field>
+          </FieldGroup>
+        </FieldSet>
+      </CardContent>
+      <CardFooter className="justify-between gap-4">
+        <p role="alert" className="text-destructive">
+          {saveIdentity.isError ? errorMessage(saveIdentity.error) : null}
+        </p>
         <form.Subscribe selector={(state) => state.isSubmitting}>
           {(isSubmitting) => (
             <Button type="submit" loading={isSubmitting}>
@@ -222,12 +234,7 @@ function IdentityForm({ identity }: { identity: CommitIdentity }) {
             </Button>
           )}
         </form.Subscribe>
-        {saveIdentity.isError ? (
-          <p role="alert" className="text-destructive">
-            {errorMessage(saveIdentity.error)}
-          </p>
-        ) : null}
-      </div>
+      </CardFooter>
     </form>
   );
 }
