@@ -22,6 +22,7 @@ export const AGENTS_DESCRIPTIONS = {
   install: "Install",
   update_to: (version: string) => `Update to ${version}`,
   check_for_update: "Check for update",
+  installing: (percent: number) => `Installing ${percent}%`,
   up_to_date: (agent: string) => `${agent} is up to date.`,
   updated: (agent: string, version: string) => `${agent} ${version} is installed.`,
   more_actions: (agent: string) => `More ${agent} actions`,

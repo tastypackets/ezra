@@ -1,5 +1,6 @@
 import type { Agent, LoginPrompt } from "@ezra/client";
 import { useForm } from "@tanstack/react-form";
+import { useEffect, useRef } from "react";
 
 import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,11 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
-import { useAgentActionPending, useAgentActions } from "@/hooks/use-agent-actions";
+import {
+  useAgentActionPending,
+  useAgentActions,
+  useSignInStartedHere,
+} from "@/hooks/use-agent-actions";
 
 export interface SignInPanelProps {
   agent: Agent;
@@ -25,10 +30,20 @@ export interface SignInPanelProps {
 export function SignInPanel({ agent, prompt }: SignInPanelProps) {
   const { startSignIn } = useAgentActions(agent);
   const restarting = useAgentActionPending(agent, "start_sign_in");
+  const startedHere = useSignInStartedHere(agent, prompt);
+  const title = useRef<HTMLHeadingElement>(null);
+  const focusOnOpen = useRef(startedHere);
+  useEffect(() => {
+    if (focusOnOpen.current) {
+      title.current?.focus();
+    }
+  }, []);
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{AGENTS_DESCRIPTIONS.sign_in_title(AGENT_NAMES[agent])}</CardTitle>
+        <CardTitle ref={title} tabIndex={-1} className="outline-none">
+          {AGENTS_DESCRIPTIONS.sign_in_title(AGENT_NAMES[agent])}
+        </CardTitle>
         <CardDescription>{AGENTS_DESCRIPTIONS.sign_in_description}</CardDescription>
         <CardAction>
           <Button

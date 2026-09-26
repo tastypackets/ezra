@@ -12,8 +12,9 @@ test("the dashboard arrives with its data, then fetches only what changes", asyn
   await page.goto("./");
   for (const agent of ["Claude Code", "Codex"]) {
     const row = page.getByRole("row", { name: new RegExp(agent) });
+    await expect(row.getByRole("rowheader", { name: agent })).toBeVisible();
     await expect(row).toContainText("Not installed");
-    await expect(row.getByRole("button", { name: "Install" })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Install" })).toHaveAccessibleDescription(agent);
   }
   await expect(page.getByText("No projects yet.")).toBeVisible();
   await listening;
@@ -30,6 +31,54 @@ test("the dashboard arrives with its data, then fetches only what changes", asyn
   } finally {
     inContainer("rmdir", `/projects/${folder}`);
   }
+});
+
+test("an agent row keeps keyboard focus on its one button", async ({ page }) => {
+  // Installing and signing in reach the vendors, so the manager's replies are stubbed.
+  const codex = { agent: "codex", configured: false, logged_in: false };
+  const installed = {
+    agent: "claude",
+    configured: true,
+    logged_in: false,
+    installed_version: "2.1.283",
+  };
+  const prompt = { url: "https://claude.com/cai/oauth/authorize" };
+  let claude: object = { agent: "claude", configured: false, logged_in: false };
+  await page.route("**/api/v1/agents", (route) => route.fulfill({ json: [claude, codex] }));
+  await page.route("**/api/v1/agents/claude/install", (route) => {
+    claude =
+      "logged_in" in claude && claude.logged_in
+        ? { ...installed, logged_in: true, installed_version: "2.1.284" }
+        : installed;
+    return route.fulfill({ json: claude });
+  });
+  await page.route("**/api/v1/agents/claude/login", (route) => {
+    claude = { ...installed, login_prompt: prompt };
+    return route.fulfill({ json: prompt });
+  });
+  await page.route("**/api/v1/agents/claude/login/code", (route) => {
+    claude = { ...installed, logged_in: true, available_update: "2.1.284" };
+    return route.fulfill({ status: 204 });
+  });
+
+  await page.goto("./");
+  const row = page.getByRole("row", { name: /Claude Code/ });
+  await row.getByRole("button", { name: "Install" }).focus();
+  await page.keyboard.press("Enter");
+  const signIn = row.getByRole("button", { name: "Sign in" });
+  await expect(signIn).toBeFocused();
+  await expect(signIn).toHaveAccessibleDescription("Claude Code");
+
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Sign in to Claude Code" })).toBeFocused();
+  await page.getByRole("textbox", { name: "Code" }).fill("code");
+  await page.keyboard.press("Enter");
+
+  const update = row.getByRole("button", { name: "Update to 2.1.284" });
+  await update.focus();
+  await page.keyboard.press("Enter");
+  await expect(update).toBeHidden();
+  await expect(row.getByRole("button", { name: "More Claude Code actions" })).toBeFocused();
 });
 
 test("a folder's switch and server follow changes made elsewhere", async ({ page }, testInfo) => {
@@ -116,7 +165,9 @@ test.describe("on a phone", () => {
   test("the dashboard fits the screen", async ({ page }) => {
     await page.goto("./");
     const claude = page.getByRole("listitem").filter({ hasText: "Claude Code" });
-    await expect(claude.getByRole("button", { name: "Install" })).toBeInViewport();
+    const install = claude.getByRole("button", { name: "Install" });
+    await expect(install).toBeInViewport();
+    await expect(install).toHaveAccessibleDescription("Claude Code");
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
     );

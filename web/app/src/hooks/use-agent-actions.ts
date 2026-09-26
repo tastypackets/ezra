@@ -1,4 +1,4 @@
-import type { Agent } from "@ezra/client";
+import type { Agent, LoginPrompt } from "@ezra/client";
 import {
   installAgentMutation,
   logOutAgentMutation,
@@ -90,6 +90,19 @@ export function useAgentActionError(agent: Agent): string | undefined {
     .toSorted((first, second) => second.submittedAt - first.submittedAt)
     .at(0);
   return newestFailure ? errorMessage(newestFailure.error) : undefined;
+}
+
+/** Whether a sign-in started on this page, not elsewhere, shows the prompt. */
+export function useSignInStartedHere(agent: Agent, prompt: LoginPrompt): boolean {
+  return useMutationState({
+    filters: { mutationKey: [AGENT_ACTION, agent, "start_sign_in"] },
+    select: ({ state }) =>
+      state.status === "pending" ||
+      (typeof state.data === "object" &&
+        state.data !== null &&
+        "url" in state.data &&
+        state.data.url === prompt.url),
+  }).includes(true);
 }
 
 export function isInstallMutation(mutation: Mutation): boolean {

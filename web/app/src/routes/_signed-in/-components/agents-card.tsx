@@ -2,6 +2,7 @@ import type { AgentStatus } from "@ezra/client";
 import { cn } from "cn";
 import { EllipsisIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
+import { useCallback, useId, useRef } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import type { badgeVariants } from "@/components/ui/badge";
@@ -28,6 +29,7 @@ import {
   useAgentActionPending,
   useAgentActions,
 } from "@/hooks/use-agent-actions";
+import { nextAgentStep } from "@/lib/agent-steps";
 import { downloadPercent } from "@/lib/utils";
 
 type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
@@ -78,11 +80,14 @@ export function AgentsCard({ agents }: AgentsCardProps) {
 }
 
 function AgentRow({ status }: { status: AgentStatus }) {
+  const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status);
   return (
     <TableRow>
-      <TableCell className="font-medium">{AGENT_NAMES[status.agent]}</TableCell>
+      <TableHead scope="row" id={nameId}>
+        {AGENT_NAMES[status.agent]}
+      </TableHead>
       <TableCell>
         <Badge variant={state.variant}>{state.label}</Badge>
       </TableCell>
@@ -90,19 +95,22 @@ function AgentRow({ status }: { status: AgentStatus }) {
       <TableCell>{facts.account}</TableCell>
       <TableCell className="text-right tabular-nums">{facts.savedData}</TableCell>
       <TableCell>
-        <AgentActions status={status} className="items-end" />
+        <AgentActions status={status} nameId={nameId} className="items-end" />
       </TableCell>
     </TableRow>
   );
 }
 
 function AgentListItem({ status }: { status: AgentStatus }) {
+  const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status);
   return (
     <li className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
       <div className="flex items-center justify-between gap-3">
-        <span className="font-medium">{AGENT_NAMES[status.agent]}</span>
+        <span id={nameId} className="font-medium">
+          {AGENT_NAMES[status.agent]}
+        </span>
         <Badge variant={state.variant}>{state.label}</Badge>
       </div>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
@@ -115,7 +123,7 @@ function AgentListItem({ status }: { status: AgentStatus }) {
         </dt>
         <dd className="tabular-nums">{facts.savedData}</dd>
       </dl>
-      <AgentActions status={status} className="items-start" />
+      <AgentActions status={status} nameId={nameId} className="items-start" />
     </li>
   );
 }
@@ -128,35 +136,64 @@ function SavedDataLabel() {
   );
 }
 
-/** The one next step as a button, and the rest in a menu. */
-function AgentActions({ status, className }: { status: AgentStatus; className: string }) {
+/** The next step as one button, and the rest in a menu. */
+function AgentActions({
+  status,
+  nameId,
+  className,
+}: {
+  status: AgentStatus;
+  nameId: string;
+  className: string;
+}) {
   const { install, startSignIn, signOut } = useAgentActions(status.agent);
   const installPending = useAgentActionPending(status.agent, "install");
   const signInPending = useAgentActionPending(status.agent, "start_sign_in");
   const signOutPending = useAgentActionPending(status.agent, "sign_out");
   const failure = useAgentActionError(status.agent);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
+  const keepFocusInRow = useCallback(
+    (button: HTMLButtonElement | null) => () => {
+      if (button && button === document.activeElement) {
+        queueMicrotask(() => {
+          if (document.activeElement === document.body) {
+            menuTrigger.current?.focus();
+          }
+        });
+      }
+    },
+    [],
+  );
   const name = AGENT_NAMES[status.agent];
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
+  const step = nextAgentStep(status, installing);
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
   const path = { agent: status.agent };
   const installNow = () => install.mutate({ path });
+  const menuInstall = installed && step !== "install";
   return (
     <div className={cn("flex flex-col gap-1", className)}>
       <div className="flex items-center gap-1">
-        {installing || !installed || status.available_update ? (
-          <Button size="sm" loading={installing} onClick={installNow}>
-            {installing && percent !== undefined ? `${percent}%` : installLabel(status)}
+        {step ? (
+          <Button
+            ref={keepFocusInRow}
+            size="sm"
+            loading={step === "install" ? installing : signInPending}
+            aria-describedby={nameId}
+            onClick={step === "install" ? installNow : () => startSignIn.mutate({ path })}
+          >
+            {step === "sign_in"
+              ? AGENTS_DESCRIPTIONS.sign_in
+              : installing && percent !== undefined
+                ? AGENTS_DESCRIPTIONS.installing(percent)
+                : installLabel(status)}
           </Button>
         ) : null}
-        {installed && !installing && !status.logged_in && !status.login_prompt ? (
-          <Button size="sm" loading={signInPending} onClick={() => startSignIn.mutate({ path })}>
-            {AGENTS_DESCRIPTIONS.sign_in}
-          </Button>
-        ) : null}
-        {installed ? (
+        {menuInstall || status.logged_in ? (
           <DropdownMenu>
             <DropdownMenuTrigger
+              ref={menuTrigger}
               render={
                 <Button
                   variant="ghost"
@@ -169,9 +206,9 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
               {signOutPending ? null : <EllipsisIcon />}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem disabled={installing} onClick={installNow}>
-                {AGENTS_DESCRIPTIONS.check_for_update}
-              </DropdownMenuItem>
+              {menuInstall ? (
+                <DropdownMenuItem onClick={installNow}>{installLabel(status)}</DropdownMenuItem>
+              ) : null}
               {status.logged_in ? (
                 <DropdownMenuItem onClick={() => signOut.mutate({ path })}>
                   {AGENTS_DESCRIPTIONS.sign_out}
