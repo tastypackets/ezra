@@ -184,3 +184,17 @@ fn root_owned_config_is_reported() {
         stderr_of(&output)
     );
 }
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn global_git_settings_live_on_the_config_volume() {
+    let output = run_in_image(
+        &[],
+        &[
+            "bash",
+            "-c",
+            "git config --global user.name Tester && git config --file /config/git/config user.name",
+        ],
+    );
+    assert_eq!(stdout_of(&output), "Tester", "{}", stderr_of(&output));
+}

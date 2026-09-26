@@ -2,6 +2,7 @@ mod apt_packages;
 mod config;
 mod environment;
 mod exec;
+mod git;
 mod groups;
 mod privileges;
 mod setup_scripts;
@@ -21,6 +22,7 @@ use apt_packages::{APT_PACKAGES_VARIABLE, RequestedPackages};
 use config::InitConfig;
 use environment::{AccountDetails, EnvironmentOverride, TemporaryHome};
 use exec::Program;
+use git::GlobalGitConfig;
 use groups::SupplementaryGroups;
 use privileges::{Capabilities, UserExt};
 use setup_scripts::SetupScripts;
@@ -88,6 +90,9 @@ fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
     };
     sudo_policy.restrict_process_tree()?;
     warn_about_unwritable_directories();
+    if let Some(git_config) = GlobalGitConfig::from_environment() {
+        git_config.create_directory();
+    }
     Ok(environment_overrides)
 }
 

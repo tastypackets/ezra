@@ -230,6 +230,9 @@ ENV MISE_DATA_DIR=/config/mise \
     MISE_TRUSTED_CONFIG_PATHS=/projects \
     CLAUDE_CONFIG_DIR=/config/claude \
     CODEX_HOME=/config/codex \
+    GH_CONFIG_DIR=/config/gh \
+    GH_PATH=/usr/local/share/ezra/shims/gh \
+    GIT_CONFIG_GLOBAL=/config/git/config \
     DISABLE_UPDATES=1 \
     PATH=/home/dev/.local/bin:/config/mise/shims:/usr/local/share/ezra/shims:${PATH}
 
