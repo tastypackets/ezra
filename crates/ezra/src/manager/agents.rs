@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -49,6 +50,28 @@ impl Agent {
         match self {
             Self::Claude => "CLAUDE_CONFIG_DIR",
             Self::Codex => "CODEX_HOME",
+        }
+    }
+
+    pub async fn latest_version(
+        self,
+        tls_verification: TlsVerification,
+    ) -> Result<String, InstallError> {
+        let client = ReleaseClient::new(tls_verification)?;
+        Ok(Release::latest(self, &client).await?.version)
+    }
+}
+
+pub trait VersionExt {
+    /// Semantic version order, or any difference when either is not a semantic version.
+    fn is_newer_than(&self, installed: &str) -> bool;
+}
+
+impl VersionExt for str {
+    fn is_newer_than(&self, installed: &str) -> bool {
+        match (Version::parse(self), Version::parse(installed)) {
+            (Ok(latest), Ok(installed)) => latest > installed,
+            _ => self != installed,
         }
     }
 }
@@ -478,6 +501,17 @@ mod tests {
             }
         );
         assert!(Release::from_codex_channel(r#"{"tag_name":"v1","assets":[]}"#).is_err());
+    }
+
+    #[test]
+    fn versions_compare_semantically() {
+        assert!("2.1.10".is_newer_than("2.1.9"));
+        assert!(!"2.1.9".is_newer_than("2.1.10"));
+        assert!(!"2.1.9".is_newer_than("2.1.9"));
+        assert!("nightly-2".is_newer_than("nightly-1"));
+        assert!("nightly-1".is_newer_than("nightly-2"));
+        assert!("2.1.0".is_newer_than("nightly"));
+        assert!(!"nightly-1".is_newer_than("nightly-1"));
     }
 
     #[test]

@@ -19,6 +19,7 @@ nix = { version = "0.31.3", features = ["user", "fs", "process", "hostname"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "http2", "system-proxy"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"

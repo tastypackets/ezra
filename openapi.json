@@ -450,6 +450,13 @@
           "agent": {
             "$ref": "#/components/schemas/Agent"
           },
+          "available_update": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A newer release than the installed version, absent when none is known."
+          },
           "config_disk_bytes": {
             "type": [
               "integer",

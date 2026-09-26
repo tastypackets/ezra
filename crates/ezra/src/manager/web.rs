@@ -200,6 +200,7 @@ mod tests {
                 session_count: None,
                 config_disk_bytes: None,
                 install_progress: None,
+                available_update: None,
             }]),
         };
         let page = data

@@ -123,15 +123,11 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
-          variant={installed ? "secondary" : "primary"}
+          variant={installed && !status.available_update ? "secondary" : "primary"}
           loading={installing}
           onClick={() => install.mutate()}
         >
-          {installing && percent !== undefined
-            ? `${percent}%`
-            : installed
-              ? AGENTS_DESCRIPTIONS.update
-              : AGENTS_DESCRIPTIONS.install}
+          {installLabel(status, installing ? percent : undefined)}
         </Button>
         {installed && status.logged_in ? (
           <Button size="sm" loading={signOutPending} onClick={() => signOut.mutate()}>
@@ -156,6 +152,18 @@ function AgentActions({ status, className }: { status: AgentStatus; className: s
       ) : null}
     </div>
   );
+}
+
+function installLabel(status: AgentStatus, percent: number | undefined): string {
+  if (percent !== undefined) {
+    return `${percent}%`;
+  }
+  if (!status.installed_version) {
+    return AGENTS_DESCRIPTIONS.install;
+  }
+  return status.available_update
+    ? AGENTS_DESCRIPTIONS.update_to(status.available_update)
+    : AGENTS_DESCRIPTIONS.install_latest;
 }
 
 function agentFacts(status: AgentStatus) {

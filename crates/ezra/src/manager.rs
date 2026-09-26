@@ -6,6 +6,7 @@ mod settings;
 mod state;
 mod status;
 mod tls;
+mod updates;
 mod web;
 
 use std::env;
@@ -95,6 +96,7 @@ async fn serve() -> Result<(), ManagerError> {
         tls_verification,
     );
     tokio::spawn(state.clone().reinstall_configured_agents());
+    tokio::spawn(state.clone().check_for_updates_regularly());
     let app = state.into_router(web_directory);
     axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
         .handle(handle)

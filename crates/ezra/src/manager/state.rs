@@ -20,6 +20,7 @@ pub struct AppState {
     pub logins: Arc<Mutex<HashMap<Agent, LoginProcess>>>,
     pub download_tls_verification: TlsVerification,
     pub installs_in_progress: Arc<Mutex<HashMap<Agent, Arc<InstallProgress>>>>,
+    pub latest_versions: Arc<Mutex<HashMap<Agent, String>>>,
 }
 
 impl AppState {
@@ -38,6 +39,7 @@ impl AppState {
             logins: Arc::default(),
             download_tls_verification,
             installs_in_progress: Arc::default(),
+            latest_versions: Arc::default(),
         }
     }
 

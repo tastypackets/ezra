@@ -4,7 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::agents::{Agent, DownloadProgress};
+use super::agents::{Agent, DownloadProgress, VersionExt};
 use super::login::{LoginPrompt, SignInStatus};
 use super::state::AppState;
 use crate::path_ext::PathExt;
@@ -28,6 +28,8 @@ pub struct AgentStatus {
     pub config_disk_bytes: Option<u64>,
     /// Present while an install or update is downloading.
     pub install_progress: Option<DownloadProgress>,
+    /// A newer release than the installed version, absent when none is known.
+    pub available_update: Option<String>,
 }
 
 impl AgentStatus {
@@ -56,12 +58,22 @@ impl AgentStatus {
             .await
             .get(&agent)
             .map(|progress| progress.snapshot());
+        let installed_version = state.install_paths.installed_version(agent);
+        let available_update = match (
+            &installed_version,
+            state.latest_versions.lock().await.get(&agent),
+        ) {
+            (Some(installed), Some(latest)) if latest.is_newer_than(installed) => {
+                Some(latest.clone())
+            }
+            _ => None,
+        };
         let sign_in = SignInStatus::query(agent, &state.install_paths).await;
         let config_directory = state.install_paths.config_directory(agent);
         Self {
             agent,
             configured: state.settings.lock().await.agent(agent).configured,
-            installed_version: state.install_paths.installed_version(agent),
+            installed_version,
             logged_in: sign_in.logged_in,
             account: sign_in.account,
             login_prompt,
@@ -69,6 +81,7 @@ impl AgentStatus {
                 .and_then(|directory| agent.session_count(directory).ok()),
             config_disk_bytes: config_directory.and_then(|directory| directory.total_bytes().ok()),
             install_progress,
+            available_update,
         }
     }
 }
@@ -97,6 +110,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::manager::api::test_support::TestManager;
 
     fn write(path: &Path) {
         fs::create_dir_all(path.parent().expect("test paths have a parent"))
@@ -130,6 +144,38 @@ mod tests {
         write(&config.path().join("sessions/2026/09/25/rollout-a.jsonl"));
         write(&config.path().join("sessions/2026/09/26/rollout-b.jsonl"));
         assert_eq!(session_count(Agent::Codex, config.path()), 2);
+    }
+
+    #[tokio::test]
+    async fn a_newer_release_is_an_available_update() {
+        let manager = TestManager::new();
+        let binaries = tempfile::tempdir().expect("temporary directory");
+        let installed = binaries.path().join("2.1.0");
+        write(&installed);
+        manager
+            .state
+            .install_paths
+            .command(Agent::Claude)
+            .replace_symlink(&installed)
+            .expect("command link is created");
+        manager
+            .state
+            .latest_versions
+            .lock()
+            .await
+            .insert(Agent::Codex, "0.157.1".to_owned());
+        let codex = AgentStatus::gather(Agent::Codex, &manager.state).await;
+        assert_eq!(codex.available_update, None);
+        for (latest, expected) in [("2.1.1", Some("2.1.1")), ("2.1.0", None), ("2.0.9", None)] {
+            manager
+                .state
+                .latest_versions
+                .lock()
+                .await
+                .insert(Agent::Claude, latest.to_owned());
+            let status = AgentStatus::gather(Agent::Claude, &manager.state).await;
+            assert_eq!(status.available_update.as_deref(), expected, "{latest}");
+        }
     }
 
     #[test]

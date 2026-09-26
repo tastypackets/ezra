@@ -84,6 +84,7 @@ impl AppState {
             ApiError::AgentFailed(format!("could not install {agent}: {error}"))
         })?;
         tracing::info!("{agent} {version} is installed");
+        self.latest_versions.lock().await.insert(agent, version);
 
         self.update_settings(|settings| {
             settings.agent_mut(agent).configured = true;
@@ -133,6 +134,7 @@ mod tests {
                 session_count: Some(0),
                 config_disk_bytes: Some(0),
                 install_progress: None,
+                available_update: None,
             })
         );
     }
