@@ -9,14 +9,13 @@ export const SETTINGS_DESCRIPTIONS = {
   remote_control_enabled_hint:
     "Serves /projects, and the folders you choose, while Claude Code is signed in.",
   serve_repositories: "Serve new repositories",
-  serve_repositories_hint:
-    "Repositories added to /projects start with their switch on. An idle server uses under 100 MB.",
+  serve_repositories_hint: "Repositories added to /projects start with their switch on.",
   permission_mode: "Permission mode",
   permission_mode_hint: "Sessions started from the Claude app keep this mode.",
   permission_mode_word: "Enter one word, such as auto.",
   show_permission_modes: "Show permission modes",
   capacity: "Sessions at once",
-  capacity_hint: "Each session runs another Claude Code, usually 100 to 300 MB.",
+  capacity_hint: "Each session is its own Claude Code process, about 150 to 300 MB.",
   capacity_range: "Enter a number from 1 to 32.",
   save: "Save",
   saved: "Claude Code settings saved.",

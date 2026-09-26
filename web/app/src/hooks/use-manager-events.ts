@@ -22,10 +22,7 @@ const TOPIC_QUERIES: Record<Topic, QueryKey> = {
   git: gitStatusQueryOptions.queryKey,
 };
 
-/**
- * Refetches what the manager says changed. On connecting, refetches everything when the data is
- * from an older revision, such as after the manager restarted.
- */
+/** Refetches what the manager says changed, and everything when a connection finds a newer revision. */
 export function useManagerEvents(initialRevision: number | undefined) {
   useEffect(() => {
     const controller = new AbortController();

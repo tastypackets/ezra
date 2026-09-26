@@ -75,7 +75,7 @@ impl Events {
         let _nobody_listening = self.changes.send(ManagerEvent::Changed { topic, revision });
     }
 
-    /// How many changes were published so far.
+    /// The revision of the latest change.
     pub fn revision(&self) -> u64 {
         self.revision.load(Ordering::Relaxed)
     }

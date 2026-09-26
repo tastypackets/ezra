@@ -62,7 +62,7 @@ pub struct ClaudeSettings {
     pub release_channel: ReleaseChannel,
     #[serde(default)]
     pub remote_control: RemoteControlSettings,
-    /// Each folder's switch, by name. Repositories get one when first seen.
+    /// Each folder's switch by name, set to the default for a repository when first seen.
     #[serde(default)]
     pub folders: BTreeMap<String, bool>,
 }

@@ -60,7 +60,7 @@ pub struct RemoteControlSettings {
     /// The most sessions each server runs at once, from 1 to 32.
     #[schema(required = true, minimum = 1, maximum = 32)]
     pub capacity: u32,
-    /// Turn on the switch of each repository that appears in /projects.
+    /// Whether repositories that appear in /projects start with their switch on.
     #[schema(required = true)]
     pub serve_repositories: bool,
 }
@@ -126,7 +126,7 @@ pub struct RemoteControlStatus {
     pub last_error: Option<String>,
     /// Unexpected stops since the manager started.
     pub restarts: u32,
-    /// What the server and its sessions use. Absent while no server process runs.
+    /// What the server and its sessions use, absent while no server process runs.
     pub usage: Option<ServerUsage>,
 }
 
@@ -502,7 +502,7 @@ impl AppState {
         true
     }
 
-    /// Whether the folder's switch is on. A repository not recorded yet gets the default.
+    /// Whether the folder's switch is on, the default for a repository not recorded yet.
     pub async fn serves_folder(&self, folder: &Folder) -> bool {
         let settings = self.settings.lock().await;
         let claude = &settings.agents.claude;

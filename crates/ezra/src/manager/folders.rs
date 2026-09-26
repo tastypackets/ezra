@@ -426,8 +426,8 @@ impl AppState {
         Ok(changed)
     }
 
-    /// Keeps the folder list in `/projects/AGENTS.md` and the folder choices current, and servers
-    /// in step with them, as soon as the folders change.
+    /// Rescans /projects on every change and every few minutes, then updates `AGENTS.md`, the folder
+    /// switches and the servers.
     pub async fn describe_folders_regularly(self) {
         let mut watcher = FolderWatcher::start(&self.projects.0);
         let mut rescan = interval(watcher.rescan_interval());
@@ -477,8 +477,8 @@ impl AppState {
     }
 }
 
-/// Notices at once when folders in /projects appear, go, or become repositories, and when a
-/// repository's branch or remote changes. Without inotify, rescans do all the work.
+/// Watches /projects, each folder in it, and each repository's `.git`. Without inotify, rescans
+/// run every 30 s instead.
 struct FolderWatcher {
     watcher: Option<RecommendedWatcher>,
     watched: BTreeSet<PathBuf>,
@@ -559,7 +559,7 @@ impl FolderWatcher {
         }
     }
 
-    /// Returns once changes stop for a moment, so a clone is scanned when it is done.
+    /// Returns after a change once a second passes without another, or after 10 s of changes.
     async fn settled_change(&self) {
         if self.watcher.is_none() {
             return future::pending().await;

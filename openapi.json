@@ -1269,7 +1269,7 @@
           },
           "serve_repositories": {
             "type": "boolean",
-            "description": "Turn on the switch of each repository that appears in /projects.",
+            "description": "Whether repositories that appear in /projects start with their switch on.",
             "default": true
           }
         }
@@ -1309,7 +1309,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ServerUsage",
-                "description": "What the server and its sessions use. Absent while no server process runs."
+                "description": "What the server and its sessions use, absent while no server process runs."
               },
               {
                 "type": "null"
