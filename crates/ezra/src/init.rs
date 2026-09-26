@@ -30,7 +30,7 @@ use stdio::StandardStreams;
 use sudo::{SUDO_POLICY_VARIABLE, SudoPolicy};
 
 const AGENT_USER_NAME: &str = "dev";
-const DIRECTORIES_AGENT_MUST_WRITE: [&str; 2] = ["/config", "/projects"];
+const DIRECTORIES_AGENT_MUST_WRITE: [&str; 3] = ["/config", "/projects", "/cache"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {

@@ -62,13 +62,26 @@ impl AppState {
                 .collect()
         };
         for agent in configured_agents {
-            if self.install_paths.installed_version(agent).is_none() {
-                tracing::info!("reinstalling {agent}, which is configured but not installed");
-                if let Err(ApiError::AgentFailed(message) | ApiError::Internal(message)) =
-                    self.install_and_record(agent).await
-                {
-                    tracing::warn!("{message}");
+            if self.install_paths.installed_version(agent).is_some() {
+                continue;
+            }
+            match self.install_paths.link_kept_version(agent) {
+                Ok(Some(version)) => {
+                    tracing::info!("{agent} {version} is linked from /cache");
+                    if agent == Agent::Claude {
+                        self.remote_control.reconsider();
+                    }
+                    self.events.publish(Topic::Agents);
                 }
+                Ok(None) => {
+                    tracing::info!("reinstalling {agent}, which is configured but not installed");
+                    if let Err(ApiError::AgentFailed(message) | ApiError::Internal(message)) =
+                        self.install_and_record(agent).await
+                    {
+                        tracing::warn!("{message}");
+                    }
+                }
+                Err(error) => tracing::warn!("could not link the kept {agent}: {error}"),
             }
         }
     }

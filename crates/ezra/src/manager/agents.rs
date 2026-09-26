@@ -112,12 +112,13 @@ pub enum InstallError {
     Io(#[from] io::Error),
 }
 
-/// `~/.local/bin` holds the commands. `~/.local/share/<agent>` holds one directory or file per version.
-/// The config directories hold each CLI's sign-in, settings and sessions on the /config volume.
+/// `~/.local/bin` holds the commands. The versions directory holds one directory or file per
+/// version of each agent, /cache/agents in the image. The config directories hold each CLI's
+/// sign-in, settings and sessions on the /config volume.
 #[derive(Debug, Clone)]
 pub struct InstallPaths {
     bin_directory: PathBuf,
-    share_directory: PathBuf,
+    versions_root: PathBuf,
     claude_config_directory: Option<PathBuf>,
     codex_config_directory: Option<PathBuf>,
 }
@@ -126,9 +127,16 @@ impl InstallPaths {
     pub fn under_home(home: &Path) -> Self {
         Self {
             bin_directory: home.join(".local/bin"),
-            share_directory: home.join(".local/share"),
+            versions_root: home.join(".local/share"),
             claude_config_directory: None,
             codex_config_directory: None,
+        }
+    }
+
+    pub fn with_versions_in(self, versions_root: PathBuf) -> Self {
+        Self {
+            versions_root,
+            ..self
         }
     }
 
@@ -175,6 +183,38 @@ impl InstallPaths {
         Some(version_path.file_name()?.to_string_lossy().into_owned())
     }
 
+    /// Links a missing command to the newest version already kept, and returns that version.
+    pub fn link_kept_version(&self, agent: Agent) -> io::Result<Option<String>> {
+        let kept = self
+            .versions_directory(agent)
+            .entries_or_empty()?
+            .into_iter()
+            .filter_map(|path| {
+                let version = path.file_name()?.to_str()?.to_owned();
+                (!version.starts_with('.')).then_some((version, path))
+            })
+            .reduce(|newest, candidate| {
+                if candidate.0.is_newer_than(&newest.0) {
+                    candidate
+                } else {
+                    newest
+                }
+            });
+        let Some((version, path)) = kept else {
+            return Ok(None);
+        };
+        self.link(agent, &path)?;
+        Ok(Some(version))
+    }
+
+    fn link(&self, agent: Agent, version_path: &Path) -> io::Result<()> {
+        let command_target = match agent {
+            Agent::Claude => version_path.to_path_buf(),
+            Agent::Codex => version_path.join("bin/codex"),
+        };
+        self.command(agent).replace_symlink(&command_target)
+    }
+
     /// Installs the channel's release when it is newer than the installed one. Returns the
     /// installed version.
     pub async fn install_latest(
@@ -211,6 +251,11 @@ impl InstallPaths {
         let download_path = versions_directory.join(format!(".{}.download", release.version));
         let staging_path = versions_directory.join(format!(".{}.partial", release.version));
         let version_path = versions_directory.join(&release.version);
+        if version_path.exists() {
+            self.link(agent, &version_path)?;
+            return Self::remove_versions_except(&versions_directory, &release.version)
+                .map_err(InstallError::from);
+        }
         staging_path.remove_if_present()?;
 
         let outcome = async {
@@ -247,20 +292,13 @@ impl InstallPaths {
         staging_path.remove_if_present()?;
         outcome?;
 
-        let command_target = match agent {
-            Agent::Claude => version_path,
-            Agent::Codex => version_path.join("bin/codex"),
-        };
-        self.command(agent).replace_symlink(&command_target)?;
+        self.link(agent, &version_path)?;
         Self::remove_versions_except(&versions_directory, &release.version)?;
         Ok(())
     }
 
     fn versions_directory(&self, agent: Agent) -> PathBuf {
-        match agent {
-            Agent::Claude => self.share_directory.join("claude/versions"),
-            Agent::Codex => self.share_directory.join("codex"),
-        }
+        self.versions_root.join(agent.command_name())
     }
 
     fn remove_versions_except(versions_directory: &Path, kept_version: &str) -> io::Result<()> {
@@ -573,6 +611,35 @@ mod tests {
             paths.installed_version(Agent::Codex).as_deref(),
             Some("0.157.1")
         );
+    }
+
+    #[test]
+    fn a_kept_version_is_linked_when_the_command_is_missing() {
+        let home = tempfile::tempdir().expect("temporary directory");
+        let cache = tempfile::tempdir().expect("temporary directory");
+        let paths =
+            InstallPaths::under_home(home.path()).with_versions_in(cache.path().to_path_buf());
+        assert_eq!(
+            paths
+                .link_kept_version(Agent::Claude)
+                .expect("the cache is readable"),
+            None
+        );
+
+        create_file(&cache.path().join("claude/2.1.283"));
+        create_file(&cache.path().join("claude/.2.1.284.partial"));
+        create_file(&cache.path().join("codex/0.150.0/bin/codex"));
+        create_file(&cache.path().join("codex/0.157.1/bin/codex"));
+        for (agent, version) in [(Agent::Claude, "2.1.283"), (Agent::Codex, "0.157.1")] {
+            assert_eq!(
+                paths
+                    .link_kept_version(agent)
+                    .expect("the kept version is linked")
+                    .as_deref(),
+                Some(version)
+            );
+            assert_eq!(paths.installed_version(agent).as_deref(), Some(version));
+        }
     }
 
     #[test]

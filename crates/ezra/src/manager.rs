@@ -35,6 +35,7 @@ const STATE_DIRECTORY: &str = "/config/ezra";
 const TLS_VERIFY_VARIABLE: &str = "EZRA_TLS_VERIFY";
 const DEFAULT_PORT: u16 = 8443;
 const DEFAULT_WEB_DIRECTORY: &str = "/usr/local/share/ezra/web";
+const AGENT_VERSIONS_DIRECTORY: &str = "/cache/agents";
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +95,7 @@ async fn serve() -> Result<(), ManagerError> {
         settings_path,
         settings,
         agents::InstallPaths::under_home(Path::new(&home))
+            .with_versions_in(PathBuf::from(AGENT_VERSIONS_DIRECTORY))
             .with_config_directories_from_environment(),
         tls_verification,
         git_tools.clone(),

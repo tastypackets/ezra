@@ -220,7 +220,7 @@ if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null; then
 fi
 groupadd --gid 1000 dev
 useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev
-install --directory --owner=dev --group=dev /config /projects
+install --directory --owner=dev --group=dev /config /projects /cache
 install --directory /etc/ezra/setup.d
 EOF
 

@@ -12,8 +12,10 @@ services:
     volumes:
       - config:/config
       - projects:/projects
+      - cache:/cache
     stop_grace_period: 60s
 
 volumes:
   config:
   projects:
+  cache:
