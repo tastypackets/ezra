@@ -420,7 +420,7 @@ impl ClaudeCredentials {
 }
 
 pub trait StrExt {
-    /// Removes colour and other ANSI escape sequences.
+    /// Removes colour, hyperlinks and other ANSI escape sequences.
     fn without_terminal_codes(&self) -> String;
 }
 
@@ -429,15 +429,29 @@ impl StrExt for str {
         let mut plain = String::with_capacity(self.len());
         let mut characters = self.chars().peekable();
         while let Some(character) = characters.next() {
-            if character == '\u{1b}' && characters.peek() == Some(&'[') {
-                characters.next();
-                for sequence_character in characters.by_ref() {
-                    if ('@'..='~').contains(&sequence_character) {
-                        break;
+            if character != '\u{1b}' {
+                plain.push(character);
+                continue;
+            }
+            match characters.next() {
+                Some('[') => {
+                    for sequence_character in characters.by_ref() {
+                        if ('@'..='~').contains(&sequence_character) {
+                            break;
+                        }
                     }
                 }
-            } else {
-                plain.push(character);
+                Some(']') => {
+                    while let Some(sequence_character) = characters.next() {
+                        if sequence_character == '\u{7}'
+                            || (sequence_character == '\u{1b}'
+                                && characters.next_if_eq(&'\\').is_some())
+                        {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         plain
@@ -527,6 +541,11 @@ mod tests {
         assert_eq!(
             "\u{1b}[94mhttps://x\u{1b}[0m plain".without_terminal_codes(),
             "https://x plain"
+        );
+        assert_eq!(
+            "\u{1b}]8;;https://claude.ai/code/session_01\u{7}Attached\u{1b}]8;;\u{7} · \u{1b}]8;;https://x\u{1b}\\x\u{1b}]8;;\u{1b}\\"
+                .without_terminal_codes(),
+            "Attached · x"
         );
     }
 
