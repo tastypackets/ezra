@@ -2,15 +2,16 @@ import {
   chooseFolderSpawnModeMutation,
   chooseToServeFolderMutation,
   cloneRepositoryMutation,
+  deleteFolderMutation,
   stopCloneMutation,
 } from "@ezra/client/react-query.gen";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
-import { SPAWN_MODES } from "@/content/folders";
+import { DELETE_FOLDER_DESCRIPTIONS, SPAWN_MODES } from "@/content/folders";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 
-/** Choosing whether the Claude app lists a folder and where its sessions work. Each refreshes the folders when it settles. */
+/** Choosing whether the Claude app lists a folder and where its sessions work, and deleting it. Each refreshes the folders. */
 export function useFolderActions() {
   const queryClient = useQueryClient();
   const refreshFolders = () =>
@@ -25,7 +26,14 @@ export function useFolderActions() {
       toastManager.add({ title: SPAWN_MODES[body.spawn].saved(path.name) }),
     onSettled: refreshFolders,
   });
-  return { chooseToServe, chooseSpawnMode };
+  const deleteFolder = useMutation({
+    ...deleteFolderMutation(),
+    onSuccess: (_, { path }) => {
+      toastManager.add({ title: DELETE_FOLDER_DESCRIPTIONS.deleted(path.name) });
+    },
+    onSettled: refreshFolders,
+  });
+  return { chooseToServe, chooseSpawnMode, deleteFolder };
 }
 
 /** Starting a clone, and stopping or dismissing one. Each refreshes the clones. */

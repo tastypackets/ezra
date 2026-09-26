@@ -10,6 +10,7 @@ export const FOLDERS_DESCRIPTIONS = {
   more_actions: (folder: string) => `More ${folder} actions`,
   spawn: "New sessions work in",
   worktree_needs_repository: "Needs a git repository.",
+  delete: "Delete",
   cloning: "Cloning",
   clone_failed: "Could not clone",
   stop_clone: "Stop",
@@ -50,3 +51,20 @@ export const SPAWN_MODES: Record<
     saved: (folder) => `New ${folder} sessions get their own worktree.`,
   },
 };
+
+export const DELETE_FOLDER_DESCRIPTIONS = {
+  title: (folder: string) => `Delete ${folder}?`,
+  description: (folder: string) => `Deletes /projects/${folder} and everything in it.`,
+  server: "Stops its Remote Control server and the sessions in it.",
+  checking: "Checking for unsaved work",
+  check_failed: "Could not check for unsaved work",
+  only_here: "Only in this folder:",
+  uncommitted_changes: (count: number) =>
+    count === 1 ? "1 uncommitted change" : `${count} uncommitted changes`,
+  unpushed_commits: (count: number) =>
+    count === 1 ? "1 commit on no remote" : `${count} commits on no remote`,
+  stashes: (count: number) => (count === 1 ? "1 stash" : `${count} stashes`),
+  cancel: "Cancel",
+  confirm: "Delete",
+  deleted: (folder: string) => `Deleted ${folder}.`,
+} as const;

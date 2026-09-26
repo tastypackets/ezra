@@ -2,7 +2,7 @@ import type { CloneStatus, FolderStatus, RemoteControlStatus, SpawnMode } from "
 import { useQuery } from "@tanstack/react-query";
 import { EllipsisIcon, ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -10,9 +10,11 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Hint } from "@/components/ui/hint";
@@ -28,6 +30,7 @@ import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-querie
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { CloneDialog } from "./clone-dialog";
+import { DeleteFolderDialog } from "./delete-folder-dialog";
 import { SERVER_BADGES } from "./remote-control-card";
 
 const SPAWN_MODE_ORDER: SpawnMode[] = ["same-dir", "worktree"];
@@ -129,6 +132,7 @@ function CloneRow({ clone }: { clone: CloneStatus }) {
 
 function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteControlStatus }) {
   const { chooseToServe, chooseSpawnMode } = useFolderActions();
+  const [deleting, setDeleting] = useState(false);
   const detail = folder.git ? folder.git.repository : FOLDERS_DESCRIPTIONS.not_git;
   const failure = chooseToServe.error ?? chooseSpawnMode.error;
   const switchId = useId();
@@ -238,8 +242,18 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
                 );
               })}
             </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
+              {FOLDERS_DESCRIPTIONS.delete}
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <DeleteFolderDialog
+          folder={folder}
+          served={server?.state === "running" || server?.state === "starting"}
+          open={deleting}
+          onOpenChange={setDeleting}
+        />
       </div>
     </li>
   );
