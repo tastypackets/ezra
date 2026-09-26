@@ -645,10 +645,6 @@ impl ServerLog {
         }
         Ok(())
     }
-
-    fn remove(&self) -> io::Result<()> {
-        self.0.remove_if_present()
-    }
 }
 
 /// Why a server run ended.
@@ -806,7 +802,7 @@ impl AppState {
                 Wanted::Off if served != Served::Projects => {
                     self.remote_control.forget(&directory);
                     if !directory.is_dir()
-                        && let Err(error) = self.remote_control.log(&served).remove()
+                        && let Err(error) = self.remote_control.log(&served).0.remove_if_present()
                     {
                         tracing::warn!(
                             "could not remove the log of {}: {error}",
