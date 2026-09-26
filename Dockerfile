@@ -11,7 +11,12 @@ ARG TARGETARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR /src
 
-RUN rustup target add x86_64-unknown-linux-musl
+RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked <<'EOF'
+set -euo pipefail
+apt-get update
+apt-get install --yes --no-install-recommends musl-tools
+rustup target add x86_64-unknown-linux-musl
+EOF
 
 RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     --mount=type=bind,source=Cargo.lock,target=Cargo.lock \
@@ -209,5 +214,6 @@ ENV MISE_DATA_DIR=/config/mise \
 
 COPY --from=agent-box-build /out/agent-box /usr/local/bin/agent-box
 
+EXPOSE 8443
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/agent-box", "init", "--"]
-CMD ["bash"]
+CMD ["agent-box", "manager"]

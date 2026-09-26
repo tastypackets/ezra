@@ -1,4 +1,5 @@
 mod init;
+mod manager;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -21,6 +22,8 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<OsString>,
     },
+    /// Serve the manager API over HTTPS
+    Manager,
 }
 
 fn main() -> ExitCode {
@@ -32,6 +35,7 @@ fn main() -> ExitCode {
 
     match Cli::parse().command {
         Command::Init { program, arguments } => init::run(&program, &arguments),
+        Command::Manager => manager::run(),
     }
 }
 
@@ -44,7 +48,9 @@ mod tests {
         let cli = Cli::try_parse_from(["agent-box", "init", "--", "bash", "-c", "exit 42"])
             .expect("valid command line");
 
-        let Command::Init { program, arguments } = cli.command;
+        let Command::Init { program, arguments } = cli.command else {
+            panic!("parsed as another command");
+        };
         assert_eq!(program, "bash");
         assert_eq!(arguments, ["-c", "exit 42"]);
     }
