@@ -6,8 +6,8 @@ import { useEffect } from "react";
 
 import { queryClient } from "@/lib/query-client";
 import { agentsQueryOptions } from "@/queries/agent-queries";
-import { foldersQueryOptions } from "@/queries/folder-queries";
-import { gitStatusQueryOptions } from "@/queries/git-queries";
+import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
+import { gitHubRepositoriesQueryOptions, gitStatusQueryOptions } from "@/queries/git-queries";
 import { managerQueryOptions } from "@/queries/manager-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
@@ -15,13 +15,14 @@ import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 const FIRST_RECONNECT_DELAY_MS = 1_000;
 const LONGEST_RECONNECT_DELAY_MS = 30_000;
 
-const TOPIC_QUERIES: Record<Topic, QueryKey> = {
-  agents: agentsQueryOptions.queryKey,
-  claude_settings: getClaudeSettingsOptions().queryKey,
-  folders: foldersQueryOptions.queryKey,
-  remote_control: remoteControlQueryOptions.queryKey,
-  git: gitStatusQueryOptions.queryKey,
-  manager: managerQueryOptions.queryKey,
+const TOPIC_QUERIES: Record<Topic, readonly QueryKey[]> = {
+  agents: [agentsQueryOptions.queryKey],
+  claude_settings: [getClaudeSettingsOptions().queryKey],
+  folders: [foldersQueryOptions.queryKey],
+  clones: [clonesQueryOptions.queryKey],
+  remote_control: [remoteControlQueryOptions.queryKey],
+  git: [gitStatusQueryOptions.queryKey, gitHubRepositoriesQueryOptions.queryKey],
+  manager: [managerQueryOptions.queryKey],
 };
 
 /** Refetches what the manager says changed, and everything when a connection finds a newer revision. */
@@ -39,7 +40,9 @@ export function useManagerEvents(initialRevision: number | undefined) {
         for await (const event of stream) {
           delay = FIRST_RECONNECT_DELAY_MS;
           if (event.event === "changed") {
-            void queryClient.invalidateQueries({ queryKey: TOPIC_QUERIES[event.topic] });
+            for (const queryKey of TOPIC_QUERIES[event.topic]) {
+              void queryClient.invalidateQueries({ queryKey });
+            }
           } else if (event.revision !== revision) {
             void queryClient.invalidateQueries();
           }

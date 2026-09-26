@@ -6,7 +6,14 @@ describe("isInitialData", () => {
   it("accepts what the manager writes", () => {
     const session = { claimed: true, authenticated: false };
     expect(
-      isInitialData({ revision: 1, session, agents: null, folders: null, remote_control: null }),
+      isInitialData({
+        revision: 1,
+        session,
+        agents: null,
+        folders: null,
+        clones: null,
+        remote_control: null,
+      }),
     ).toBe(true);
     const remoteControl = { projects: { state: "waiting", restarts: 0 }, folders: {} };
     expect(
@@ -15,6 +22,7 @@ describe("isInitialData", () => {
         session,
         agents: [],
         folders: [],
+        clones: [],
         remote_control: remoteControl,
       }),
     ).toBe(true);

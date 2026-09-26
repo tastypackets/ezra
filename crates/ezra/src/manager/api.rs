@@ -1,4 +1,5 @@
 mod agents;
+mod clones;
 mod events;
 mod folders;
 mod git;
@@ -14,7 +15,7 @@ use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::CookieJar;
 use serde::Serialize;
@@ -45,6 +46,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/events", get(events::stream))
         .route("/api/v1/remote-control", get(remote_control::overview))
         .route("/api/v1/folders", get(folders::list))
+        .route("/api/v1/folders/{name}", delete(folders::delete))
         .route(
             "/api/v1/folders/{name}/remote-control",
             put(folders::choose_to_serve),
@@ -59,9 +61,19 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/folders/{name}/spawn-mode",
             put(folders::choose_spawn_mode),
         )
+        .route(
+            "/api/v1/folders/{name}/unsaved-work",
+            get(folders::unsaved_work),
+        )
+        .route("/api/v1/clones", get(clones::list).post(clones::start))
+        .route("/api/v1/clones/{name}", delete(clones::stop))
         .route("/api/v1/git", get(git::status))
         .route("/api/v1/git/github/login", post(git::start_github_login))
         .route("/api/v1/git/github/logout", post(git::log_out_of_github))
+        .route(
+            "/api/v1/git/github/repositories",
+            get(git::github_repositories),
+        )
         .route("/api/v1/git/identity", put(git::update_identity))
         .route("/api", any(not_found))
         .route("/api/", any(not_found))
@@ -157,10 +169,16 @@ pub struct ErrorBody {
         git::status,
         git::start_github_login,
         git::log_out_of_github,
+        git::github_repositories,
         git::update_identity,
         folders::list,
         folders::choose_to_serve,
         folders::choose_spawn_mode,
+        folders::unsaved_work,
+        folders::delete,
+        clones::list,
+        clones::start,
+        clones::stop,
         remote_control::overview,
         events::stream,
         manager::status,

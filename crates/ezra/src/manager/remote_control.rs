@@ -215,6 +215,17 @@ impl RemoteControl {
             .cloned()
     }
 
+    /// Waits until `directory` has no server. False when `longest` passed first.
+    pub async fn wait_until_gone(&self, directory: &Path, longest: Duration) -> bool {
+        timeout(longest, async {
+            while self.status_of(directory).is_some() {
+                sleep(GROUP_POLL_INTERVAL).await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
     pub fn overview(&self, projects: &Path) -> RemoteControlOverview {
         let servers = self.servers.lock().unwrap_or_else(PoisonError::into_inner);
         RemoteControlOverview {
@@ -796,12 +807,12 @@ impl ServerRun {
     }
 }
 
-/// The server and the sessions it started, which share its process group.
-struct ProcessGroup(Pid);
+/// A process and the processes it started, which share its process group.
+pub struct ProcessGroup(pub Pid);
 
 impl ProcessGroup {
     /// SIGTERM, then SIGKILL for whatever is left after the grace period.
-    async fn terminate(&self, leader: &mut Child) {
+    pub async fn terminate(&self, leader: &mut Child) {
         let _already_gone = killpg(self.0, Signal::SIGTERM);
         let deadline = Instant::now().checked_add(STOP_GRACE_PERIOD);
         while deadline.is_some_and(|deadline| Instant::now() < deadline) {
@@ -1661,6 +1672,37 @@ esac"#,
                 "{expected:?} missing from {published:?}"
             );
         }
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_folder_is_deleted_after_its_server_stops() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            "trap 'test -d \"$PWD\" && touch \"../stopped-$(basename \"$PWD\")\"; exit' TERM; echo \"https://claude.ai/code?environment=env_$(basename \"$PWD\")\"; sleep 60 & wait",
+        );
+        let app = state.projects.folder("app");
+        fs::create_dir_all(&app).expect("folder is created");
+        state
+            .change_folder_choice("app", |choice| choice.serve = true)
+            .await
+            .expect("the choice is saved");
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_in(&state, &app, ServerState::Running).await;
+
+        state
+            .delete_folder("app")
+            .await
+            .expect("the folder is deleted");
+        assert!(!app.exists());
+        assert!(state.projects.0.join("stopped-app").exists());
+        assert_eq!(state.remote_control.status_of(&app), None);
+        assert!(state.settings.lock().await.agents.claude.folders.is_empty());
 
         state.remote_control.begin_shut_down();
         supervisor.await.expect("supervisor stops");

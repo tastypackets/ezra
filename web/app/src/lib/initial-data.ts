@@ -1,8 +1,14 @@
-import type { AgentStatus, FolderStatus, RemoteControlOverview, SessionStatus } from "@ezra/client";
+import type {
+  AgentStatus,
+  CloneStatus,
+  FolderStatus,
+  RemoteControlOverview,
+  SessionStatus,
+} from "@ezra/client";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { agentsQueryOptions } from "@/queries/agent-queries";
-import { foldersQueryOptions } from "@/queries/folder-queries";
+import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { sessionQueryOptions } from "@/queries/session-queries";
 
@@ -12,6 +18,7 @@ interface InitialData {
   session: SessionStatus;
   agents: AgentStatus[] | null;
   folders: FolderStatus[] | null;
+  clones: CloneStatus[] | null;
   remote_control: RemoteControlOverview | null;
 }
 
@@ -37,6 +44,9 @@ export function seedInitialData(queryClient: QueryClient): number | undefined {
   if (initialData.folders) {
     queryClient.setQueryData(foldersQueryOptions.queryKey, initialData.folders, { updatedAt });
   }
+  if (initialData.clones) {
+    queryClient.setQueryData(clonesQueryOptions.queryKey, initialData.clones, { updatedAt });
+  }
   if (initialData.remote_control) {
     queryClient.setQueryData(remoteControlQueryOptions.queryKey, initialData.remote_control, {
       updatedAt,
@@ -54,11 +64,12 @@ export function isInitialData(value: unknown): value is InitialData {
     !("session" in value) ||
     !("agents" in value) ||
     !("folders" in value) ||
+    !("clones" in value) ||
     !("remote_control" in value)
   ) {
     return false;
   }
-  const { revision, session, agents, folders, remote_control: remoteControl } = value;
+  const { revision, session, agents, folders, clones, remote_control: remoteControl } = value;
   return (
     typeof revision === "number" &&
     typeof session === "object" &&
@@ -67,6 +78,7 @@ export function isInitialData(value: unknown): value is InitialData {
     "authenticated" in session &&
     (agents === null || Array.isArray(agents)) &&
     (folders === null || Array.isArray(folders)) &&
+    (clones === null || Array.isArray(clones)) &&
     (remoteControl === null || typeof remoteControl === "object")
   );
 }

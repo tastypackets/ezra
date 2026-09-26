@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
-use crate::manager::folders::{FolderChoiceError, FolderStatus};
+use crate::manager::folders::{FolderChoiceError, FolderDeleteError, FolderStatus};
+use crate::manager::git::UnsavedWork;
 use crate::manager::remote_control::SpawnMode;
 
 #[utoipa::path(
@@ -103,9 +104,72 @@ impl From<FolderChoiceError> for ApiError {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/folders/{name}/unsaved-work",
+    operation_id = "getUnsavedWork",
+    tag = "folders",
+    summary = "Count the work in a folder's repository that no remote has",
+    description = "A folder that is not a repository has none.",
+    params(("name" = String, Path, description = "The folder's name in /projects")),
+    responses(
+        (status = 200, description = "Unsaved work", body = UnsavedWork),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 404, description = "No such folder", body = ErrorBody),
+        (status = 502, description = "git could not read the repository", body = ErrorBody)
+    )
+)]
+pub async fn unsaved_work(
+    _: Session,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<UnsavedWork>, ApiError> {
+    state
+        .unsaved_work(&name)
+        .await?
+        .map(Json)
+        .ok_or(ApiError::NotFound("no such folder"))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/folders/{name}",
+    operation_id = "deleteFolder",
+    tag = "folders",
+    summary = "Delete a folder and everything in it",
+    description = "Stops the folder's Remote Control server first.",
+    params(("name" = String, Path, description = "The folder's name in /projects")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 404, description = "No such folder", body = ErrorBody),
+        (status = 409, description = "The folder's Remote Control server did not stop", body = ErrorBody)
+    )
+)]
+pub async fn delete(
+    _: Session,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let deleting = state.clone();
+    match tokio::spawn(async move { deleting.delete_folder(&name).await })
+        .await
+        .map_err(internal)?
+    {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(FolderDeleteError::NoSuchFolder) => Err(ApiError::NotFound("no such folder")),
+        Err(error @ FolderDeleteError::ServerStillRunning) => {
+            Err(ApiError::Conflict(error.to_string()))
+        }
+        Err(error) => Err(internal(error)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path as FilePath;
+    use std::process::Command;
 
     use super::super::test_support::{ResponseExt, TestManager};
     use super::*;
@@ -113,6 +177,7 @@ mod tests {
 
     use crate::manager::folders::{Folder, GitDetails, ProjectsDirectory};
     use crate::manager::settings::{FolderChoice, SettingsError};
+    use crate::process_ext::CommandStatusExt;
 
     impl TestManager {
         async fn choice_of(&self, name: &str) -> FolderChoice {
@@ -125,6 +190,134 @@ mod tests {
                 .claude
                 .folder_choice(&folder)
         }
+    }
+
+    fn git(repository: &FilePath, arguments: &[&str]) {
+        Command::new("git")
+            .current_dir(repository)
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+            .args(arguments)
+            .run_checked()
+            .expect("git runs");
+    }
+
+    #[tokio::test]
+    async fn unsaved_work_is_counted() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let ProjectsDirectory(projects) = &manager.state.projects;
+        let origin = projects.join("origin");
+        let app = projects.join("app");
+        fs::create_dir_all(&origin).expect("folder is created");
+        git(&origin, &["init", "--quiet", "--initial-branch=main"]);
+        fs::write(origin.join("README.md"), "hello\n").expect("file is written");
+        git(&origin, &["add", "README.md"]);
+        git(&origin, &["commit", "--quiet", "--message=first"]);
+        git(projects, &["clone", "--quiet", "origin", "app"]);
+        fs::create_dir_all(projects.join("notes")).expect("folder is created");
+
+        let clean: UnsavedWork = manager
+            .get("/api/v1/folders/app/unsaved-work", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(clean, UnsavedWork::default());
+
+        fs::write(app.join("README.md"), "changed\n").expect("file is written");
+        fs::write(app.join("new.txt"), "new\n").expect("file is written");
+        git(&app, &["stash", "--quiet"]);
+        fs::write(app.join("README.md"), "changed again\n").expect("file is written");
+        git(&app, &["commit", "--quiet", "--all", "--message=local"]);
+        git(
+            &app,
+            &["commit", "--quiet", "--allow-empty", "--message=local too"],
+        );
+        fs::write(app.join("README.md"), "changed once more\n").expect("file is written");
+        let unsaved: UnsavedWork = manager
+            .get("/api/v1/folders/app/unsaved-work", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(
+            unsaved,
+            UnsavedWork {
+                uncommitted_changes: 2,
+                unpushed_commits: 2,
+                stashes: 1,
+            }
+        );
+
+        let plain: UnsavedWork = manager
+            .get("/api/v1/folders/notes/unsaved-work", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(plain, UnsavedWork::default());
+        assert_eq!(
+            manager
+                .get("/api/v1/folders/gone/unsaved-work", Some(&cookie))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn a_folder_is_deleted_with_its_choice_and_nothing_outside_it() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let ProjectsDirectory(projects) = &manager.state.projects;
+        let outside = manager.state.settings_path.with_file_name("outside");
+        fs::create_dir_all(&outside).expect("folder is created");
+        fs::write(outside.join("keep.txt"), "keep\n").expect("file is written");
+        fs::create_dir_all(projects.join("app/nested")).expect("folder is created");
+        std::os::unix::fs::symlink(&outside, projects.join("app/nested/link"))
+            .expect("link is created");
+        std::os::unix::fs::symlink(&outside, projects.join("linked")).expect("link is created");
+        manager
+            .state
+            .change_folder_choice("app", |choice| choice.serve = true)
+            .await
+            .expect("the choice is saved");
+
+        for name in ["linked", "..", ".", "gone"] {
+            assert_eq!(
+                manager
+                    .delete(&format!("/api/v1/folders/{name}"), Some(&cookie))
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND,
+                "{name}"
+            );
+        }
+        let deleted = manager.delete("/api/v1/folders/app", Some(&cookie)).await;
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        assert!(!projects.join("app").exists());
+        assert!(outside.join("keep.txt").exists());
+        assert!(
+            manager
+                .state
+                .settings
+                .lock()
+                .await
+                .agents
+                .claude
+                .folders
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_needs_a_login() {
+        let manager = TestManager::new();
+        manager.logged_in().await;
+        let ProjectsDirectory(projects) = &manager.state.projects;
+        fs::create_dir_all(projects.join("app")).expect("folder is created");
+        assert_eq!(
+            manager.delete("/api/v1/folders/app", None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(projects.join("app").exists());
     }
 
     #[tokio::test]

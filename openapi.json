@@ -374,6 +374,146 @@
         }
       }
     },
+    "/api/v1/clones": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "List the clones that are running or failed",
+        "operationId": "listClones",
+        "responses": {
+          "200": {
+            "description": "Clones sorted by folder name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CloneStatus"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Clone a repository into a new folder in /projects",
+        "description": "Starts the clone and returns at once.",
+        "operationId": "cloneRepository",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Cloning",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloneStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No repository, or the folder name is not one folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The folder exists or is being cloned into",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clones/{name}": {
+      "delete": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Stop a clone or clear its failure",
+        "description": "Stops a running clone and removes what it cloned, or clears a failed one.",
+        "operationId": "stopClone",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The folder being cloned into",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Stopping or cleared"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such clone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events": {
       "get": {
         "tags": [
@@ -429,6 +569,62 @@
           },
           "401": {
             "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/folders/{name}": {
+      "delete": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Delete a folder and everything in it",
+        "description": "Stops the folder's Remote Control server first.",
+        "operationId": "deleteFolder",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The folder's name in /projects",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The folder's Remote Control server did not stop",
             "content": {
               "application/json": {
                 "schema": {
@@ -562,6 +758,69 @@
         }
       }
     },
+    "/api/v1/folders/{name}/unsaved-work": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Count the work in a folder's repository that no remote has",
+        "description": "A folder that is not a repository has none.",
+        "operationId": "getUnsavedWork",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The folder's name in /projects",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unsaved work",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsavedWork"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "git could not read the repository",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/git": {
       "get": {
         "tags": [
@@ -678,6 +937,51 @@
           },
           "502": {
             "description": "gh could not sign out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/git/github/repositories": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "List the GitHub account's repositories",
+        "description": "Returns up to 100 repositories the account owns or works on, none while signed out.",
+        "operationId": "listGitHubRepositories",
+        "responses": {
+          "200": {
+            "description": "Repositories, most recently pushed first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GitHubRepository"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "GitHub did not answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -1141,6 +1445,64 @@
           }
         }
       },
+      "CloneRequest": {
+        "type": "object",
+        "description": "A repository to clone into a new folder in /projects.",
+        "required": [
+          "repository",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The new folder's name."
+          },
+          "repository": {
+            "type": "string",
+            "description": "A git URL or path, or `owner/repo` for GitHub."
+          },
+          "serve": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the Claude app lists the folder, the \"Serve new repositories\" setting when absent."
+          }
+        }
+      },
+      "CloneStatus": {
+        "type": "object",
+        "description": "A clone that is running or failed.",
+        "required": [
+          "name",
+          "repository",
+          "percent"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the clone failed, absent while it runs."
+          },
+          "name": {
+            "type": "string",
+            "description": "The folder the repository goes into."
+          },
+          "percent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How far the clone has got, from 0 to 100.",
+            "maximum": 100,
+            "minimum": 0
+          },
+          "repository": {
+            "type": "string",
+            "description": "The repository as given."
+          }
+        }
+      },
       "CodeBody": {
         "type": "object",
         "required": [
@@ -1332,6 +1694,29 @@
             "format": "int32",
             "description": "Linked worktrees that still exist, counted on the main checkout only.",
             "minimum": 0
+          }
+        }
+      },
+      "GitHubRepository": {
+        "type": "object",
+        "description": "A GitHub repository the signed-in account can clone.",
+        "required": [
+          "full_name",
+          "private"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "full_name": {
+            "type": "string",
+            "description": "`owner/name`."
+          },
+          "private": {
+            "type": "boolean"
           }
         }
       },
@@ -1726,10 +2111,39 @@
           "agents",
           "claude_settings",
           "folders",
+          "clones",
           "remote_control",
           "git",
           "manager"
         ]
+      },
+      "UnsavedWork": {
+        "type": "object",
+        "description": "Work in a repository that no remote has.",
+        "required": [
+          "uncommitted_changes",
+          "unpushed_commits",
+          "stashes"
+        ],
+        "properties": {
+          "stashes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "uncommitted_changes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Changed and untracked paths, an untracked folder counting once.",
+            "minimum": 0
+          },
+          "unpushed_commits": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Commits on no remote, stashes left out.",
+            "minimum": 0
+          }
+        }
       }
     }
   }

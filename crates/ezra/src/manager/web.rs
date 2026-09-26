@@ -13,6 +13,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::api::session::SessionStatus;
+use super::clones::CloneStatus;
 use super::folders::FolderStatus;
 use super::remote_control::RemoteControlOverview;
 use super::state::AppState;
@@ -32,6 +33,8 @@ struct InitialData {
     /// Present only when the request is signed in and /projects can be read.
     folders: Option<Vec<FolderStatus>>,
     /// Present only when the request is signed in.
+    clones: Option<Vec<CloneStatus>>,
+    /// Present only when the request is signed in.
     remote_control: Option<RemoteControlOverview>,
 }
 
@@ -45,6 +48,7 @@ impl InitialData {
                 session,
                 agents: None,
                 folders: None,
+                clones: None,
                 remote_control: None,
             };
         }
@@ -53,6 +57,7 @@ impl InitialData {
             session,
             agents: Some(AgentStatus::gather_all(app).await),
             folders: app.folder_statuses().await.ok(),
+            clones: Some(app.clones.statuses()),
             remote_control: Some(app.remote_control.overview(&app.projects.0)),
         }
     }
@@ -224,6 +229,7 @@ mod tests {
                 available_update: None,
             }]),
             folders: None,
+            clones: None,
             remote_control: None,
         };
         let page = data

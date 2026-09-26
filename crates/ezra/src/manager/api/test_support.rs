@@ -155,6 +155,16 @@ impl TestManager {
         .await
     }
 
+    pub async fn delete(&self, path: &str, cookie: Option<&str>) -> Response {
+        self.send(
+            Request::delete(path)
+                .with_cookie(cookie)
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+    }
+
     pub async fn session_status(&self, cookie: Option<&str>) -> SessionStatus {
         self.get("/api/v1/session", cookie).await.json().await
     }

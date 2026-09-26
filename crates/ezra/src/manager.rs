@@ -2,6 +2,7 @@ mod agents;
 mod api;
 mod auth;
 mod checks;
+mod clones;
 mod environment;
 mod events;
 mod folders;
@@ -105,6 +106,14 @@ async fn serve() -> Result<(), ManagerError> {
         environment::EnvironmentSettings::read(&hostname, port, tls_verification, &git_tools);
     let tls_config = certificate.config.clone();
     state.certificate = Some(certificate);
+    let projects = state.projects.clone();
+    if let Err(error) = tokio::task::spawn_blocking(move || projects.remove_unfinished_clones())
+        .await
+        .map_err(io::Error::other)
+        .and_then(|removed| removed)
+    {
+        tracing::warn!("could not remove unfinished clones: {error}");
+    }
     tokio::spawn(state.clone().reinstall_configured_agents());
     tokio::spawn(state.clone().check_for_updates_regularly());
     tokio::spawn(Arc::clone(&state.agent_checks).check_regularly());

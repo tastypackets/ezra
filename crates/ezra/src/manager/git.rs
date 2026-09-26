@@ -12,6 +12,8 @@ use super::login::{LoginError, LoginProcess, LoginPrompt, PromptShape};
 use crate::process_ext::OutputExt;
 
 const GITHUB_HOST: &str = "github.com";
+const GITHUB_REPOSITORIES: &str =
+    "/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100";
 const GIT_CONFIG_VARIABLE: &str = "GIT_CONFIG_GLOBAL";
 const GH_CONFIG_VARIABLE: &str = "GH_CONFIG_DIR";
 const TOKEN_VARIABLES: [&str; 2] = ["GH_TOKEN", "GITHUB_TOKEN"];
@@ -248,6 +250,98 @@ impl GitTools {
         }
     }
 
+    /// The first 100 repositories the GitHub account owns or works on, last pushed first.
+    pub async fn github_repositories(&self) -> Result<Vec<GitHubRepository>, GitError> {
+        let output = self
+            .gh()
+            .args(["api", GITHUB_REPOSITORIES])
+            .stdin(Stdio::null())
+            .output()
+            .await?;
+        if !output.status.success() {
+            return Err(GitError::GitHub {
+                action: "api",
+                output: output.stderr_text(),
+            });
+        }
+        serde_json::from_slice(&output.stdout).map_err(|error| GitError::GitHub {
+            action: "api",
+            output: format!("unexpected answer: {error}"),
+        })
+    }
+
+    /// `git clone` of `url` into `destination`, with progress on standard error and no prompts.
+    pub fn clone_command(&self, url: &str, destination: &Path) -> Command {
+        let mut command = self.git();
+        command
+            .args(["clone", "--progress", "--", url])
+            .arg(destination)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .kill_on_drop(true);
+        command
+    }
+
+    /// Changes, commits and stashes in the repository at `folder` that no remote has.
+    pub async fn unsaved_work(&self, folder: &Path) -> Result<UnsavedWork, GitError> {
+        let changes = self
+            .output_in(
+                folder,
+                "status",
+                &["--no-optional-locks", "status", "--porcelain"],
+            )
+            .await?;
+        let commits = self
+            .output_in(
+                folder,
+                "rev-list",
+                &[
+                    "rev-list",
+                    "--count",
+                    "--exclude=refs/stash",
+                    "--all",
+                    "--not",
+                    "--remotes",
+                ],
+            )
+            .await?;
+        let stashes = self.output_in(folder, "stash", &["stash", "list"]).await?;
+        Ok(UnsavedWork {
+            uncommitted_changes: changes.line_count(),
+            unpushed_commits: commits.trim().parse().map_err(|_| GitError::Git {
+                action: "rev-list",
+                output: format!("unexpected count {commits:?}"),
+            })?,
+            stashes: stashes.line_count(),
+        })
+    }
+
+    async fn output_in(
+        &self,
+        folder: &Path,
+        action: &'static str,
+        arguments: &[&str],
+    ) -> Result<String, GitError> {
+        let output = self
+            .git()
+            .current_dir(folder)
+            .args(arguments)
+            .stdin(Stdio::null())
+            .output()
+            .await?;
+        if output.status.success() {
+            Ok(output.stdout_text())
+        } else {
+            Err(GitError::Git {
+                action,
+                output: output.stderr_text(),
+            })
+        }
+    }
+
     async fn create_config_directory(&self) -> io::Result<()> {
         match self.git_config.parent() {
             Some(directory) => tokio::fs::create_dir_all(directory).await,
@@ -257,7 +351,9 @@ impl GitTools {
 
     fn git(&self) -> Command {
         let mut command = Command::new("git");
-        command.env(GIT_CONFIG_VARIABLE, &self.git_config);
+        command
+            .env(GIT_CONFIG_VARIABLE, &self.git_config)
+            .env(GH_CONFIG_VARIABLE, &self.gh_config_directory);
         command
     }
 
@@ -362,6 +458,36 @@ impl GitHubSignIn {
                 .filter(|login| !login.is_empty())
                 .collect(),
         }
+    }
+}
+
+/// Work in a repository that no remote has.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct UnsavedWork {
+    /// Changed and untracked paths, an untracked folder counting once.
+    pub uncommitted_changes: u32,
+    /// Commits on no remote, stashes left out.
+    pub unpushed_commits: u32,
+    pub stashes: u32,
+}
+
+/// A GitHub repository the signed-in account can clone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GitHubRepository {
+    /// `owner/name`.
+    pub full_name: String,
+    pub description: Option<String>,
+    pub private: bool,
+}
+
+trait LineCountExt {
+    /// Non-empty lines, as many as a `u32` holds.
+    fn line_count(&self) -> u32;
+}
+
+impl LineCountExt for str {
+    fn line_count(&self) -> u32 {
+        u32::try_from(self.lines().filter(|line| !line.is_empty()).count()).unwrap_or(u32::MAX)
     }
 }
 

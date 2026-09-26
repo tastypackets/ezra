@@ -14,6 +14,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use utoipa::ToSchema;
 
 use super::events::Topic;
+use super::git::{GitError, UnsavedWork};
 use super::remote_control::SpawnMode;
 use super::settings::{FolderChoice, SettingsError};
 use super::state::AppState;
@@ -31,7 +32,20 @@ pub enum FolderChoiceError {
     Settings(#[from] SettingsError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum FolderDeleteError {
+    #[error("no such folder")]
+    NoSuchFolder,
+    #[error("the folder's Remote Control server did not stop")]
+    ServerStillRunning,
+    #[error("could not delete /projects/{name}: {source}")]
+    Remove { name: String, source: io::Error },
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
+}
+
 pub const PROJECTS_DIRECTORY: &str = "/projects";
+const SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const RESCAN_INTERVAL: Duration = Duration::from_secs(30);
 const RESCAN_INTERVAL_WHILE_WATCHING: Duration = Duration::from_secs(300);
 const QUIET_PERIOD: Duration = Duration::from_secs(1);
@@ -103,15 +117,18 @@ impl ProjectsDirectory {
         self.0.join(name)
     }
 
-    /// The top-level folder called `name`, when there is one.
+    /// Whether `name` is a listed top-level folder, not a link to one.
+    pub fn has_folder(&self, name: &str) -> bool {
+        name.is_folder_name()
+            && fs::symlink_metadata(self.folder(name)).is_ok_and(|metadata| metadata.is_dir())
+    }
+
+    /// The listed top-level folder called `name`, when there is one.
     pub fn find(&self, name: &str) -> Option<Folder> {
-        let path = self.folder(name);
-        fs::symlink_metadata(&path)
-            .is_ok_and(|metadata| metadata.is_dir())
-            .then(|| Folder {
-                name: name.to_owned(),
-                git: GitCheckout::in_folder(&path).details(),
-            })
+        self.has_folder(name).then(|| Folder {
+            name: name.to_owned(),
+            git: GitCheckout::in_folder(&self.folder(name)).details(),
+        })
     }
 
     /// Top-level folders sorted by name. Hidden folders, and ones that vanish or cannot be read
@@ -122,7 +139,7 @@ impl ProjectsDirectory {
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
             .filter_map(|entry| {
                 let name = entry.file_name().into_string().ok()?;
-                (!name.starts_with('.')).then(|| Folder {
+                name.is_folder_name().then(|| Folder {
                     git: GitCheckout::in_folder(&entry.path()).details(),
                     name,
                 })
@@ -153,6 +170,17 @@ impl ProjectsDirectory {
             return Ok(());
         }
         fs::write(path, updated)
+    }
+}
+
+pub trait FolderNameExt {
+    /// Not empty, not hidden, and one path component.
+    fn is_folder_name(&self) -> bool;
+}
+
+impl FolderNameExt for str {
+    fn is_folder_name(&self) -> bool {
+        !self.is_empty() && !self.starts_with('.') && !self.contains(['/', '\0'])
     }
 }
 
@@ -440,6 +468,69 @@ impl AppState {
         Ok(())
     }
 
+    /// Changes, commits and stashes in the folder's repository that no remote has. A folder that is
+    /// not a repository has none.
+    pub async fn unsaved_work(&self, name: &str) -> Result<Option<UnsavedWork>, GitError> {
+        let Some(folder) = self.projects.find(name) else {
+            return Ok(None);
+        };
+        if folder.git.is_none() {
+            return Ok(Some(UnsavedWork::default()));
+        }
+        self.git_tools
+            .unsaved_work(&self.projects.folder(name))
+            .await
+            .map(Some)
+    }
+
+    /// Stops the folder's Remote Control server, then deletes the folder, without following links,
+    /// and drops its choice. After a failed removal the folder's switch stays off.
+    pub async fn delete_folder(&self, name: &str) -> Result<(), FolderDeleteError> {
+        if !self.projects.has_folder(name) {
+            return Err(FolderDeleteError::NoSuchFolder);
+        }
+        let directory = self.projects.folder(name);
+        self.update_settings(|settings| {
+            settings
+                .agents
+                .claude
+                .folders
+                .entry(name.to_owned())
+                .or_default()
+                .serve = false;
+            Ok::<(), SettingsError>(())
+        })
+        .await?;
+        self.remote_control.reconsider();
+        self.events.publish(Topic::Folders);
+        if !self
+            .remote_control
+            .wait_until_gone(&directory, SERVER_STOP_TIMEOUT)
+            .await
+        {
+            return Err(FolderDeleteError::ServerStillRunning);
+        }
+        let removing = directory.clone();
+        let removed = tokio::task::spawn_blocking(move || removing.remove_if_present())
+            .await
+            .map_err(io::Error::other)
+            .and_then(|removed| removed);
+        self.events.publish(Topic::Folders);
+        if let Err(source) = removed {
+            return Err(FolderDeleteError::Remove {
+                name: name.to_owned(),
+                source,
+            });
+        }
+        self.update_settings(|settings| {
+            settings.agents.claude.folders.remove(name);
+            Ok::<(), SettingsError>(())
+        })
+        .await?;
+        tracing::info!("deleted {}", directory.display());
+        Ok(())
+    }
+
     /// Gives repositories seen for the first time the default choice, and drops the choices of
     /// folders that are gone. True when the choices changed.
     pub async fn record_folder_choices(&self, folders: &[Folder]) -> Result<bool, SettingsError> {
@@ -448,7 +539,9 @@ impl AppState {
             let serve_repositories = settings.agents.claude.remote_control.serve_repositories;
             let choices = &mut settings.agents.claude.folders;
             let before = choices.clone();
-            choices.retain(|name, _| folders.iter().any(|folder| folder.name == *name));
+            choices.retain(|name, _| {
+                folders.iter().any(|folder| folder.name == *name) || self.projects.has_folder(name)
+            });
             for folder in folders.iter().filter(|folder| folder.git.is_some()) {
                 choices.entry(folder.name.clone()).or_insert(FolderChoice {
                     serve: serve_repositories,

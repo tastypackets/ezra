@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session};
 use crate::manager::events::Topic;
-use crate::manager::git::{CommitIdentity, GitError};
+use crate::manager::git::{CommitIdentity, GitError, GitHubRepository};
 use crate::manager::login::{LoginProcess, LoginPrompt};
 
 impl From<GitError> for ApiError {
@@ -106,6 +106,29 @@ pub async fn log_out_of_github(
     state.note_github_account(None);
     tracing::info!("GitHub is signed out");
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/git/github/repositories",
+    operation_id = "listGitHubRepositories",
+    tag = "git",
+    summary = "List the GitHub account's repositories",
+    description = "Returns up to 100 repositories the account owns or works on, none while signed out.",
+    responses(
+        (status = 200, description = "Repositories, most recently pushed first", body = Vec<GitHubRepository>),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 502, description = "GitHub did not answer", body = ErrorBody)
+    )
+)]
+pub async fn github_repositories(
+    _: Session,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<GitHubRepository>>, ApiError> {
+    if state.github_account.borrow().is_none() {
+        return Ok(Json(Vec::new()));
+    }
+    Ok(Json(state.git_tools.github_repositories().await?))
 }
 
 #[utoipa::path(
@@ -240,7 +263,8 @@ impl AppState {
 mod tests {
     use axum::http::StatusCode;
 
-    use super::super::test_support::TestManager;
+    use super::super::test_support::{ResponseExt, TestManager};
+    use crate::manager::git::GitHubRepository;
 
     #[tokio::test]
     async fn git_needs_a_login() {
@@ -264,5 +288,24 @@ mod tests {
                 .status(),
             StatusCode::UNAUTHORIZED
         );
+        assert_eq!(
+            manager
+                .get("/api/v1/git/github/repositories", None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn signed_out_of_github_there_are_no_repositories() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let repositories: Vec<GitHubRepository> = manager
+            .get("/api/v1/git/github/repositories", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert!(repositories.is_empty());
     }
 }

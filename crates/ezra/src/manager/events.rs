@@ -17,16 +17,18 @@ pub enum Topic {
     Agents,
     ClaudeSettings,
     Folders,
+    Clones,
     RemoteControl,
     Git,
     Manager,
 }
 
 impl Topic {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Agents,
         Self::ClaudeSettings,
         Self::Folders,
+        Self::Clones,
         Self::RemoteControl,
         Self::Git,
         Self::Manager,

@@ -7,6 +7,7 @@ use tokio::sync::{Mutex, watch};
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
 use super::checks::AgentChecks;
+use super::clones::Clones;
 use super::environment::EnvironmentSettings;
 use super::events::Events;
 use super::folders::{PROJECTS_DIRECTORY, ProjectsDirectory};
@@ -33,6 +34,7 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
+    pub clones: Arc<Clones>,
     pub events: Events,
     /// Absent in tests, which serve plain HTTP.
     pub certificate: Option<ServedCertificate>,
@@ -66,6 +68,7 @@ impl AppState {
             git_tools: Arc::new(git_tools),
             github_login: Arc::default(),
             remote_control: Arc::new(RemoteControl::new(events.clone())),
+            clones: Arc::new(Clones::new(events.clone())),
             events,
             certificate: None,
             environment: EnvironmentSettings::default(),
