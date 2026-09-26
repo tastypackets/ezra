@@ -88,6 +88,7 @@ pub async fn submit_code(
         .ok_or_else(|| ApiError::Conflict(format!("no {agent} sign-in is in progress")))?;
     login.submit_code(&body.code).await?;
     tracing::info!("{agent} is signed in");
+    state.remote_control.restart();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -115,6 +116,9 @@ pub async fn log_out(
     AgentCli::installed(agent, &state.install_paths)?
         .log_out()
         .await?;
+    if agent == Agent::Claude {
+        state.remote_control.reconsider();
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

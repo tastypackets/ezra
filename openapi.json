@@ -80,7 +80,7 @@
           "agents"
         ],
         "summary": "Change Claude Code settings",
-        "description": "Saves the settings. Changing the release channel never downgrades the installed version.",
+        "description": "Saves the settings, never downgrading the installed version and restarting Remote Control when its settings change.",
         "operationId": "updateClaudeSettings",
         "requestBody": {
           "content": {
@@ -99,6 +99,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ClaudeSettingsBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A setting Claude cannot take",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -752,6 +762,17 @@
               }
             ]
           },
+          "remote_control": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RemoteControlStatus",
+                "description": "The Remote Control server, Claude Code only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "session_count": {
             "type": [
               "integer",
@@ -765,13 +786,17 @@
       },
       "ClaudeSettingsBody": {
         "type": "object",
-        "description": "How the manager installs and updates Claude Code.",
+        "description": "How the manager installs, updates and serves Claude Code.",
         "required": [
-          "release_channel"
+          "release_channel",
+          "remote_control"
         ],
         "properties": {
           "release_channel": {
             "$ref": "#/components/schemas/ReleaseChannel"
+          },
+          "remote_control": {
+            "$ref": "#/components/schemas/RemoteControlSettings"
           }
         }
       },
@@ -933,6 +958,79 @@
         "enum": [
           "latest",
           "stable"
+        ]
+      },
+      "RemoteControlSettings": {
+        "type": "object",
+        "description": "How Claude Code's Remote Control server runs.",
+        "required": [
+          "enabled",
+          "permission_mode",
+          "capacity"
+        ],
+        "properties": {
+          "capacity": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most sessions that run at once, from 1 to 32.",
+            "default": 4,
+            "maximum": 32,
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Serve /projects to the Claude app while Claude Code is signed in.",
+            "default": true
+          },
+          "permission_mode": {
+            "type": "string",
+            "description": "The permission mode for sessions started from the Claude app, such as `auto`.",
+            "default": "auto"
+          }
+        }
+      },
+      "RemoteControlStatus": {
+        "type": "object",
+        "description": "The manager's view of the Remote Control server.",
+        "required": [
+          "state",
+          "restarts"
+        ],
+        "properties": {
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The end of the server's output when it last stopped unexpectedly."
+          },
+          "restarts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Unexpected stops since the manager started.",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/ServerState"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to continue in a browser, once connected."
+          }
+        }
+      },
+      "ServerState": {
+        "type": "string",
+        "description": "Where the Remote Control server is in its life.",
+        "enum": [
+          "off",
+          "waiting",
+          "starting",
+          "running",
+          "retrying"
         ]
       },
       "SessionStatus": {

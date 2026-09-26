@@ -201,6 +201,7 @@ mod tests {
                 config_disk_bytes: None,
                 install_progress: None,
                 available_update: None,
+                remote_control: None,
             }]),
         };
         let page = data

@@ -3,6 +3,7 @@ mod api;
 mod auth;
 mod git;
 mod login;
+mod remote_control;
 mod settings;
 mod state;
 mod status;
@@ -16,6 +17,7 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum_server::Handle;
@@ -25,6 +27,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::environment_config::FromEnvironment;
 use agents::TlsVerification;
+use remote_control::RemoteControl;
 
 const STATE_DIRECTORY: &str = "/config/ezra";
 const TLS_VERIFY_VARIABLE: &str = "EZRA_TLS_VERIFY";
@@ -83,7 +86,6 @@ async fn serve() -> Result<(), ManagerError> {
             .map_err(ManagerError::Certificate)?;
 
     let handle = Handle::new();
-    tokio::spawn(handle.clone().shut_down_on_signal());
     tracing::info!("manager listening on https://{hostname}:{port}");
     if !is_claimed {
         tracing::info!("no password is set, the first visitor chooses it");
@@ -100,12 +102,22 @@ async fn serve() -> Result<(), ManagerError> {
     tokio::spawn(state.clone().reinstall_configured_agents());
     tokio::spawn(state.clone().check_for_updates_regularly());
     tokio::spawn(state.clone().lend_github_sign_in_at_start());
+    tokio::spawn(state.clone().supervise_remote_control());
+    tokio::spawn(
+        handle
+            .clone()
+            .shut_down_on_signal(Arc::clone(&state.remote_control)),
+    );
+    let remote_control = Arc::clone(&state.remote_control);
     let app = state.into_router(web_directory);
-    axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
-        .handle(handle)
-        .serve(app.into_make_service())
-        .await
-        .map_err(|source| ManagerError::Serve { port, source })
+    let served =
+        axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await
+            .map_err(|source| ManagerError::Serve { port, source });
+    remote_control.wait_until_stopped().await;
+    served
 }
 
 impl state::AppState {
@@ -140,12 +152,12 @@ impl Default for ManagerOptions {
 impl FromEnvironment for ManagerOptions {}
 
 trait HandleExt {
-    /// Stops accepting connections on SIGTERM or Ctrl-C and gives open ones a few seconds.
-    async fn shut_down_on_signal(self);
+    /// On SIGTERM or Ctrl-C, stops Remote Control and gives open connections a few seconds.
+    async fn shut_down_on_signal(self, remote_control: Arc<RemoteControl>);
 }
 
 impl HandleExt for Handle<SocketAddr> {
-    async fn shut_down_on_signal(self) {
+    async fn shut_down_on_signal(self, remote_control: Arc<RemoteControl>) {
         let Ok(mut terminate) = signal(SignalKind::terminate()) else {
             return;
         };
@@ -153,6 +165,7 @@ impl HandleExt for Handle<SocketAddr> {
             _ = terminate.recv() => {}
             _ = tokio::signal::ctrl_c() => {}
         }
+        remote_control.begin_shut_down();
         self.graceful_shutdown(Some(SHUTDOWN_GRACE_PERIOD));
     }
 }

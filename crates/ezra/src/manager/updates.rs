@@ -3,7 +3,6 @@ use std::time::Duration;
 use tokio::time::MissedTickBehavior;
 
 use super::agents::{Agent, ReleaseChannel};
-use super::settings::SettingsError;
 use super::state::AppState;
 
 const CHECK_INTERVAL: Duration = Duration::from_hours(6);
@@ -52,25 +51,12 @@ impl AppState {
         }
     }
 
-    /// Saves the channel, and when it changed checks it once any running install is done.
-    pub async fn set_claude_release_channel(
-        &self,
-        channel: ReleaseChannel,
-    ) -> Result<(), SettingsError> {
-        let mut changed = false;
-        self.update_settings(|settings| {
-            changed = settings.agents.claude.release_channel != channel;
-            settings.agents.claude.release_channel = channel;
-            Ok::<(), SettingsError>(())
-        })
-        .await?;
-        if changed {
-            let checking = self.clone();
-            tokio::spawn(async move {
-                drop(checking.install_lock.lock().await);
-                checking.check_for_update(Agent::Claude).await;
-            });
-        }
-        Ok(())
+    /// Checks Claude's new release channel once any running install is done.
+    pub fn recheck_claude_release(&self) {
+        let checking = self.clone();
+        tokio::spawn(async move {
+            drop(checking.install_lock.lock().await);
+            checking.check_for_update(Agent::Claude).await;
+        });
     }
 }

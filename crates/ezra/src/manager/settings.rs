@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::agents::{Agent, ReleaseChannel};
 use super::auth::HashedPassword;
+use super::remote_control::RemoteControlSettings;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -58,6 +59,8 @@ pub struct ClaudeSettings {
     pub agent: AgentSettings,
     #[serde(default)]
     pub release_channel: ReleaseChannel,
+    #[serde(default)]
+    pub remote_control: RemoteControlSettings,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]

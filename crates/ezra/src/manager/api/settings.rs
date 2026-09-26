@@ -5,11 +5,13 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session};
 use crate::manager::agents::{Agent, ReleaseChannel};
+use crate::manager::remote_control::RemoteControlSettings;
 
-/// How the manager installs and updates Claude Code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// How the manager installs, updates and serves Claude Code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ClaudeSettingsBody {
     pub release_channel: ReleaseChannel,
+    pub remote_control: RemoteControlSettings,
 }
 
 #[utoipa::path(
@@ -27,6 +29,7 @@ pub async fn claude(_: Session, State(state): State<AppState>) -> Json<ClaudeSet
     let settings = state.settings.lock().await;
     Json(ClaudeSettingsBody {
         release_channel: settings.release_channel(Agent::Claude),
+        remote_control: settings.agents.claude.remote_control.clone(),
     })
 }
 
@@ -36,10 +39,11 @@ pub async fn claude(_: Session, State(state): State<AppState>) -> Json<ClaudeSet
     operation_id = "updateClaudeSettings",
     tag = "agents",
     summary = "Change Claude Code settings",
-    description = "Saves the settings. Changing the release channel never downgrades the installed version.",
+    description = "Saves the settings, never downgrading the installed version and restarting Remote Control when its settings change.",
     request_body = ClaudeSettingsBody,
     responses(
         (status = 200, description = "Saved", body = ClaudeSettingsBody),
+        (status = 400, description = "A setting Claude cannot take", body = ErrorBody),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody)
     )
 )]
@@ -48,10 +52,40 @@ pub async fn update_claude(
     State(state): State<AppState>,
     Json(body): Json<ClaudeSettingsBody>,
 ) -> Result<Json<ClaudeSettingsBody>, ApiError> {
-    state
-        .set_claude_release_channel(body.release_channel)
+    Ok(Json(state.apply_claude_settings(body).await?))
+}
+
+impl AppState {
+    async fn apply_claude_settings(
+        &self,
+        body: ClaudeSettingsBody,
+    ) -> Result<ClaudeSettingsBody, ApiError> {
+        if let Some(problem) = body.remote_control.problem() {
+            return Err(ApiError::BadRequest(problem));
+        }
+        let body = ClaudeSettingsBody {
+            remote_control: body.remote_control.trimmed(),
+            ..body
+        };
+        let mut channel_changed = false;
+        let mut remote_control_changed = false;
+        self.update_settings(|settings| {
+            let claude = &mut settings.agents.claude;
+            channel_changed = claude.release_channel != body.release_channel;
+            remote_control_changed = claude.remote_control != body.remote_control;
+            claude.release_channel = body.release_channel;
+            claude.remote_control = body.remote_control.clone();
+            Ok::<(), ApiError>(())
+        })
         .await?;
-    Ok(Json(body))
+        if channel_changed {
+            self.recheck_claude_release();
+        }
+        if remote_control_changed {
+            self.remote_control.reconsider();
+        }
+        Ok(body)
+    }
 }
 
 #[cfg(test)]
@@ -74,7 +108,7 @@ mod tests {
         );
         assert_eq!(
             manager
-                .put(PATH, r#"{"release_channel":"stable"}"#, None)
+                .put(PATH, r#"{"release_channel":"stable","remote_control":{"enabled":false,"permission_mode":" plan ","capacity":2}}"#, None)
                 .await
                 .status(),
             StatusCode::UNAUTHORIZED
@@ -89,11 +123,19 @@ mod tests {
         assert_eq!(defaults.release_channel, ReleaseChannel::Latest);
 
         let saved: ClaudeSettingsBody = manager
-            .put(PATH, r#"{"release_channel":"stable"}"#, Some(&cookie))
+            .put(PATH, r#"{"release_channel":"stable","remote_control":{"enabled":false,"permission_mode":" plan ","capacity":2}}"#, Some(&cookie))
             .await
             .json()
             .await;
         assert_eq!(saved.release_channel, ReleaseChannel::Stable);
+        assert_eq!(
+            saved.remote_control,
+            RemoteControlSettings {
+                enabled: false,
+                permission_mode: "plan".to_owned(),
+                capacity: 2,
+            }
+        );
         let on_disk = Settings::load(&manager.settings_path).expect("settings load");
         assert_eq!(
             on_disk.release_channel(Agent::Claude),
@@ -102,11 +144,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_control_settings_claude_cannot_take_are_rejected() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        for remote_control in [
+            r#"{"enabled":true,"permission_mode":"","capacity":4}"#,
+            r#"{"enabled":true,"permission_mode":"auto --x","capacity":4}"#,
+            r#"{"enabled":true,"permission_mode":"auto","capacity":0}"#,
+            r#"{"enabled":true,"permission_mode":"auto","capacity":33}"#,
+        ] {
+            let body =
+                format!(r#"{{"release_channel":"latest","remote_control":{remote_control}}}"#);
+            let response = manager.put(PATH, &body, Some(&cookie)).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{remote_control}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn unknown_release_channel_is_rejected() {
         let manager = TestManager::new();
         let cookie = manager.logged_in().await;
         let response = manager
-            .put(PATH, r#"{"release_channel":"nightly"}"#, Some(&cookie))
+            .put(PATH, r#"{"release_channel":"nightly","remote_control":{"enabled":true,"permission_mode":"auto","capacity":4}}"#, Some(&cookie))
             .await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }

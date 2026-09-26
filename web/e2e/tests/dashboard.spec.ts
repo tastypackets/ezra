@@ -13,6 +13,11 @@ test("the dashboard arrives with its data", async ({ page }) => {
   expect(apiCalls).toEqual([]);
 });
 
+test("Remote Control waits for Claude Code", async ({ page }) => {
+  await page.goto("./");
+  await expect(page.getByText("Starts once Claude Code is installed and signed in.")).toBeVisible();
+});
+
 test("signed in, the sign-in page goes to the dashboard", async ({ page }) => {
   await page.goto("./login");
   await expect(page).toHaveURL(/\/$/);

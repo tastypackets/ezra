@@ -351,7 +351,7 @@ impl SignInStatus {
     }
 }
 
-trait StrExt {
+pub trait StrExt {
     /// Removes colour and other ANSI escape sequences.
     fn without_terminal_codes(&self) -> String;
 }

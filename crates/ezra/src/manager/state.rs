@@ -8,6 +8,7 @@ use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
 use super::git::GitTools;
 use super::login::LoginProcess;
+use super::remote_control::{RemoteControl, SERVED_DIRECTORY};
 use super::settings::{Settings, SettingsError};
 use super::updates::LatestRelease;
 
@@ -25,6 +26,8 @@ pub struct AppState {
     pub latest_releases: Arc<Mutex<HashMap<Agent, LatestRelease>>>,
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
+    pub remote_control: Arc<RemoteControl>,
+    pub remote_control_directory: PathBuf,
 }
 
 impl AppState {
@@ -47,6 +50,8 @@ impl AppState {
             latest_releases: Arc::default(),
             git_tools: Arc::new(git_tools),
             github_login: Arc::default(),
+            remote_control: Arc::default(),
+            remote_control_directory: PathBuf::from(SERVED_DIRECTORY),
         }
     }
 
