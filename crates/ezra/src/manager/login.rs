@@ -371,14 +371,22 @@ impl SignInStatus {
         })
     }
 
-    /// Parses `codex login status`, e.g. "Logged in using ChatGPT" or "Not logged in".
+    /// Parses `codex login status`, e.g. "Logged in using ChatGPT", "Logged in using an API key -
+    /// sk-…" or "Not logged in". The account is the sign-in method, never the key.
     fn from_codex_text(text: &str) -> Self {
         let logged_in_line = text.lines().find(|line| line.starts_with("Logged in"));
         Self {
             logged_in: logged_in_line.is_some(),
             account: logged_in_line
                 .and_then(|line| line.strip_prefix("Logged in using "))
-                .map(|method| method.trim().to_owned()),
+                .map(|method| {
+                    let method = method.split(" - ").next().unwrap_or(method).trim();
+                    method
+                        .strip_prefix("an ")
+                        .or_else(|| method.strip_prefix("a "))
+                        .unwrap_or(method)
+                        .to_owned()
+                }),
         }
     }
 }
@@ -623,6 +631,20 @@ mod tests {
             SignInStatus {
                 logged_in: true,
                 account: Some("ChatGPT".to_owned())
+            }
+        );
+        assert_eq!(
+            SignInStatus::from_codex_text("Logged in using an API key - sk-proj-***ABCD\n"),
+            SignInStatus {
+                logged_in: true,
+                account: Some("API key".to_owned())
+            }
+        );
+        assert_eq!(
+            SignInStatus::from_codex_text("Logged in using Amazon Bedrock AWS access keys\n"),
+            SignInStatus {
+                logged_in: true,
+                account: Some("Amazon Bedrock AWS access keys".to_owned())
             }
         );
         assert_eq!(
