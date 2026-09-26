@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -5,10 +7,10 @@ use serde::Deserialize;
 
 use utoipa::ToSchema;
 
-use super::{ApiError, AppState, ErrorBody, Session};
+use super::{ApiError, AppState, ErrorBody, Session, internal};
 use crate::manager::agents::Agent;
 use crate::manager::events::Topic;
-use crate::manager::login::{AgentCli, LoginError, LoginPrompt};
+use crate::manager::login::{AgentCli, LoginEnd, LoginError, LoginProcess, LoginPrompt};
 
 impl From<LoginError> for ApiError {
     fn from(error: LoginError) -> Self {
@@ -52,7 +54,9 @@ pub async fn start(
     let (login, prompt) = AgentCli::installed(agent, &state.install_paths)?
         .start_login()
         .await?;
+    let end = login.end();
     state.logins.lock().await.insert(agent, login);
+    tokio::spawn(state.clone().finish_login(agent, end));
     state.events.publish(Topic::Agents);
     Ok(Json(prompt))
 }
@@ -89,8 +93,15 @@ pub async fn submit_code(
         .await
         .remove(&agent)
         .ok_or_else(|| ApiError::Conflict(format!("no {agent} sign-in is in progress")))?;
-    let submitted = login.submit_code(&body.code).await;
-    state.events.publish(Topic::Agents);
+    let finishing = state.clone();
+    let submitted = tokio::spawn(async move {
+        let submitted = login.submit_code(&body.code).await;
+        finishing.agent_checks.refresh(agent).await;
+        finishing.events.publish(Topic::Agents);
+        submitted
+    })
+    .await
+    .map_err(internal)?;
     submitted?;
     tracing::info!("{agent} is signed in");
     state.remote_control.restart();
@@ -119,20 +130,168 @@ pub async fn log_out(
 ) -> Result<StatusCode, ApiError> {
     state.logins.lock().await.remove(&agent);
     state.events.publish(Topic::Agents);
-    AgentCli::installed(agent, &state.install_paths)?
-        .log_out()
-        .await?;
-    if agent == Agent::Claude {
-        state.remote_control.reconsider();
-    }
-    state.events.publish(Topic::Agents);
+    let cli = AgentCli::installed(agent, &state.install_paths)?;
+    let signing_out = state.clone();
+    tokio::spawn(async move {
+        let logged_out = cli.log_out().await;
+        signing_out.agent_checks.refresh(agent).await;
+        logged_out
+    })
+    .await
+    .map_err(internal)??;
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl AppState {
+    /// Once the sign-in's process ends by itself, refreshes the agent's sign-in, then drops the
+    /// prompt.
+    async fn finish_login(self, agent: Agent, mut end: LoginEnd) {
+        if end.wait().await.is_none() {
+            return;
+        }
+        let still_waiting = |logins: &HashMap<Agent, LoginProcess>| {
+            logins
+                .get(&agent)
+                .is_some_and(|login| end.belongs_to(login))
+        };
+        if !still_waiting(&*self.logins.lock().await) {
+            return;
+        }
+        self.agent_checks.refresh(agent).await;
+        let mut logins = self.logins.lock().await;
+        if still_waiting(&logins) {
+            logins.remove(&agent);
+            drop(logins);
+            self.events.publish(Topic::Agents);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::TestManager;
+    use std::fs;
+    use std::time::Duration;
+
+    use futures_util::StreamExt;
+    use tokio::time::{Instant, sleep, timeout};
+
+    use super::super::test_support::{ResponseExt, TestManager};
     use super::*;
+    use crate::manager::events::ManagerEvent;
+
+    #[tokio::test]
+    async fn signing_in_and_out_refreshes_the_sign_in() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        manager.install_fake_cli(
+            Agent::Claude,
+            &format!(
+                r#"case "$1 $2" in
+  "auth login") echo 'Visit: https://claude.com/cai/oauth/authorize?code=true'; read code; [ "$code" = good ] && touch {marker} ;;
+  "auth status") if [ -f {marker} ]; then echo '{{"loggedIn":true}}'; else echo '{{"loggedIn":false}}'; fi ;;
+  "auth logout") rm {marker} ;;
+esac"#,
+                marker = directory.path().join("signed-in").display()
+            ),
+        );
+        let started = manager
+            .post("/api/v1/agents/claude/login", "", Some(&cookie))
+            .await;
+        assert_eq!(started.status(), StatusCode::OK);
+        assert!(
+            manager
+                .agent_status(Agent::Claude, &cookie)
+                .await
+                .login_prompt
+                .is_some()
+        );
+
+        let submitted = manager
+            .post(
+                "/api/v1/agents/claude/login/code",
+                r#"{"code": "good"}"#,
+                Some(&cookie),
+            )
+            .await;
+        assert_eq!(submitted.status(), StatusCode::NO_CONTENT);
+        let signed_in = manager.agent_status(Agent::Claude, &cookie).await;
+        assert_eq!((signed_in.logged_in, signed_in.login_prompt), (true, None));
+
+        let signed_out = manager
+            .post("/api/v1/agents/claude/logout", "", Some(&cookie))
+            .await;
+        assert_eq!(signed_out.status(), StatusCode::NO_CONTENT);
+        assert!(!manager.agent_status(Agent::Claude, &cookie).await.logged_in);
+        assert_eq!(
+            manager.fake_cli_runs(Agent::Claude),
+            [
+                "auth login --claudeai",
+                "auth status",
+                "auth logout",
+                "auth status"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_device_sign_in_that_finishes_refreshes_the_sign_in() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let marker = directory.path().join("signed-in");
+        manager.install_fake_cli(
+            Agent::Codex,
+            &format!(
+                r#"case "$*" in
+  "login --device-auth")
+    echo 'Open https://auth.openai.com/codex/device'
+    echo 'Enter this one-time code'
+    echo 'ABCD-12345'
+    while [ ! -f {marker} ]; do sleep 0.05; done ;;
+  "login status") if [ -f {marker} ]; then echo 'Logged in using ChatGPT'; else echo 'Not logged in'; exit 1; fi ;;
+esac"#,
+                marker = marker.display()
+            ),
+        );
+        let prompt: LoginPrompt = manager
+            .post("/api/v1/agents/codex/login", "", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(prompt.code.as_deref(), Some("ABCD-12345"));
+        let waiting = manager.agent_status(Agent::Codex, &cookie).await;
+        assert_eq!(
+            (waiting.logged_in, waiting.login_prompt),
+            (false, Some(prompt))
+        );
+
+        let mut events = Box::pin(manager.state.events.stream());
+        events.next().await;
+        fs::write(&marker, "").expect("marker is written");
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .expect("the deadline fits");
+        let finished = loop {
+            let status = manager.agent_status(Agent::Codex, &cookie).await;
+            if status.login_prompt.is_none() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "the sign-in did not finish");
+            sleep(Duration::from_millis(50)).await;
+        };
+        assert_eq!(
+            (finished.logged_in, finished.account.as_deref()),
+            (true, Some("ChatGPT"))
+        );
+        let mut published = Vec::new();
+        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
+            if let ManagerEvent::Changed { topic, .. } = event {
+                published.push(topic);
+            }
+        }
+        assert!(published.contains(&Topic::Agents), "{published:?}");
+    }
 
     #[tokio::test]
     async fn login_requires_the_agent_to_be_installed() {

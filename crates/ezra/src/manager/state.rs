@@ -6,6 +6,7 @@ use tokio::sync::{Mutex, watch};
 
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
+use super::checks::AgentChecks;
 use super::environment::EnvironmentSettings;
 use super::events::Events;
 use super::folders::{PROJECTS_DIRECTORY, ProjectsDirectory};
@@ -23,6 +24,7 @@ pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     pub sessions: Arc<Sessions>,
     pub install_paths: Arc<InstallPaths>,
+    pub agent_checks: Arc<AgentChecks>,
     pub install_lock: Arc<Mutex<()>>,
     pub logins: Arc<Mutex<HashMap<Agent, LoginProcess>>>,
     pub download_tls_verification: TlsVerification,
@@ -49,11 +51,13 @@ impl AppState {
         git_tools: GitTools,
     ) -> Self {
         let events = Events::default();
+        let install_paths = Arc::new(install_paths);
         Self {
             settings_path: Arc::new(settings_path),
             settings: Arc::new(Mutex::new(settings)),
             sessions: Arc::default(),
-            install_paths: Arc::new(install_paths),
+            agent_checks: Arc::new(AgentChecks::new(Arc::clone(&install_paths), events.clone())),
+            install_paths,
             install_lock: Arc::default(),
             logins: Arc::default(),
             download_tls_verification,

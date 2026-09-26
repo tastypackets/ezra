@@ -177,7 +177,7 @@ impl AppState {
     /// Returns the prompt of a sign-in still running. One that succeeded is lent to git.
     async fn finish_github_login(&self) -> Option<LoginPrompt> {
         let mut login = self.github_login.lock().await;
-        match login.as_mut().map(LoginProcess::outcome) {
+        match login.as_ref().map(LoginProcess::outcome) {
             Some(None) => login.as_ref().and_then(|login| login.prompt().cloned()),
             Some(Some(succeeded)) => {
                 login.take();

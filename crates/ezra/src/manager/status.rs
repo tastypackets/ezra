@@ -2,9 +2,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::agents::{Agent, DownloadProgress, VersionExt};
-use super::login::{LoginPrompt, SignInStatus};
+use super::login::LoginPrompt;
 use super::state::AppState;
-use crate::path_ext::PathExt;
 
 /// One agent's install and sign-in state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -36,17 +35,14 @@ impl AgentStatus {
         statuses
     }
 
+    /// Reads what is known and runs nothing.
     pub async fn gather(agent: Agent, state: &AppState) -> Self {
-        let login_prompt = {
-            let mut logins = state.logins.lock().await;
-            if logins
-                .get_mut(&agent)
-                .is_some_and(|login| login.outcome().is_some())
-            {
-                logins.remove(&agent);
-            }
-            logins.get(&agent).and_then(|login| login.prompt().cloned())
-        };
+        let login_prompt = state
+            .logins
+            .lock()
+            .await
+            .get(&agent)
+            .and_then(|login| login.prompt().cloned());
         let install_progress = state
             .installs_in_progress
             .lock()
@@ -72,8 +68,7 @@ impl AgentStatus {
             }
             _ => None,
         };
-        let sign_in = SignInStatus::query(agent, &state.install_paths).await;
-        let config_directory = state.install_paths.config_directory(agent);
+        let sign_in = state.agent_checks.sign_in(agent).unwrap_or_default();
         Self {
             agent,
             configured,
@@ -81,7 +76,7 @@ impl AgentStatus {
             logged_in: sign_in.logged_in,
             account: sign_in.account,
             login_prompt,
-            config_disk_bytes: config_directory.and_then(|directory| directory.total_bytes().ok()),
+            config_disk_bytes: state.agent_checks.config_bytes(agent),
             install_progress,
             available_update,
         }
@@ -95,8 +90,53 @@ mod tests {
 
     use super::*;
     use crate::manager::agents::ReleaseChannel;
-    use crate::manager::api::test_support::TestManager;
+    use crate::manager::api::test_support::{ResponseExt, TestManager};
     use crate::manager::updates::LatestRelease;
+    use crate::path_ext::PathExt;
+
+    #[tokio::test]
+    async fn listing_agents_runs_no_cli() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        manager.install_fake_cli(
+            Agent::Claude,
+            r#"echo '{"loggedIn":true,"email":"a@example.com"}'"#,
+        );
+        manager.install_fake_cli(Agent::Codex, "echo 'Logged in using ChatGPT'");
+        let sign_ins = async || {
+            let listing: Vec<AgentStatus> = manager
+                .get("/api/v1/agents", Some(&cookie))
+                .await
+                .json()
+                .await;
+            listing
+                .into_iter()
+                .map(|status| (status.logged_in, status.account))
+                .collect::<Vec<_>>()
+        };
+        for _ in 0..3 {
+            assert_eq!(sign_ins().await, [(false, None), (false, None)]);
+        }
+        for agent in Agent::ALL {
+            assert_eq!(manager.fake_cli_runs(agent), Vec::<String>::new());
+        }
+
+        for agent in Agent::ALL {
+            manager.state.agent_checks.refresh(agent).await;
+        }
+        for _ in 0..3 {
+            assert_eq!(
+                sign_ins().await,
+                [
+                    (true, Some("a@example.com".to_owned())),
+                    (true, Some("ChatGPT".to_owned()))
+                ]
+            );
+            AgentStatus::gather_all(&manager.state).await;
+        }
+        assert_eq!(manager.fake_cli_runs(Agent::Claude), ["auth status"]);
+        assert_eq!(manager.fake_cli_runs(Agent::Codex), ["login status"]);
+    }
 
     fn write(path: &Path) {
         fs::create_dir_all(path.parent().expect("test paths have a parent"))

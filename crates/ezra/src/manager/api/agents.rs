@@ -109,6 +109,7 @@ impl AppState {
             .lock()
             .await
             .insert(agent, LatestRelease { channel, version });
+        self.agent_checks.refresh(agent).await;
         if agent == Agent::Claude {
             self.remote_control.reconsider();
         }
@@ -144,6 +145,9 @@ mod tests {
     async fn fresh_manager_lists_both_agents_as_not_installed() {
         let manager = TestManager::new();
         let cookie = manager.logged_in().await;
+        for agent in Agent::ALL {
+            manager.state.agent_checks.refresh(agent).await;
+        }
         let listing: Vec<AgentStatus> = manager
             .get("/api/v1/agents", Some(&cookie))
             .await

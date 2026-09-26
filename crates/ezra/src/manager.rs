@@ -1,6 +1,7 @@
 mod agents;
 mod api;
 mod auth;
+mod checks;
 mod environment;
 mod events;
 mod folders;
@@ -106,6 +107,7 @@ async fn serve() -> Result<(), ManagerError> {
     state.certificate = Some(certificate);
     tokio::spawn(state.clone().reinstall_configured_agents());
     tokio::spawn(state.clone().check_for_updates_regularly());
+    tokio::spawn(Arc::clone(&state.agent_checks).check_regularly());
     tokio::spawn(state.clone().lend_github_sign_in_at_start());
     tokio::spawn(state.clone().supervise_remote_control());
     tokio::spawn(state.clone().describe_folders_regularly());

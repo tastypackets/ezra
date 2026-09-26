@@ -22,12 +22,11 @@ use utoipa::ToSchema;
 use super::agents::Agent;
 use super::events::{Events, Topic};
 use super::folders::Folder;
-use super::login::{AgentCli, StrExt};
+use super::login::{AgentCli, SignInStatus, StrExt};
 use super::state::AppState;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(4);
-const SIGN_IN_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const GROUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RECHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -166,7 +165,6 @@ pub struct RemoteControl {
     device: Option<String>,
     servers: SyncMutex<BTreeMap<PathBuf, RemoteControlStatus>>,
     events: Events,
-    sign_in: watch::Sender<SignIn>,
     changes: watch::Sender<u64>,
     restarts: watch::Sender<u64>,
     shutdown: watch::Sender<bool>,
@@ -182,7 +180,6 @@ impl RemoteControl {
                 .and_then(|hostname| hostname.into_string().ok()),
             servers: SyncMutex::default(),
             events,
-            sign_in: watch::Sender::new(SignIn::Unknown),
             changes: watch::Sender::new(0),
             restarts: watch::Sender::new(0),
             shutdown: watch::Sender::new(false),
@@ -242,9 +239,9 @@ impl RemoteControl {
         }
     }
 
-    fn signals(&self) -> Signals {
+    fn signals(&self, sign_in: watch::Receiver<Option<SignInStatus>>) -> Signals {
         Signals {
-            sign_in: self.sign_in.subscribe(),
+            sign_in,
             changes: self.changes.subscribe(),
             restarts: self.restarts.subscribe(),
             shutdown: self.shutdown.subscribe(),
@@ -276,17 +273,9 @@ impl RemoteControl {
     }
 }
 
-/// Claude Code's sign-in, as last checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SignIn {
-    Unknown,
-    SignedOut,
-    SignedIn,
-}
-
 /// One task's view of the sign-in, change, restart and shutdown signals.
 struct Signals {
-    sign_in: watch::Receiver<SignIn>,
+    sign_in: watch::Receiver<Option<SignInStatus>>,
     changes: watch::Receiver<u64>,
     restarts: watch::Receiver<u64>,
     shutdown: watch::Receiver<bool>,
@@ -335,7 +324,7 @@ enum Served {
     Folder(String),
 }
 
-/// What should be running right now. `Unknown` when the sign-in could not be checked in time.
+/// What should be running right now. `Unknown` until Claude first answers a sign-in check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Wanted {
     Off,
@@ -453,7 +442,9 @@ impl Failures {
 impl AppState {
     /// Runs the /projects server, and one server for each folder chosen, until shutdown.
     pub async fn supervise_remote_control(self) {
-        let mut signals = self.remote_control.signals();
+        let mut signals = self
+            .remote_control
+            .signals(self.agent_checks.watch_sign_in(Agent::Claude));
         let projects = tokio::spawn(self.clone().supervise_server(Served::Projects));
         let mut folders: HashMap<String, JoinHandle<()>> = HashMap::new();
         loop {
@@ -477,26 +468,12 @@ impl AppState {
         self.remote_control.stopped.send_replace(true);
     }
 
-    /// Checks Claude Code's sign-in for every server. False when shutdown interrupted it.
+    /// Checks Claude Code's sign-in for every server when the last answer is older than the
+    /// recheck interval. False when shutdown interrupted it.
     async fn check_sign_in(&self, signals: &mut Signals) -> bool {
-        let sign_in = match AgentCli::installed(Agent::Claude, &self.install_paths) {
-            Err(_) => SignIn::SignedOut,
-            Ok(claude) => tokio::select! {
-                checked = timeout(SIGN_IN_CHECK_TIMEOUT, claude.sign_in_status()) => match checked {
-                    Ok(status) if status.logged_in => SignIn::SignedIn,
-                    Ok(_) => SignIn::SignedOut,
-                    Err(_) => SignIn::Unknown,
-                },
-                () = signals.shutdown.until_set() => return false,
-            },
-        };
-        let changed = self.remote_control.sign_in.send_if_modified(|current| {
-            let changed = *current != sign_in;
-            *current = sign_in;
-            changed
-        });
-        if changed {
-            self.events.publish(Topic::Agents);
+        tokio::select! {
+            () = self.agent_checks.check_sign_in(Agent::Claude, RECHECK_INTERVAL) => {}
+            () = signals.shutdown.until_set() => return false,
         }
         signals.sign_in.mark_unchanged();
         true
@@ -542,7 +519,9 @@ impl AppState {
             Served::Projects => self.projects.0.clone(),
             Served::Folder(name) => self.projects.folder(name),
         };
-        let mut signals = self.remote_control.signals();
+        let mut signals = self
+            .remote_control
+            .signals(self.agent_checks.watch_sign_in(Agent::Claude));
         let mut failures = Failures::default();
         loop {
             if signals.is_shutting_down() {
@@ -629,11 +608,10 @@ impl AppState {
         if AgentCli::installed(Agent::Claude, &self.install_paths).is_err() {
             return Wanted::Waiting;
         }
-        let sign_in = *self.remote_control.sign_in.borrow();
-        match sign_in {
-            SignIn::SignedIn => {}
-            SignIn::SignedOut => return Wanted::Waiting,
-            SignIn::Unknown => return Wanted::Unknown,
+        match self.agent_checks.sign_in(Agent::Claude) {
+            Some(sign_in) if sign_in.logged_in => {}
+            Some(_) => return Wanted::Waiting,
+            None => return Wanted::Unknown,
         }
         Wanted::Server(Launch {
             claude: self.install_paths.command(Agent::Claude),
@@ -1380,7 +1358,7 @@ mod tests {
         wait_for(&state, ServerState::Waiting).await;
 
         fs::write(&marker, "").expect("marker is written");
-        state.remote_control.restart();
+        state.agent_checks.refresh(Agent::Claude).await;
         wait_for(&state, ServerState::Running).await;
 
         state.remote_control.begin_shut_down();

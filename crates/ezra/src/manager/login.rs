@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::{oneshot, watch};
 use tokio::time::{sleep, timeout};
 use utoipa::ToSchema;
 
@@ -81,24 +82,27 @@ impl AgentCli {
         LoginProcess::start(self.agent.command_name(), shape, command).await
     }
 
-    /// Asks the CLI. Anything unexpected in its answer counts as signed out.
-    pub async fn sign_in_status(&self) -> SignInStatus {
+    /// Asks the CLI. `None` when it gave no answer, such as when it could not start.
+    pub async fn sign_in_status(&self) -> Option<SignInStatus> {
         let mut command = self.command();
         match self.agent {
             Agent::Claude => command.args(["auth", "status"]),
             Agent::Codex => command.args(["login", "status"]),
         };
-        let Ok(output) = command.stdin(Stdio::null()).output().await else {
-            return SignInStatus::default();
-        };
+        let output = command
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .ok()?;
         match self.agent {
             Agent::Claude => SignInStatus::from_claude_json(&output.stdout),
             Agent::Codex if output.status.success() => {
                 let mut text = output.stdout_text();
                 text.push_str(&output.stderr_text());
-                SignInStatus::from_codex_text(&text)
+                Some(SignInStatus::from_codex_text(&text))
             }
-            Agent::Codex => SignInStatus::default(),
+            Agent::Codex => output.status.code().map(|_| SignInStatus::default()),
         }
     }
 
@@ -168,9 +172,29 @@ pub struct LoginProcess {
     command: &'static str,
     shape: PromptShape,
     prompt: Option<LoginPrompt>,
-    child: Child,
     stdin: Option<ChildStdin>,
     output: Arc<Mutex<String>>,
+    end: LoginEnd,
+    _stop_when_dropped: oneshot::Sender<()>,
+}
+
+/// How a sign-in process ended, once it has.
+#[derive(Debug, Clone)]
+pub struct LoginEnd(watch::Receiver<Option<bool>>);
+
+impl LoginEnd {
+    /// Whether it succeeded, or `None` when the sign-in was dropped before its process ended.
+    pub async fn wait(&mut self) -> Option<bool> {
+        self.0
+            .wait_for(Option::is_some)
+            .await
+            .ok()
+            .and_then(|ended| *ended)
+    }
+
+    pub fn belongs_to(&self, login: &LoginProcess) -> bool {
+        self.0.same_channel(&login.end.0)
+    }
 }
 
 impl LoginProcess {
@@ -208,14 +232,35 @@ impl LoginProcess {
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(Self::collect_output(stderr, Arc::clone(&output)));
         }
+        let stdin = child.stdin.take();
+        let (ended, end) = watch::channel(None);
+        let (stop_when_dropped, dropped) = oneshot::channel();
+        tokio::spawn(Self::wait_for_exit(child, ended, dropped));
         Ok(Self {
             command: name,
             shape,
             prompt: None,
-            stdin: child.stdin.take(),
-            child,
+            stdin,
             output,
+            end: LoginEnd(end),
+            _stop_when_dropped: stop_when_dropped,
         })
+    }
+
+    /// Records whether the process succeeded, or kills it once the sign-in is dropped.
+    async fn wait_for_exit(
+        mut child: Child,
+        ended: watch::Sender<Option<bool>>,
+        dropped: oneshot::Receiver<()>,
+    ) {
+        tokio::select! {
+            exit = child.wait() => {
+                ended.send_replace(Some(exit.is_ok_and(|status| status.success())));
+            }
+            _ = dropped => {
+                let _already_gone = child.kill().await;
+            }
+        }
     }
 
     /// `None` when the process exits without showing a link.
@@ -237,12 +282,12 @@ impl LoginProcess {
     }
 
     /// `None` while it runs, then whether it succeeded.
-    pub fn outcome(&mut self) -> Option<bool> {
-        match self.child.try_wait() {
-            Ok(None) => None,
-            Ok(Some(status)) => Some(status.success()),
-            Err(_) => Some(false),
-        }
+    pub fn outcome(&self) -> Option<bool> {
+        *self.end.0.borrow()
+    }
+
+    pub fn end(&self) -> LoginEnd {
+        self.end.clone()
     }
 
     /// Claude only: sends the code shown after signing in, then waits for the login to finish.
@@ -253,10 +298,9 @@ impl LoginProcess {
                 .await?;
             stdin.flush().await?;
         }
-        match timeout(CODE_TIMEOUT, self.child.wait()).await {
-            Ok(Ok(status)) if status.success() => Ok(()),
-            Ok(Err(error)) => Err(error.into()),
-            Ok(Ok(_)) | Err(_) => Err(LoginError::Failed {
+        match timeout(CODE_TIMEOUT, self.end.wait()).await {
+            Ok(Some(true)) => Ok(()),
+            Ok(_) | Err(_) => Err(LoginError::Failed {
                 command: self.command,
                 output: self.output_tail(),
             }),
@@ -305,16 +349,8 @@ pub struct SignInStatus {
 }
 
 impl SignInStatus {
-    /// Signed out when the CLI is not installed.
-    pub async fn query(agent: Agent, paths: &InstallPaths) -> Self {
-        match AgentCli::installed(agent, paths) {
-            Ok(cli) => cli.sign_in_status().await,
-            Err(_) => Self::default(),
-        }
-    }
-
-    /// Parses `claude auth status`.
-    fn from_claude_json(status_json: &[u8]) -> Self {
+    /// Parses `claude auth status`, `None` when it is not the status JSON.
+    fn from_claude_json(status_json: &[u8]) -> Option<Self> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Status {
@@ -322,17 +358,15 @@ impl SignInStatus {
             email: Option<String>,
             subscription_type: Option<String>,
         }
-        let Ok(status) = serde_json::from_slice::<Status>(status_json) else {
-            return Self::default();
-        };
+        let status = serde_json::from_slice::<Status>(status_json).ok()?;
         let account = match (status.email, status.subscription_type) {
             (Some(email), Some(plan)) => Some(format!("{email} ({plan})")),
             (email, plan) => email.or(plan),
         };
-        Self {
+        Some(Self {
             logged_in: status.logged_in,
             account: account.filter(|_| status.logged_in),
-        }
+        })
     }
 
     /// Parses `codex login status`, e.g. "Logged in using ChatGPT" or "Not logged in".
@@ -374,6 +408,12 @@ impl StrExt for str {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use nix::errno::Errno;
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+
     use super::*;
 
     const CLAUDE_OUTPUT: &str = "Opening browser to sign in…\n\
@@ -452,32 +492,71 @@ mod tests {
         );
     }
 
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_reports_how_its_process_ended() {
+        for (exit, succeeded) in [("exit 0", true), ("exit 3", false)] {
+            let script = format!("echo 'https://example.com/device'; sleep 0.2; {exit}");
+            let (login, _prompt) = LoginProcess::start("sh", PromptShape::Link, shell(&script))
+                .await
+                .expect("the link is shown");
+            let mut end = login.end();
+            assert_eq!(end.wait().await, Some(succeeded), "{exit}");
+            assert_eq!(login.outcome(), Some(succeeded), "{exit}");
+            assert!(end.belongs_to(&login));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_sign_in_stops_its_process() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let pid_file = directory.path().join("pid");
+        let script = format!(
+            "echo $$ > {}; echo 'https://example.com/device'; exec sleep 60",
+            pid_file.display()
+        );
+        let (login, _prompt) = LoginProcess::start("sh", PromptShape::Link, shell(&script))
+            .await
+            .expect("the link is shown");
+        let mut end = login.end();
+        let pid: i32 = fs::read_to_string(&pid_file)
+            .expect("the process wrote its pid")
+            .trim()
+            .parse()
+            .expect("pid is a number");
+        drop(login);
+        assert_eq!(end.wait().await, None);
+        assert_eq!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH));
+    }
+
     #[test]
     fn claude_status_gives_sign_in_and_account() {
         assert_eq!(
             SignInStatus::from_claude_json(
                 br#"{"loggedIn": true, "email": "a@example.com", "subscriptionType": "max"}"#
             ),
-            SignInStatus {
+            Some(SignInStatus {
                 logged_in: true,
                 account: Some("a@example.com (max)".to_owned())
-            }
+            })
         );
         assert_eq!(
             SignInStatus::from_claude_json(br#"{"loggedIn": true, "authMethod": "claude.ai"}"#),
-            SignInStatus {
+            Some(SignInStatus {
                 logged_in: true,
                 account: None
-            }
+            })
         );
         assert_eq!(
             SignInStatus::from_claude_json(br#"{"loggedIn": false, "authMethod": "none"}"#),
-            SignInStatus::default()
+            Some(SignInStatus::default())
         );
-        assert_eq!(
-            SignInStatus::from_claude_json(b"not json"),
-            SignInStatus::default()
-        );
+        assert_eq!(SignInStatus::from_claude_json(b"not json"), None);
     }
 
     #[test]

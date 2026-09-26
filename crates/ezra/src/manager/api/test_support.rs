@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use axum::Router;
@@ -11,11 +12,13 @@ use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 
 use super::session::SessionStatus;
-use crate::manager::agents::{InstallPaths, TlsVerification};
+use crate::manager::agents::{Agent, InstallPaths, TlsVerification};
 use crate::manager::folders::ProjectsDirectory;
 use crate::manager::git::GitTools;
 use crate::manager::settings::Settings;
 use crate::manager::state::AppState;
+use crate::manager::status::AgentStatus;
+use crate::path_ext::PathExt;
 
 pub const PASSWORD: &str = r#"{"password": "correct horse"}"#;
 
@@ -62,6 +65,55 @@ impl TestManager {
             settings_path,
             directory,
         }
+    }
+
+    /// Makes `script` the agent's command, installed as version 9.9.9. Each run is logged for
+    /// `fake_cli_runs`. Returns the script's path.
+    pub fn install_fake_cli(&self, agent: Agent, script: &str) -> PathBuf {
+        let fakes = self.directory.path().join("fakes");
+        let version = fakes.join(agent.command_name()).join("9.9.9");
+        let command = match agent {
+            Agent::Claude => version,
+            Agent::Codex => version.join("bin/codex"),
+        };
+        fs::create_dir_all(command.parent().expect("the command has a parent"))
+            .expect("fake directory is created");
+        let runs = fakes.join(format!("{agent}.runs"));
+        fs::write(
+            &command,
+            format!("#!/bin/sh\necho \"$*\" >> '{}'\n{script}\n", runs.display()),
+        )
+        .expect("fake is written");
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o755))
+            .expect("fake is executable");
+        self.state
+            .install_paths
+            .command(agent)
+            .replace_symlink(&command)
+            .expect("command link is created");
+        command
+    }
+
+    /// The arguments of each run of the fake CLI.
+    pub fn fake_cli_runs(&self, agent: Agent) -> Vec<String> {
+        let runs = self
+            .directory
+            .path()
+            .join("fakes")
+            .join(format!("{agent}.runs"));
+        fs::read_to_string(runs)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    pub async fn agent_status(&self, agent: Agent, cookie: &str) -> AgentStatus {
+        let listing: Vec<AgentStatus> = self.get("/api/v1/agents", Some(cookie)).await.json().await;
+        listing
+            .into_iter()
+            .find(|status| status.agent == agent)
+            .expect("every agent is listed")
     }
 
     /// Claims the manager and returns the session cookie.
