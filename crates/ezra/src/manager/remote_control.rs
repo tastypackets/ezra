@@ -313,8 +313,6 @@ pub struct RemoteControlOverview {
 pub struct RemoteControl {
     device: Option<String>,
     servers: SyncMutex<BTreeMap<PathBuf, RemoteControlStatus>>,
-    /// The last link each directory's server printed, kept across restarts.
-    links: SyncMutex<HashMap<PathBuf, String>>,
     logs: PathBuf,
     events: Events,
     changes: watch::Sender<u64>,
@@ -331,7 +329,6 @@ impl RemoteControl {
                 .ok()
                 .and_then(|hostname| hostname.into_string().ok()),
             servers: SyncMutex::default(),
-            links: SyncMutex::default(),
             logs,
             events,
             changes: watch::Sender::new(0),
@@ -339,21 +336,6 @@ impl RemoteControl {
             shutdown: watch::Sender::new(false),
             stopped: watch::Sender::new(false),
         }
-    }
-
-    fn remember_link(&self, directory: &Path, link: &str) {
-        self.links
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(directory.to_path_buf(), link.to_owned());
-    }
-
-    fn link_of(&self, directory: &Path) -> Option<String> {
-        self.links
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(directory)
-            .cloned()
     }
 
     /// The server for `directory`, absent when it has none.
@@ -1183,26 +1165,7 @@ impl ServerRun {
         let usage = tokio::task::spawn_blocking(move || ProcessGroup(group).usage(capacity))
             .await
             .ok();
-        let link = remote_control.link_of(&launch.directory);
-        let mut resumed = false;
-        remote_control.update(&launch.directory, |status| {
-            status.usage = usage;
-            if status.state == ServerState::Starting
-                && usage.is_some_and(|usage| usage.sessions > 0)
-            {
-                resumed = true;
-                match link {
-                    Some(link) => status.connect(link),
-                    None => status.state = ServerState::Running,
-                }
-            }
-        });
-        if resumed {
-            tracing::info!(
-                "Claude Remote Control in {} is connected with its sessions resumed",
-                launch.directory.display()
-            );
-        }
+        remote_control.update(&launch.directory, |status| status.usage = usage);
         usage
     }
 
@@ -1318,7 +1281,6 @@ impl ServerOutput {
                         || status.url.as_deref() != Some(url.as_str());
                     status.connect(url.clone());
                 });
-                remote_control.remember_link(&launch.directory, &url);
                 if newly_connected {
                     tracing::info!(
                         "Claude Remote Control in {} is connected: {url}",
@@ -1355,14 +1317,18 @@ impl ServerOutput {
 }
 
 trait RemoteControlLineExt {
-    /// The claude.ai link printed once the server is connected.
+    /// The claude.ai link printed once the server is connected: the server's, or its one
+    /// session's at capacity 1.
     fn connect_url(&self) -> Option<String>;
 }
 
 impl RemoteControlLineExt for str {
     fn connect_url(&self) -> Option<String> {
         self.split_whitespace()
-            .find(|word| word.starts_with("https://") && word.contains("environment="))
+            .find(|word| {
+                word.starts_with("https://")
+                    && (word.contains("environment=") || word.contains("/code/session_"))
+            })
             .map(str::to_owned)
     }
 }
@@ -1864,6 +1830,12 @@ mod tests {
                 .as_deref(),
             Some("https://claude.ai/code?environment=env_01AB")
         );
+        assert_eq!(
+            "Code anywhere with the Claude mobile app or https://claude.ai/code/session_01AB"
+                .connect_url()
+                .as_deref(),
+            Some("https://claude.ai/code/session_01AB")
+        );
         assert_eq!("Capacity: 1/4 · New sessions".connect_url(), None);
     }
 
@@ -2129,31 +2101,6 @@ mod tests {
 
         group.terminate(&mut leader).await;
         assert_eq!(group.usage(Some(4)).memory_bytes, 0);
-    }
-
-    #[tokio::test]
-    async fn a_server_that_resumes_sessions_without_a_link_counts_as_connected() {
-        let manager = TestManager::new();
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let state = fake_claude(
-            &manager,
-            directory.path(),
-            "if [ -e ../resumed ]; then sleep 60 & wait; else touch ../resumed; echo 'https://claude.ai/code?environment=env_first'; sleep 60 & wait; fi",
-        );
-        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
-        wait_for(&state, ServerState::Running).await;
-
-        state.remote_control.restart();
-        wait_for(&state, ServerState::Starting).await;
-        let resumed = wait_for(&state, ServerState::Running).await;
-        assert_eq!(
-            resumed.url.as_deref(),
-            Some("https://claude.ai/code?environment=env_first")
-        );
-        assert_eq!(resumed.usage.map(|usage| usage.sessions), Some(1));
-
-        state.remote_control.begin_shut_down();
-        supervisor.await.expect("supervisor stops");
     }
 
     #[tokio::test]
