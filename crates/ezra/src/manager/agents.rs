@@ -39,7 +39,7 @@ impl fmt::Display for Agent {
 impl Agent {
     pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
 
-    fn command_name(self) -> &'static str {
+    pub fn command_name(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",

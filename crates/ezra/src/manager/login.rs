@@ -22,18 +22,31 @@ const FAILURE_OUTPUT_LINES: usize = 5;
 pub enum LoginError {
     #[error("{0} is not installed")]
     NotInstalled(Agent),
-    #[error("{agent} did not show a sign-in link: {output}")]
-    NoPrompt { agent: Agent, output: String },
-    #[error("{agent} sign-in did not finish: {output}")]
-    Failed { agent: Agent, output: String },
-    #[error("{agent} {action} failed: {output}")]
+    #[error("{command} did not show a sign-in link: {output}")]
+    NoPrompt {
+        command: &'static str,
+        output: String,
+    },
+    #[error("{command} sign-in did not finish: {output}")]
+    Failed {
+        command: &'static str,
+        output: String,
+    },
+    #[error("{command} {action} failed: {output}")]
     Command {
-        agent: Agent,
+        command: &'static str,
         action: &'static str,
         output: String,
     },
     #[error(transparent)]
     Io(#[from] io::Error),
+}
+
+/// What a sign-in shows the person signing in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptShape {
+    Link,
+    LinkAndCode,
 }
 
 /// An installed agent CLI, for signing in and out.
@@ -61,14 +74,11 @@ impl AgentCli {
             Agent::Claude => command.args(["auth", "login", "--claudeai"]),
             Agent::Codex => command.args(["login", "--device-auth"]),
         };
-        let mut login = LoginProcess::spawn(self.agent, command)?;
-        match timeout(PROMPT_TIMEOUT, login.wait_for_prompt()).await {
-            Ok(Some(prompt)) => Ok((login, prompt)),
-            Ok(None) | Err(_) => Err(LoginError::NoPrompt {
-                agent: self.agent,
-                output: login.output_tail(),
-            }),
-        }
+        let shape = match self.agent {
+            Agent::Claude => PromptShape::Link,
+            Agent::Codex => PromptShape::LinkAndCode,
+        };
+        LoginProcess::start(self.agent.command_name(), shape, command).await
     }
 
     /// Asks the CLI. Anything unexpected in its answer counts as signed out.
@@ -103,7 +113,7 @@ impl AgentCli {
             Ok(())
         } else {
             Err(LoginError::Command {
-                agent: self.agent,
+                command: self.agent.command_name(),
                 action: "logout",
                 output: output.stderr_text(),
             })
@@ -126,25 +136,27 @@ pub struct LoginPrompt {
 
 impl LoginPrompt {
     /// Reads only complete lines, so a link that is still arriving is never cut short.
-    fn parse(agent: Agent, output: &str) -> Option<Self> {
+    fn parse(shape: PromptShape, output: &str) -> Option<Self> {
         let (complete_output, _unfinished_line) = output.rsplit_once('\n')?;
         let url = complete_output
             .split_whitespace()
             .find(|word| word.starts_with("https://"))?
             .to_owned();
-        match agent {
-            Agent::Claude => Some(Self { url, code: None }),
-            Agent::Codex => {
-                let code = complete_output
-                    .lines()
-                    .skip_while(|line| !line.contains("one-time code"))
-                    .skip(1)
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())?
-                    .to_owned();
+        match shape {
+            PromptShape::Link => Some(Self { url, code: None }),
+            PromptShape::LinkAndCode => {
+                let (_, after_marker) = complete_output.rsplit_once("one-time code")?;
+                let code = after_marker.split_whitespace().find(|word| {
+                    word.contains('-')
+                        && word.chars().all(|character| {
+                            character.is_ascii_uppercase()
+                                || character.is_ascii_digit()
+                                || character == '-'
+                        })
+                })?;
                 Some(Self {
                     url,
-                    code: Some(code),
+                    code: Some(code.to_owned()),
                 })
             }
         }
@@ -153,7 +165,8 @@ impl LoginPrompt {
 
 /// A running sign-in. Dropping it stops the process.
 pub struct LoginProcess {
-    agent: Agent,
+    command: &'static str,
+    shape: PromptShape,
     prompt: Option<LoginPrompt>,
     child: Child,
     stdin: Option<ChildStdin>,
@@ -161,7 +174,27 @@ pub struct LoginProcess {
 }
 
 impl LoginProcess {
-    fn spawn(agent: Agent, mut command: Command) -> Result<Self, LoginError> {
+    /// Runs `command` and waits for its sign-in link. `name` is the command's name, for errors.
+    pub async fn start(
+        name: &'static str,
+        shape: PromptShape,
+        command: Command,
+    ) -> Result<(Self, LoginPrompt), LoginError> {
+        let mut login = Self::spawn(name, shape, command)?;
+        match timeout(PROMPT_TIMEOUT, login.wait_for_prompt()).await {
+            Ok(Some(prompt)) => Ok((login, prompt)),
+            Ok(None) | Err(_) => Err(LoginError::NoPrompt {
+                command: name,
+                output: login.output_tail(),
+            }),
+        }
+    }
+
+    fn spawn(
+        name: &'static str,
+        shape: PromptShape,
+        mut command: Command,
+    ) -> Result<Self, LoginError> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -176,7 +209,8 @@ impl LoginProcess {
             tokio::spawn(Self::collect_output(stderr, Arc::clone(&output)));
         }
         Ok(Self {
-            agent,
+            command: name,
+            shape,
             prompt: None,
             stdin: child.stdin.take(),
             child,
@@ -187,7 +221,7 @@ impl LoginProcess {
     /// `None` when the process exits without showing a link.
     async fn wait_for_prompt(&mut self) -> Option<LoginPrompt> {
         loop {
-            if let Some(prompt) = LoginPrompt::parse(self.agent, &self.output_text()) {
+            if let Some(prompt) = LoginPrompt::parse(self.shape, &self.output_text()) {
                 self.prompt = Some(prompt.clone());
                 return Some(prompt);
             }
@@ -218,7 +252,7 @@ impl LoginProcess {
             Ok(Ok(status)) if status.success() => Ok(()),
             Ok(Err(error)) => Err(error.into()),
             Ok(Ok(_)) | Err(_) => Err(LoginError::Failed {
-                agent: self.agent,
+                command: self.command,
                 output: self.output_tail(),
             }),
         }
@@ -351,7 +385,7 @@ mod tests {
     #[test]
     fn claude_prompt_is_the_authorize_link() {
         assert_eq!(
-            LoginPrompt::parse(Agent::Claude, CLAUDE_OUTPUT),
+            LoginPrompt::parse(PromptShape::Link, CLAUDE_OUTPUT),
             Some(LoginPrompt {
                 url: "https://claude.com/cai/oauth/authorize?code=true&client_id=abc&state=xyz"
                     .to_owned(),
@@ -363,7 +397,10 @@ mod tests {
     #[test]
     fn codex_prompt_has_a_link_and_a_code() {
         assert_eq!(
-            LoginPrompt::parse(Agent::Codex, &CODEX_OUTPUT.without_terminal_codes()),
+            LoginPrompt::parse(
+                PromptShape::LinkAndCode,
+                &CODEX_OUTPUT.without_terminal_codes()
+            ),
             Some(LoginPrompt {
                 url: "https://auth.openai.com/codex/device".to_owned(),
                 code: Some("ABCD-12345".to_owned()),
@@ -374,13 +411,31 @@ mod tests {
     #[test]
     fn half_received_link_is_not_a_prompt() {
         let partial = "If the browser didn't open, visit: https://claude.com/cai/oauth/auth";
-        assert_eq!(LoginPrompt::parse(Agent::Claude, partial), None);
+        assert_eq!(LoginPrompt::parse(PromptShape::Link, partial), None);
         let (codex_without_code, _) = CODEX_OUTPUT
             .split_once("2. Enter")
             .expect("sample output has a second step");
         assert_eq!(
-            LoginPrompt::parse(Agent::Codex, &codex_without_code.without_terminal_codes()),
+            LoginPrompt::parse(
+                PromptShape::LinkAndCode,
+                &codex_without_code.without_terminal_codes()
+            ),
             None
+        );
+    }
+
+    #[test]
+    fn github_prompt_has_the_code_on_its_line() {
+        let output = "! Failed to copy one-time code to clipboard\n\
+            \x20 No clipboard utilities available.\n\
+            ! First copy your one-time code: 884F-467A\n\
+            Open this URL to continue in your web browser: https://github.com/login/device\n";
+        assert_eq!(
+            LoginPrompt::parse(PromptShape::LinkAndCode, output),
+            Some(LoginPrompt {
+                url: "https://github.com/login/device".to_owned(),
+                code: Some("884F-467A".to_owned()),
+            })
         );
     }
 
