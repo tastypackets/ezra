@@ -61,14 +61,24 @@ const PERMISSION_MODES: [&str; 7] = [
     "plan",
 ];
 const UNKNOWN_PERMISSION_MODE: &str = "Claude Code has no permission mode by that name";
-const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 7] = [
+/// Variables that make `claude remote-control` refuse to start. Ones set in a settings.json
+/// `env` block still can.
+const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 15] = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
     "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_UNIX_SOCKET",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_REMOTE",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     "DISABLE_GROWTHBOOK",
-    "DISABLE_TELEMETRY",
 ];
 
 /// How Claude Code's Remote Control servers run.
