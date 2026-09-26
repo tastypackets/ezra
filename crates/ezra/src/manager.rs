@@ -8,6 +8,7 @@ mod events;
 mod folders;
 mod git;
 mod login;
+mod processes;
 mod remote_control;
 mod settings;
 mod state;

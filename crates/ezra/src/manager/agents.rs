@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use utoipa::ToSchema;
 
+use super::processes::Process;
 use crate::path_ext::PathExt;
 
 const CLAUDE_RELEASES: &str = "https://downloads.claude.ai/claude-code-releases";
@@ -253,7 +254,8 @@ impl InstallPaths {
         let version_path = versions_directory.join(&release.version);
         if version_path.exists() {
             self.link(agent, &version_path)?;
-            return Self::remove_versions_except(&versions_directory, &release.version)
+            return self
+                .remove_unused_versions(agent)
                 .map_err(InstallError::from);
         }
         staging_path.remove_if_present()?;
@@ -293,17 +295,31 @@ impl InstallPaths {
         outcome?;
 
         self.link(agent, &version_path)?;
-        Self::remove_versions_except(&versions_directory, &release.version)?;
+        self.remove_unused_versions(agent)?;
         Ok(())
     }
 
-    fn versions_directory(&self, agent: Agent) -> PathBuf {
+    /// Removes versions other than the installed one, keeping any a process still runs.
+    pub fn remove_unused_versions(&self, agent: Agent) -> io::Result<()> {
+        let Some(installed) = self.installed_version(agent) else {
+            return Ok(());
+        };
+        let versions_directory = self.versions_directory(agent);
+        let mut kept = Process::running_from(&versions_directory);
+        kept.push(installed);
+        Self::remove_versions_except(&versions_directory, &kept)
+    }
+
+    pub fn versions_directory(&self, agent: Agent) -> PathBuf {
         self.versions_root.join(agent.command_name())
     }
 
-    fn remove_versions_except(versions_directory: &Path, kept_version: &str) -> io::Result<()> {
+    fn remove_versions_except(versions_directory: &Path, kept: &[String]) -> io::Result<()> {
         for path in versions_directory.entries_or_empty()? {
-            if path.file_name().is_some_and(|name| name != kept_version) {
+            if path
+                .file_name()
+                .is_some_and(|name| !kept.iter().any(|kept| name == kept.as_str()))
+            {
                 path.remove_if_present()?;
             }
         }
@@ -529,6 +545,8 @@ pub struct DownloadProgress {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::CommandExt;
+
     use super::*;
 
     fn create_file(path: &Path) {
@@ -659,7 +677,7 @@ mod tests {
         for name in ["2.1.1", "2.1.2", ".2.1.3.partial"] {
             fs::create_dir(directory.path().join(name)).expect("version directory is created");
         }
-        InstallPaths::remove_versions_except(directory.path(), "2.1.2")
+        InstallPaths::remove_versions_except(directory.path(), &["2.1.2".to_owned()])
             .expect("old versions are removed");
         let remaining: Vec<_> = directory
             .path()
@@ -669,5 +687,48 @@ mod tests {
             .filter_map(|path| path.file_name().map(ToOwned::to_owned))
             .collect();
         assert_eq!(remaining, ["2.1.2"]);
+    }
+
+    #[test]
+    fn a_version_still_running_is_kept_until_it_stops() {
+        let home = tempfile::tempdir().expect("temporary directory");
+        let paths = InstallPaths::under_home(home.path());
+        let versions = paths.versions_directory(Agent::Claude);
+        fs::create_dir_all(&versions).expect("versions directory is created");
+        let sleep = fs::canonicalize("/bin/sleep").expect("sleep is installed");
+        for version in ["2.1.1", "2.1.2", "2.1.3"] {
+            fs::copy(&sleep, versions.join(version)).expect("version is written");
+        }
+        paths
+            .command(Agent::Claude)
+            .replace_symlink(&versions.join("2.1.3"))
+            .expect("command link is created");
+        let mut running = std::process::Command::new(versions.join("2.1.1"))
+            .arg0("sleep")
+            .arg("30")
+            .spawn()
+            .expect("the old version runs");
+        let remaining = || {
+            let mut names: Vec<_> = versions
+                .entries_or_empty()
+                .expect("directory is readable")
+                .into_iter()
+                .filter_map(|path| Some(path.file_name()?.to_str()?.to_owned()))
+                .collect();
+            names.sort();
+            names
+        };
+
+        paths
+            .remove_unused_versions(Agent::Claude)
+            .expect("unused versions are removed");
+        assert_eq!(remaining(), ["2.1.1", "2.1.3"]);
+
+        running.kill().expect("the old version stops");
+        running.wait().expect("the old version is reaped");
+        paths
+            .remove_unused_versions(Agent::Claude)
+            .expect("unused versions are removed");
+        assert_eq!(remaining(), ["2.1.3"]);
     }
 }

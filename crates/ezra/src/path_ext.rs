@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +20,9 @@ pub trait PathExt {
 
     /// Points this link at `target`, replacing any existing link in one step.
     fn replace_symlink(&self, target: &Path) -> io::Result<()>;
+
+    /// The whole lines in the last `bytes` of this file, empty when it does not exist. Blocks.
+    fn read_last_lines(&self, bytes: u64) -> io::Result<String>;
 }
 
 impl PathExt for Path {
@@ -75,6 +78,24 @@ impl PathExt for Path {
         staging_link.remove_if_present()?;
         symlink(target, &staging_link)?;
         fs::rename(&staging_link, self)
+    }
+
+    fn read_last_lines(&self, bytes: u64) -> io::Result<String> {
+        let mut file = match File::open(self) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(String::new()),
+            file => file?,
+        };
+        let start = file.metadata()?.len().saturating_sub(bytes);
+        file.seek(SeekFrom::Start(start))?;
+        let mut end = Vec::new();
+        file.take(bytes).read_to_end(&mut end)?;
+        let text = String::from_utf8_lossy(&end);
+        let whole_lines = if start > 0 {
+            text.split_once('\n').map_or("", |(_, rest)| rest)
+        } else {
+            &text
+        };
+        Ok(whole_lines.to_owned())
     }
 }
 
@@ -155,6 +176,19 @@ mod tests {
             fs::read_link(&link).expect("link is readable"),
             Path::new("/second")
         );
+    }
+
+    #[test]
+    fn the_end_of_a_file_starts_at_a_whole_line() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let log = directory.path().join("log");
+        assert_eq!(log.read_last_lines(10).expect("missing is empty"), "");
+        write(&log, "first\nsecond\nthird\n");
+        assert_eq!(
+            log.read_last_lines(100).expect("readable"),
+            "first\nsecond\nthird\n"
+        );
+        assert_eq!(log.read_last_lines(8).expect("readable"), "third\n");
     }
 
     #[test]

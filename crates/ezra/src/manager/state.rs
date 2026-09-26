@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, watch};
@@ -54,7 +54,12 @@ impl AppState {
     ) -> Self {
         let events = Events::default();
         let install_paths = Arc::new(install_paths);
+        let remote_control_logs = settings_path
+            .parent()
+            .map_or_else(PathBuf::new, Path::to_path_buf)
+            .join("remote-control");
         Self {
+            remote_control: Arc::new(RemoteControl::new(events.clone(), remote_control_logs)),
             settings_path: Arc::new(settings_path),
             settings: Arc::new(Mutex::new(settings)),
             sessions: Arc::default(),
@@ -67,7 +72,6 @@ impl AppState {
             latest_releases: Arc::default(),
             git_tools: Arc::new(git_tools),
             github_login: Arc::default(),
-            remote_control: Arc::new(RemoteControl::new(events.clone())),
             clones: Arc::new(Clones::new(events.clone())),
             events,
             certificate: None,

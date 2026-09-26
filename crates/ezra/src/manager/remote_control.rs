@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::io;
@@ -5,14 +6,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex as SyncMutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, gethostname};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -22,7 +25,9 @@ use utoipa::ToSchema;
 use super::agents::Agent;
 use super::events::{Events, Topic};
 use super::login::{AgentCli, SignInStatus, StrExt};
+use super::processes::{Process, ProcessStat};
 use super::state::AppState;
+use crate::path_ext::PathExt;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(4);
@@ -35,6 +40,14 @@ const HEALTHY_RUN: Duration = Duration::from_secs(600);
 const USAGE_INTERVAL: Duration = Duration::from_secs(15);
 const OUTPUT_LINES_KEPT: usize = 20;
 const OUTPUT_LINES_REPORTED: usize = 5;
+const UPDATE_RESTART_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
+const LOG_FILE: &str = "server.log";
+const ROTATED_LOG_FILE: &str = "server.log.1";
+const LATEST_LOG_LINK: &str = "latest";
+const LOG_TAIL_LINES: usize = 200;
+const LOG_TAIL_BYTES: u64 = 256 * 1024;
+const SESSION_LOGS_KEPT_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const SESSION_LOGS_LARGEST: u64 = 64 * 1024 * 1024;
 const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 7] = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -140,12 +153,16 @@ pub struct RemoteControlStatus {
     pub state: ServerState,
     /// Where to continue in a browser, once connected.
     pub url: Option<String>,
-    /// The end of the server's output when it last stopped unexpectedly.
+    /// The end of the server's output when it last stopped unexpectedly, until it connects again.
     pub last_error: Option<String>,
+    /// What that output says went wrong, absent when it matches no known problem.
+    pub problem: Option<ServerProblem>,
     /// Unexpected stops since the manager started.
     pub restarts: u32,
     /// What the server and its sessions use, absent while no server process runs.
     pub usage: Option<ServerUsage>,
+    /// A newer Claude Code the running server restarts on, absent when it runs the installed one.
+    pub update: Option<PendingUpdate>,
 }
 
 impl RemoteControlStatus {
@@ -153,7 +170,79 @@ impl RemoteControlStatus {
         self.state = state;
         self.url = None;
         self.usage = None;
+        self.update = None;
     }
+
+    fn connect(&mut self, url: String) {
+        self.state = ServerState::Running;
+        self.url = Some(url);
+        self.last_error = None;
+        self.problem = None;
+    }
+}
+
+/// A known reason a server stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerProblem {
+    /// Claude rejected Claude Code's sign-in, or it is missing or not a claude.ai sign-in.
+    SignIn,
+    /// The account's plan or organization does not allow Remote Control.
+    NotAllowed,
+    /// Claude could not be reached.
+    Offline,
+    /// Claude answered with server errors.
+    Unavailable,
+}
+
+impl ServerProblem {
+    /// Parts of the messages Claude Code 2.1 prints, checked in this order.
+    const MESSAGES: [(&str, Self); 22] = [
+        ("You must be logged in to use Remote Control", Self::SignIn),
+        ("Unable to determine your organization", Self::SignIn),
+        ("Authentication failed (401)", Self::SignIn),
+        ("login expired", Self::SignIn),
+        ("OAuth token unavailable", Self::SignIn),
+        ("requires a full-scope login token", Self::SignIn),
+        ("requires a claude.ai subscription", Self::SignIn),
+        ("requires claude.ai subscription auth", Self::SignIn),
+        ("this device is not enrolled", Self::SignIn),
+        ("isn't enabled for this account", Self::NotAllowed),
+        ("disabled by your organization's policy", Self::NotAllowed),
+        ("not available for your account", Self::NotAllowed),
+        ("Access denied (403)", Self::NotAllowed),
+        (
+            "may not be available for this organization",
+            Self::NotAllowed,
+        ),
+        ("Server unreachable for", Self::Offline),
+        ("service was unreachable", Self::Offline),
+        ("EAI_AGAIN", Self::Offline),
+        ("ENOTFOUND", Self::Offline),
+        ("ECONNREFUSED", Self::Offline),
+        ("ETIMEDOUT", Self::Offline),
+        ("Persistent errors for", Self::Unavailable),
+        ("Failed with status 5", Self::Unavailable),
+    ];
+
+    fn in_output(lines: &[&str]) -> Option<Self> {
+        Self::MESSAGES.into_iter().find_map(|(message, problem)| {
+            lines
+                .iter()
+                .any(|line| line.contains(message))
+                .then_some(problem)
+        })
+    }
+}
+
+/// A newer Claude Code a running server waits to restart on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct PendingUpdate {
+    /// The installed version the server restarts on.
+    pub version: String,
+    /// When it restarts even with sessions running.
+    #[serde(with = "time::serde::rfc3339")]
+    pub restart_by: OffsetDateTime,
 }
 
 /// What a running server and its sessions use.
@@ -183,6 +272,7 @@ pub struct RemoteControlOverview {
 pub struct RemoteControl {
     device: Option<String>,
     servers: SyncMutex<BTreeMap<PathBuf, RemoteControlStatus>>,
+    logs: PathBuf,
     events: Events,
     changes: watch::Sender<u64>,
     restarts: watch::Sender<u64>,
@@ -191,13 +281,14 @@ pub struct RemoteControl {
 }
 
 impl RemoteControl {
-    /// Publishes every status change to `events`.
-    pub fn new(events: Events) -> Self {
+    /// Publishes every status change to `events` and keeps each server's logs under `logs`.
+    pub fn new(events: Events, logs: PathBuf) -> Self {
         Self {
             device: gethostname()
                 .ok()
                 .and_then(|hostname| hostname.into_string().ok()),
             servers: SyncMutex::default(),
+            logs,
             events,
             changes: watch::Sender::new(0),
             restarts: watch::Sender::new(0),
@@ -240,6 +331,13 @@ impl RemoteControl {
                 })
                 .collect(),
         }
+    }
+
+    pub fn log(&self, served: &Served) -> ServerLog {
+        ServerLog(match served {
+            Served::Projects => self.logs.join("projects"),
+            Served::Folder(name) => self.logs.join("folders").join(name),
+        })
     }
 
     /// Settings, folders or the install changed, so servers may need to start, stop or restart.
@@ -349,7 +447,7 @@ impl FlagExt for watch::Receiver<bool> {
 
 /// Which directory a server serves: all of /projects, or one folder in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Served {
+pub enum Served {
     Projects,
     Folder(String),
 }
@@ -371,6 +469,7 @@ struct Launch {
     config_directory: Option<PathBuf>,
     directory: PathBuf,
     spawn: SpawnMode,
+    log: ServerLog,
     permission_mode: String,
     capacity: u32,
 }
@@ -389,6 +488,8 @@ impl Launch {
             .arg(self.capacity.to_string())
             .arg("--permission-mode")
             .arg(&self.permission_mode)
+            .arg("--debug-file")
+            .arg(self.log.debug_file())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -408,6 +509,16 @@ impl Launch {
         ClaudeGlobalConfig(config_directory.join(".claude.json"))
             .accept_remote_control_in(&self.directory)
             .map_err(|error| format!("could not prepare Claude's settings: {error}"))
+    }
+
+    /// The same server on a different Claude Code version.
+    fn is_update_of(&self, running: &Self) -> bool {
+        self.claude_version != running.claude_version
+            && *self
+                == Self {
+                    claude_version: self.claude_version.clone(),
+                    ..running.clone()
+                }
     }
 }
 
@@ -452,6 +563,94 @@ impl ClaudeGlobalConfig {
     }
 }
 
+/// One server's log directory. Claude writes `server.log` and rotates it to `server.log.1` at
+/// 10 MiB, adds a debug log and a transcript per session, and the manager adds the server's
+/// output lines to `server.log`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerLog(PathBuf);
+
+impl ServerLog {
+    pub fn debug_file(&self) -> PathBuf {
+        self.0.join(LOG_FILE)
+    }
+
+    /// Adds a line the server printed, stamped like Claude's own lines.
+    async fn append_output(&self, line: &str) -> io::Result<()> {
+        let now = OffsetDateTime::now_utc();
+        let stamp = now
+            .replace_millisecond(now.millisecond())
+            .map_err(io::Error::other)?
+            .format(&Rfc3339)
+            .map_err(io::Error::other)?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.debug_file())
+            .await?;
+        file.write_all(format!("{stamp} [OUTPUT] {line}\n").as_bytes())
+            .await
+    }
+
+    /// The server's last lines, oldest first.
+    pub fn tail(&self) -> io::Result<Vec<String>> {
+        let mut lines = VecDeque::new();
+        let mut budget = LOG_TAIL_BYTES;
+        for name in [LOG_FILE, ROTATED_LOG_FILE] {
+            if lines.len() >= LOG_TAIL_LINES || budget == 0 {
+                break;
+            }
+            let text = self.0.join(name).read_last_lines(budget)?;
+            budget = budget.saturating_sub(u64::try_from(text.len()).unwrap_or(u64::MAX));
+            for line in text.lines().rev() {
+                lines.push_front(line.to_owned());
+            }
+        }
+        let skipped = lines.len().saturating_sub(LOG_TAIL_LINES);
+        Ok(lines.into_iter().skip(skipped).collect())
+    }
+
+    /// Creates the directory and removes session logs older than a week, then the oldest ones
+    /// past the size limit.
+    fn prepare(&self) -> io::Result<()> {
+        fs::create_dir_all(&self.0)?;
+        let mut sessions: Vec<(PathBuf, SystemTime, u64)> = self
+            .0
+            .entries_or_empty()?
+            .into_iter()
+            .filter(|path| {
+                path.file_name().is_some_and(|name| {
+                    ![LOG_FILE, ROTATED_LOG_FILE, LATEST_LOG_LINK]
+                        .iter()
+                        .any(|kept| name == *kept)
+                })
+            })
+            .filter_map(|path| {
+                let metadata = fs::symlink_metadata(&path)
+                    .ok()
+                    .filter(fs::Metadata::is_file)?;
+                Some((path, metadata.modified().ok()?, metadata.len()))
+            })
+            .collect();
+        sessions.sort_by_key(|(_, modified, _)| Reverse(*modified));
+        let mut kept_bytes = 0_u64;
+        for (path, modified, bytes) in sessions {
+            let old = modified
+                .elapsed()
+                .is_ok_and(|age| age > SESSION_LOGS_KEPT_FOR);
+            if old || kept_bytes.saturating_add(bytes) > SESSION_LOGS_LARGEST {
+                path.remove_if_present()?;
+            } else {
+                kept_bytes = kept_bytes.saturating_add(bytes);
+            }
+        }
+        Ok(())
+    }
+
+    fn remove(&self) -> io::Result<()> {
+        self.0.remove_if_present()
+    }
+}
+
 /// Why a server run ended.
 enum RunEnd {
     /// What should run changed, so it was stopped on purpose.
@@ -459,7 +658,64 @@ enum RunEnd {
     /// The manager is stopping.
     ShutDown,
     /// It could not start, did not connect, or stopped by itself.
-    Failed(String),
+    Failed(Failure),
+}
+
+/// What went wrong with a server run.
+#[derive(Debug, PartialEq, Eq)]
+struct Failure {
+    message: String,
+    problem: Option<ServerProblem>,
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            problem: None,
+        }
+    }
+}
+
+/// What to do with a running server after something changed.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    Keep,
+    Stop,
+    /// Restart it on this Claude Code version once it has no sessions.
+    Update(String),
+}
+
+/// A running server waiting to restart on a newer Claude Code.
+struct UpdateWait {
+    version: String,
+    restart_by: OffsetDateTime,
+    deadline: Instant,
+}
+
+impl UpdateWait {
+    fn starting_now(version: String) -> Self {
+        Self {
+            version,
+            restart_by: OffsetDateTime::now_utc().saturating_add(
+                time::Duration::try_from(UPDATE_RESTART_DEADLINE).unwrap_or(time::Duration::MAX),
+            ),
+            deadline: Instant::now()
+                .checked_add(UPDATE_RESTART_DEADLINE)
+                .unwrap_or_else(Instant::now),
+        }
+    }
+
+    fn pending(&self) -> PendingUpdate {
+        PendingUpdate {
+            version: self.version.clone(),
+            restart_by: self.restart_by,
+        }
+    }
+
+    fn is_due(&self, usage: Option<ServerUsage>) -> bool {
+        usage.is_none_or(|usage| usage.sessions == 0) || Instant::now() >= self.deadline
+    }
 }
 
 /// Unexpected stops in a row, which set how long to wait before starting again.
@@ -547,6 +803,14 @@ impl AppState {
             let run = match self.wanted_server(&served, &directory).await {
                 Wanted::Off if served != Served::Projects => {
                     self.remote_control.forget(&directory);
+                    if !directory.is_dir()
+                        && let Err(error) = self.remote_control.log(&served).remove()
+                    {
+                        tracing::warn!(
+                            "could not remove the log of {}: {error}",
+                            directory.display()
+                        );
+                    }
                     return;
                 }
                 Wanted::Off => {
@@ -569,7 +833,7 @@ impl AppState {
             match run {
                 RunEnd::Reconsidered => {}
                 RunEnd::ShutDown => return,
-                RunEnd::Failed(message) => {
+                RunEnd::Failed(Failure { message, problem }) => {
                     failures = Failures(failures.0.saturating_add(1));
                     tracing::warn!(
                         "Claude Remote Control in {} stopped: {message}",
@@ -578,6 +842,7 @@ impl AppState {
                     self.remote_control.update(&directory, |status| {
                         status.enter(ServerState::Retrying);
                         status.last_error = Some(message);
+                        status.problem = problem;
                         status.restarts = status.restarts.saturating_add(1);
                     });
                     if signals.wait_for_change(failures.retry_delay()).await == Wake::ShutDown {
@@ -638,16 +903,20 @@ impl AppState {
                 .map(Path::to_path_buf),
             directory: directory.to_path_buf(),
             spawn: choice.map_or(SpawnMode::SameDir, |choice| choice.spawn),
+            log: self.remote_control.log(served),
             permission_mode: settings.permission_mode,
             capacity: settings.capacity,
         })
     }
 
-    async fn still_wanted(&self, served: &Served, launch: &Launch) -> bool {
+    async fn verdict(&self, served: &Served, launch: &Launch) -> Verdict {
         match self.wanted_server(served, &launch.directory).await {
-            Wanted::Server(wanted) => wanted == *launch,
-            Wanted::Unknown => true,
-            Wanted::Off | Wanted::Waiting => false,
+            Wanted::Server(wanted) if wanted == *launch => Verdict::Keep,
+            Wanted::Server(wanted) if wanted.is_update_of(launch) => {
+                Verdict::Update(wanted.claude_version.unwrap_or_default())
+            }
+            Wanted::Unknown => Verdict::Keep,
+            Wanted::Server(_) | Wanted::Off | Wanted::Waiting => Verdict::Stop,
         }
     }
 
@@ -657,11 +926,14 @@ impl AppState {
             return RunEnd::ShutDown;
         }
         if let Err(message) = launch.accept_prompts() {
-            return RunEnd::Failed(message);
+            return RunEnd::Failed(message.into());
+        }
+        if let Err(error) = launch.log.prepare() {
+            tracing::warn!("could not prepare {}: {error}", launch.log.0.display());
         }
         let mut server = match ServerRun::start(launch, &self.remote_control) {
             Ok(server) => server,
-            Err(error) => return RunEnd::Failed(format!("could not start: {error}")),
+            Err(error) => return RunEnd::Failed(format!("could not start: {error}").into()),
         };
         tracing::info!(
             "Claude Remote Control is starting in {}",
@@ -674,6 +946,7 @@ impl AppState {
         recheck.reset();
         let mut usage = interval(USAGE_INTERVAL);
         usage.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut update: Option<UpdateWait> = None;
         loop {
             let connected = self
                 .remote_control
@@ -685,30 +958,55 @@ impl AppState {
                 }
                 () = &mut connect_deadline, if !connected => {
                     server.stop().await;
-                    return RunEnd::Failed("did not connect within 2 minutes".to_owned());
+                    return RunEnd::Failed("did not connect within 2 minutes".to_owned().into());
                 }
                 _ = signals.restarts.changed() => {
                     return self.stop_server(server, launch).await;
                 }
-                _ = signals.changes.changed() => {
-                    if !self.still_wanted(served, launch).await {
-                        return self.stop_server(server, launch).await;
-                    }
-                }
-                _ = signals.sign_in.changed() => {
-                    if !self.still_wanted(served, launch).await {
-                        return self.stop_server(server, launch).await;
-                    }
-                }
+                _ = signals.changes.changed() => {}
+                _ = signals.sign_in.changed() => {}
                 _ = recheck.tick() => {
-                    if !self.still_wanted(served, launch).await {
-                        return self.stop_server(server, launch).await;
+                    if let Err(error) = launch.log.prepare() {
+                        tracing::warn!("could not prune {}: {error}", launch.log.0.display());
                     }
                 }
-                _ = usage.tick() => server.note_usage(&self.remote_control, launch).await,
+                _ = usage.tick() => {
+                    if update.is_none() {
+                        server.note_usage(&self.remote_control, launch).await;
+                        continue;
+                    }
+                }
                 () = signals.shutdown.until_set() => {
                     server.stop().await;
                     return RunEnd::ShutDown;
+                }
+            }
+            match self.verdict(served, launch).await {
+                Verdict::Keep => {
+                    if update.take().is_some() {
+                        self.remote_control
+                            .update(&launch.directory, |status| status.update = None);
+                    }
+                }
+                Verdict::Stop => return self.stop_server(server, launch).await,
+                Verdict::Update(version) => {
+                    let usage = server.note_usage(&self.remote_control, launch).await;
+                    let waiting =
+                        update.get_or_insert_with(|| UpdateWait::starting_now(version.clone()));
+                    waiting.version = version;
+                    if waiting.is_due(usage) {
+                        tracing::info!(
+                            "restarting Claude Remote Control in {} on Claude Code {}",
+                            launch.directory.display(),
+                            waiting.version
+                        );
+                        let end = self.stop_server(server, launch).await;
+                        self.remove_unused_claude_versions().await;
+                        return end;
+                    }
+                    let pending = waiting.pending();
+                    self.remote_control
+                        .update(&launch.directory, |status| status.update = Some(pending));
                 }
             }
         }
@@ -720,6 +1018,19 @@ impl AppState {
         });
         server.stop().await;
         RunEnd::Reconsidered
+    }
+
+    /// Skipped while an install runs, which removes them itself.
+    async fn remove_unused_claude_versions(&self) {
+        let Ok(_one_install_at_a_time) = self.install_lock.try_lock() else {
+            return;
+        };
+        let paths = Arc::clone(&self.install_paths);
+        let removed =
+            tokio::task::spawn_blocking(move || paths.remove_unused_versions(Agent::Claude)).await;
+        if let Ok(Err(error)) = removed {
+            tracing::warn!("could not remove old Claude Code versions: {error}");
+        }
     }
 }
 
@@ -744,14 +1055,14 @@ impl ServerRun {
             readers.push(tokio::spawn(output.clone().collect(
                 stdout,
                 Arc::clone(remote_control),
-                launch.directory.clone(),
+                launch.clone(),
             )));
         }
         if let Some(stderr) = child.stderr.take() {
             readers.push(tokio::spawn(output.clone().collect(
                 stderr,
                 Arc::clone(remote_control),
-                launch.directory.clone(),
+                launch.clone(),
             )));
         }
         remote_control.update(&launch.directory, |status| {
@@ -774,7 +1085,7 @@ impl ServerRun {
     }
 
     /// After the server exited by itself: stops the sessions it left and describes the exit.
-    async fn finish(mut self, exit: io::Result<ExitStatus>) -> String {
+    async fn finish(mut self, exit: io::Result<ExitStatus>) -> Failure {
         if let Some(group) = &self.group {
             group.terminate(&mut self.child).await;
         }
@@ -782,15 +1093,18 @@ impl ServerRun {
         self.output.describe_exit(exit)
     }
 
-    async fn note_usage(&self, remote_control: &RemoteControl, launch: &Launch) {
-        let Some(ProcessGroup(group)) = self.group else {
-            return;
-        };
-        let capacity = launch.capacity;
+    async fn note_usage(
+        &self,
+        remote_control: &RemoteControl,
+        launch: &Launch,
+    ) -> Option<ServerUsage> {
+        let ProcessGroup(group) = self.group.as_ref()?;
+        let (group, capacity) = (*group, launch.capacity);
         let usage = tokio::task::spawn_blocking(move || ProcessGroup(group).usage(capacity))
             .await
             .ok();
         remote_control.update(&launch.directory, |status| status.usage = usage);
+        usage
     }
 
     async fn stop_reading(&mut self) {
@@ -830,7 +1144,7 @@ impl ProcessGroup {
         killpg(self.0, None) == Err(Errno::ESRCH)
     }
 
-    /// The leader's children are its sessions, and every process in the group counts for memory.
+    /// The leader's live children are its sessions, and the whole group counts for memory.
     fn usage(&self, capacity: u32) -> ServerUsage {
         let mut usage = ServerUsage {
             sessions: 0,
@@ -838,13 +1152,18 @@ impl ProcessGroup {
             memory_bytes: 0,
         };
         for process in Process::all() {
-            let Some(ProcessStat { parent, group }) = process.stat() else {
+            let Some(ProcessStat {
+                parent,
+                group,
+                zombie,
+            }) = process.stat()
+            else {
                 continue;
             };
             if group != self.0 {
                 continue;
             }
-            if parent == self.0 {
+            if parent == self.0 && !zombie {
                 usage.sessions = usage.sessions.saturating_add(1);
             }
             if let Some(memory) = process.proportional_memory() {
@@ -855,57 +1174,8 @@ impl ProcessGroup {
     }
 }
 
-/// A process as /proc describes it.
-struct Process(PathBuf);
-
-struct ProcessStat {
-    parent: Pid,
-    group: Pid,
-}
-
-impl Process {
-    fn all() -> impl Iterator<Item = Self> {
-        fs::read_dir("/proc")
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|name| name.parse::<u32>().is_ok())
-            })
-            .map(|entry| Self(entry.path()))
-    }
-
-    fn stat(&self) -> Option<ProcessStat> {
-        let stat = fs::read_to_string(self.0.join("stat")).ok()?;
-        let (_, after_name) = stat.rsplit_once(')')?;
-        let mut fields = after_name.split_whitespace().skip(1);
-        let parent = fields.next()?.parse().ok()?;
-        let group = fields.next()?.parse().ok()?;
-        Some(ProcessStat {
-            parent: Pid::from_raw(parent),
-            group: Pid::from_raw(group),
-        })
-    }
-
-    /// Resident memory with each shared page split between the processes sharing it.
-    fn proportional_memory(&self) -> Option<u64> {
-        let rollup = fs::read_to_string(self.0.join("smaps_rollup")).ok()?;
-        let kilobytes: u64 = rollup
-            .lines()
-            .find_map(|line| line.strip_prefix("Pss:"))?
-            .trim()
-            .strip_suffix("kB")?
-            .trim()
-            .parse()
-            .ok()?;
-        kilobytes.checked_mul(1024)
-    }
-}
-
-/// The last lines a server printed, shared by its stdout and stderr readers.
+/// The last lines a server printed, shared by its stdout and stderr readers. The account dump
+/// Claude prints after an error in debug mode goes only to the log.
 #[derive(Debug, Clone, Default)]
 struct ServerOutput(Arc<SyncMutex<VecDeque<String>>>);
 
@@ -914,10 +1184,11 @@ impl ServerOutput {
         self,
         stream: impl AsyncRead + Unpin,
         remote_control: Arc<RemoteControl>,
-        directory: PathBuf,
+        launch: Launch,
     ) {
         let mut reader = BufReader::new(stream);
         let mut bytes = Vec::new();
+        let mut in_debug_dump = false;
         loop {
             bytes.clear();
             match reader.read_until(b'\n', &mut bytes).await {
@@ -927,21 +1198,31 @@ impl ServerOutput {
             let line = String::from_utf8_lossy(&bytes)
                 .trim_end()
                 .without_terminal_codes();
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Err(error) = launch.log.append_output(&line).await {
+                tracing::debug!("could not log to {}: {error}", launch.log.0.display());
+            }
+            in_debug_dump = line.starts_with("[debug] ")
+                || (in_debug_dump && line.starts_with(char::is_whitespace));
+            if in_debug_dump {
+                continue;
+            }
             if let Some(url) = line.connect_url() {
                 let mut newly_connected = false;
-                remote_control.update(&directory, |status| {
+                remote_control.update(&launch.directory, |status| {
                     if !matches!(status.state, ServerState::Starting | ServerState::Running) {
                         return;
                     }
                     newly_connected = status.state != ServerState::Running
                         || status.url.as_deref() != Some(url.as_str());
-                    status.state = ServerState::Running;
-                    status.url = Some(url.clone());
+                    status.connect(url.clone());
                 });
                 if newly_connected {
                     tracing::info!(
                         "Claude Remote Control in {} is connected: {url}",
-                        directory.display()
+                        launch.directory.display()
                     );
                 }
             }
@@ -953,23 +1234,22 @@ impl ServerOutput {
         }
     }
 
-    fn describe_exit(&self, exit: io::Result<ExitStatus>) -> String {
+    fn describe_exit(&self, exit: io::Result<ExitStatus>) -> Failure {
         let kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let last_lines: Vec<&str> = kept
-            .iter()
-            .map(String::as_str)
-            .filter(|line| !line.trim().is_empty())
-            .collect();
-        let skipped = last_lines.len().saturating_sub(OUTPUT_LINES_REPORTED);
-        let tail = last_lines.get(skipped..).unwrap_or_default().join("\n");
+        let lines: Vec<&str> = kept.iter().map(String::as_str).collect();
+        let skipped = lines.len().saturating_sub(OUTPUT_LINES_REPORTED);
+        let tail = lines.get(skipped..).unwrap_or_default().join("\n");
         let exit = match exit {
             Ok(status) => status.to_string(),
             Err(error) => error.to_string(),
         };
-        if tail.is_empty() {
-            exit
-        } else {
-            format!("{exit}: {tail}")
+        Failure {
+            message: if tail.is_empty() {
+                exit
+            } else {
+                format!("{exit}: {tail}")
+            },
+            problem: ServerProblem::in_output(&lines),
         }
     }
 }
@@ -990,13 +1270,15 @@ impl RemoteControlLineExt for str {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use std::ops::Range;
+    use std::os::unix::fs::symlink;
+
     use futures_util::StreamExt;
 
     use super::*;
     use crate::manager::api::test_support::TestManager;
     use crate::manager::events::ManagerEvent;
     use crate::manager::folders::ProjectsDirectory;
-    use crate::path_ext::PathExt;
 
     const SIGNED_IN: &str = r#"{"loggedIn":true}"#;
 
@@ -1105,6 +1387,204 @@ mod tests {
         supervisor.await.expect("supervisor stops");
     }
 
+    #[tokio::test]
+    async fn a_rejected_sign_in_is_named_and_the_output_is_logged() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            "echo 'Error: You must be logged in to use Remote Control.' >&2; echo '[debug] Remote Control auth state:' >&2; echo '  hasOAuthAccessToken=false' >&2; exit 1",
+        );
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+
+        let retrying = wait_for(&state, ServerState::Retrying).await;
+        assert_eq!(retrying.problem, Some(ServerProblem::SignIn));
+        assert!(
+            retrying.last_error.as_deref().is_some_and(
+                |error| error.ends_with("Error: You must be logged in to use Remote Control.")
+            ),
+            "{retrying:?}"
+        );
+        let log = state
+            .remote_control
+            .log(&Served::Projects)
+            .tail()
+            .expect("log is readable");
+        assert!(
+            log.iter().any(|line| line
+                .ends_with("[OUTPUT] Error: You must be logged in to use Remote Control.")),
+            "{log:?}"
+        );
+        assert!(
+            log.iter()
+                .any(|line| line.ends_with("[OUTPUT]   hasOAuthAccessToken=false")),
+            "{log:?}"
+        );
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_gave_up_offline_starts_again_and_connects() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let marker = directory.path().join("was-offline");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            &format!(
+                "if [ -f {marker} ]; then echo 'https://claude.ai/code?environment=env_test'; exec sleep 60; fi; touch {marker}; echo 'Server unreachable for 10 minutes, giving up.' >&2; exit 1",
+                marker = marker.display()
+            ),
+        );
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+
+        let retrying = wait_for(&state, ServerState::Retrying).await;
+        assert_eq!(retrying.problem, Some(ServerProblem::Offline));
+        let deadline = Instant::now()
+            .checked_add(FIRST_RETRY_DELAY.saturating_add(Duration::from_secs(10)))
+            .expect("the deadline fits");
+        let running = loop {
+            let status = state
+                .remote_control
+                .status_of(&state.projects.0)
+                .unwrap_or_default();
+            if status.state == ServerState::Running {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "still {status:?}");
+            sleep(Duration::from_millis(100)).await;
+        };
+        assert_eq!(
+            (running.problem, running.last_error, running.restarts),
+            (None, None, 1)
+        );
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    /// Installs a `claude` script as `version`, the way the manager links a real install.
+    fn install_fake_claude(state: &AppState, directory: &Path, version: &str, server: &str) {
+        let versions = state.install_paths.versions_directory(Agent::Claude);
+        fs::create_dir_all(&versions).expect("versions directory is created");
+        let script = versions.join(version);
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) echo {version} >> {starts}; {server} ;;\nesac\n",
+                starts = directory.join("starts").display()
+            ),
+        )
+        .expect("script is written");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+            .expect("script is executable");
+        state
+            .install_paths
+            .command(Agent::Claude)
+            .replace_symlink(&script)
+            .expect("command link is created");
+    }
+
+    fn starts(directory: &Path) -> Vec<String> {
+        fs::read_to_string(directory.join("starts"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_idle_server_restarts_on_a_new_claude_version_at_once() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let server = "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60";
+        let state = fake_claude(&manager, directory.path(), server);
+        install_fake_claude(&state, directory.path(), "2.1.1", server);
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Running).await;
+
+        install_fake_claude(&state, directory.path(), "2.1.2", server);
+        state.remote_control.reconsider();
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .expect("the deadline fits");
+        while starts(directory.path()) != ["2.1.1", "2.1.2"] {
+            assert!(Instant::now() < deadline, "{:?}", starts(directory.path()));
+            sleep(Duration::from_millis(50)).await;
+        }
+        let running = wait_for(&state, ServerState::Running).await;
+        assert_eq!(running.update, None);
+        let versions = state.install_paths.versions_directory(Agent::Claude);
+        assert!(!versions.join("2.1.1").exists());
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_busy_server_restarts_on_a_new_claude_version_once_its_sessions_end() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let session = directory.path().join("session.pid");
+        let server = format!(
+            "sleep 60 & echo $! > {session}; echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
+            session = session.display()
+        );
+        let state = fake_claude(&manager, directory.path(), &server);
+        install_fake_claude(&state, directory.path(), "2.1.1", &server);
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Running).await;
+
+        install_fake_claude(&state, directory.path(), "2.1.2", &server);
+        state.remote_control.reconsider();
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .expect("the deadline fits");
+        let waiting = loop {
+            let status = state
+                .remote_control
+                .status_of(&state.projects.0)
+                .unwrap_or_default();
+            if status.update.is_some() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "still {status:?}");
+            sleep(Duration::from_millis(50)).await;
+        };
+        assert_eq!(waiting.state, ServerState::Running);
+        assert_eq!(
+            waiting.update.map(|update| update.version).as_deref(),
+            Some("2.1.2")
+        );
+        assert_eq!(waiting.usage.map(|usage| usage.sessions), Some(1));
+        assert_eq!(starts(directory.path()), ["2.1.1"]);
+        assert!(
+            state
+                .install_paths
+                .versions_directory(Agent::Claude)
+                .join("2.1.1")
+                .exists()
+        );
+
+        let session: i32 = fs::read_to_string(&session)
+            .expect("the session wrote its pid")
+            .trim()
+            .parse()
+            .expect("pid is a number");
+        nix::sys::signal::kill(Pid::from_raw(session), Signal::SIGKILL).expect("session ends");
+        state.remote_control.reconsider();
+        while starts(directory.path()) != ["2.1.1", "2.1.2"] {
+            assert!(Instant::now() < deadline, "{:?}", starts(directory.path()));
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
     fn launch(directory: &Path) -> Launch {
         Launch {
             claude: PathBuf::from("/home/dev/.local/bin/claude"),
@@ -1112,6 +1592,7 @@ mod tests {
             config_directory: Some(directory.join("claude")),
             directory: directory.join("projects"),
             spawn: SpawnMode::SameDir,
+            log: ServerLog(directory.join("logs/projects")),
             permission_mode: "auto".to_owned(),
             capacity: 4,
         }
@@ -1139,6 +1620,7 @@ mod tests {
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
+        let debug_file = directory.path().join("logs/projects/server.log");
         assert_eq!(
             arguments,
             [
@@ -1148,7 +1630,9 @@ mod tests {
                 "--capacity",
                 "4",
                 "--permission-mode",
-                "auto"
+                "auto",
+                "--debug-file",
+                &debug_file.to_string_lossy(),
             ]
         );
         assert_eq!(command.get_current_dir(), Some(launch.directory.as_path()));
@@ -1260,9 +1744,187 @@ mod tests {
             .0
             .lock()
             .expect("output lock")
-            .extend(["one", "", "Workspace not trusted"].map(str::to_owned));
-        let description = output.describe_exit(Err(io::Error::other("gone")));
-        assert_eq!(description, "gone: one\nWorkspace not trusted");
+            .extend(["one", "Workspace not trusted"].map(str::to_owned));
+        let failure = output.describe_exit(Err(io::Error::other("gone")));
+        assert_eq!(
+            failure,
+            Failure {
+                message: "gone: one\nWorkspace not trusted".to_owned(),
+                problem: None
+            }
+        );
+    }
+
+    #[test]
+    fn claude_messages_name_the_problem() {
+        for (line, problem) in [
+            (
+                "Error: You must be logged in to use Remote Control.",
+                Some(ServerProblem::SignIn),
+            ),
+            (
+                "Error: Unable to determine your organization for Remote Control eligibility. Run `claude auth login` to refresh your account information.",
+                Some(ServerProblem::SignIn),
+            ),
+            (
+                "Error: RegisterEnvironment: Authentication failed (401): invalid token. Remote Control is only available with claude.ai subscriptions. Please use `/login` to sign in with your claude.ai account.",
+                Some(ServerProblem::SignIn),
+            ),
+            (
+                "Error: Remote Control requires a full-scope login token. Long-lived tokens (from `claude setup-token` or CLAUDE_CODE_OAUTH_TOKEN) are limited to inference-only for security reasons. Run `claude auth login` to use Remote Control.",
+                Some(ServerProblem::SignIn),
+            ),
+            (
+                "Error: Your organization requires Trusted Devices for Remote Control, but this device is not enrolled. Please run `/login` in Claude Code to enroll this device.",
+                Some(ServerProblem::SignIn),
+            ),
+            (
+                "Error: Remote Control isn't enabled for this account. If you recently changed plans, run `claude auth logout` then `claude auth login` to refresh your entitlements, or `claude doctor` for details.",
+                Some(ServerProblem::NotAllowed),
+            ),
+            (
+                "Error: Remote Control is disabled by your organization's policy.",
+                Some(ServerProblem::NotAllowed),
+            ),
+            (
+                "Remote Control environments are not available for your account.",
+                Some(ServerProblem::NotAllowed),
+            ),
+            (
+                "Error: RegisterEnvironment: Access denied (403). Check your organization permissions.",
+                Some(ServerProblem::NotAllowed),
+            ),
+            (
+                "Server unreachable for 10 minutes, giving up.",
+                Some(ServerProblem::Offline),
+            ),
+            (
+                "Error: Couldn't verify Remote Control eligibility — the feature-flag service was unreachable (offline or blocked). Retry, or run with `--debug` / `claude doctor` for details.",
+                Some(ServerProblem::Offline),
+            ),
+            (
+                "Error: getaddrinfo EAI_AGAIN api.anthropic.com",
+                Some(ServerProblem::Offline),
+            ),
+            (
+                "Persistent errors for 10 minutes, giving up.",
+                Some(ServerProblem::Unavailable),
+            ),
+            (
+                "Error: RegisterEnvironment: Failed with status 503",
+                Some(ServerProblem::Unavailable),
+            ),
+            ("Error: Workspace not trusted: /projects.", None),
+        ] {
+            assert_eq!(
+                ServerProblem::in_output(&["Starting", line]),
+                problem,
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_claude_version_is_an_update_of_the_same_server() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let running = launch(directory.path());
+        let updated = Launch {
+            claude_version: Some("2.1.290".to_owned()),
+            ..running.clone()
+        };
+        assert!(updated.is_update_of(&running));
+        assert!(!running.is_update_of(&running));
+        let resized = Launch {
+            capacity: 8,
+            ..updated.clone()
+        };
+        assert!(!resized.is_update_of(&running));
+    }
+
+    #[test]
+    fn an_update_waits_for_the_last_session_or_the_deadline() {
+        let usage = |sessions| {
+            Some(ServerUsage {
+                sessions,
+                capacity: 4,
+                memory_bytes: 1,
+            })
+        };
+        let waiting = UpdateWait::starting_now("2.1.290".to_owned());
+        assert!(!waiting.is_due(usage(1)));
+        assert!(waiting.is_due(usage(0)));
+        assert!(waiting.is_due(None));
+        let overdue = UpdateWait {
+            deadline: Instant::now(),
+            ..waiting
+        };
+        assert!(overdue.is_due(usage(3)));
+        assert_eq!(overdue.pending().version, "2.1.290");
+        assert!(overdue.pending().restart_by > OffsetDateTime::now_utc());
+    }
+
+    #[test]
+    fn the_log_tail_continues_into_the_rotated_log() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let log = ServerLog(directory.path().to_path_buf());
+        assert!(log.tail().expect("an empty log is readable").is_empty());
+        let numbered = |range: Range<usize>| -> String {
+            range.map(|number| format!("line {number}\n")).collect()
+        };
+        fs::write(directory.path().join(ROTATED_LOG_FILE), numbered(0..150))
+            .expect("rotated log is written");
+        fs::write(directory.path().join(LOG_FILE), numbered(150..250)).expect("log is written");
+        let tail = log.tail().expect("log is readable");
+        assert_eq!(tail.len(), LOG_TAIL_LINES);
+        assert_eq!(tail.first().map(String::as_str), Some("line 50"));
+        assert_eq!(tail.last().map(String::as_str), Some("line 249"));
+    }
+
+    #[test]
+    fn old_and_excess_session_logs_are_removed() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let log = ServerLog(directory.path().join("projects"));
+        log.prepare().expect("the directory is created");
+        let write = |name: &str, bytes: u64, age: Duration| {
+            let path = log.0.join(name);
+            let file = fs::File::create(&path).expect("file is created");
+            file.set_len(bytes).expect("file is sized");
+            file.set_modified(SystemTime::now().checked_sub(age).expect("the time fits"))
+                .expect("time is set");
+        };
+        let hour = Duration::from_secs(60 * 60);
+        let old = SESSION_LOGS_KEPT_FOR.saturating_add(hour);
+        write(LOG_FILE, 1, old);
+        write(ROTATED_LOG_FILE, 1, old);
+        write("server-old.log", 1, old);
+        write("server-recent.log", 1, hour);
+        write("bridge-transcript-recent.jsonl", 1, hour);
+        write(
+            "bridge-transcript-large.jsonl",
+            SESSION_LOGS_LARGEST,
+            hour.saturating_mul(2),
+        );
+        symlink(log.debug_file(), log.0.join(LATEST_LOG_LINK)).expect("link is created");
+
+        log.prepare().expect("session logs are pruned");
+        let mut remaining: Vec<String> = log
+            .0
+            .entries_or_empty()
+            .expect("directory is readable")
+            .into_iter()
+            .filter_map(|path| Some(path.file_name()?.to_str()?.to_owned()))
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            [
+                "bridge-transcript-recent.jsonl",
+                LATEST_LOG_LINK,
+                "server-recent.log",
+                LOG_FILE,
+                ROTATED_LOG_FILE,
+            ]
+        );
     }
 
     #[tokio::test]

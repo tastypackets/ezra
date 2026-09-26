@@ -692,6 +692,59 @@
         }
       }
     },
+    "/api/v1/folders/{name}/remote-control/log": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Get the end of a folder server's log",
+        "description": "Returns up to the last 200 lines of Claude Code's debug log and the server's output.",
+        "operationId": "getFolderRemoteControlLog",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The folder's name in /projects",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The last lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerLogTail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The folder has no server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/folders/{name}/spawn-mode": {
       "put": {
         "tags": [
@@ -1247,6 +1300,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RemoteControlOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/log": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get the end of the /projects server's log",
+        "description": "Returns up to the last 200 lines of Claude Code's debug log and the server's output.",
+        "operationId": "getRemoteControlLog",
+        "responses": {
+          "200": {
+            "description": "The last lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerLogTail"
                 }
               }
             }
@@ -1904,6 +1989,25 @@
           }
         }
       },
+      "PendingUpdate": {
+        "type": "object",
+        "description": "A newer Claude Code a running server waits to restart on.",
+        "required": [
+          "version",
+          "restart_by"
+        ],
+        "properties": {
+          "restart_by": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it restarts even with sessions running."
+          },
+          "version": {
+            "type": "string",
+            "description": "The installed version the server restarts on."
+          }
+        }
+      },
       "ReleaseChannel": {
         "type": "string",
         "description": "Which Claude Code releases to install: `latest` gets every release as soon as it ships,\n`stable` is about a week behind and skips releases with major regressions.",
@@ -1991,7 +2095,18 @@
               "string",
               "null"
             ],
-            "description": "The end of the server's output when it last stopped unexpectedly."
+            "description": "The end of the server's output when it last stopped unexpectedly, until it connects again."
+          },
+          "problem": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ServerProblem",
+                "description": "What that output says went wrong, absent when it matches no known problem."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "restarts": {
             "type": "integer",
@@ -2001,6 +2116,17 @@
           },
           "state": {
             "$ref": "#/components/schemas/ServerState"
+          },
+          "update": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PendingUpdate",
+                "description": "A newer Claude Code the running server restarts on, absent when it runs the installed one."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "url": {
             "type": [
@@ -2033,6 +2159,37 @@
             "type": "boolean"
           }
         }
+      },
+      "ServerLogTail": {
+        "type": "object",
+        "description": "The end of a Remote Control server's log.",
+        "required": [
+          "path",
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The last lines, oldest first."
+          },
+          "path": {
+            "type": "string",
+            "description": "The whole log's path in the container."
+          }
+        }
+      },
+      "ServerProblem": {
+        "type": "string",
+        "description": "A known reason a server stopped.",
+        "enum": [
+          "sign_in",
+          "not_allowed",
+          "offline",
+          "unavailable"
+        ]
       },
       "ServerState": {
         "type": "string",

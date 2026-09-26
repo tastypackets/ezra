@@ -45,6 +45,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/events", get(events::stream))
         .route("/api/v1/remote-control", get(remote_control::overview))
+        .route(
+            "/api/v1/remote-control/log",
+            get(remote_control::projects_log),
+        )
         .route("/api/v1/folders", get(folders::list))
         .route("/api/v1/folders/{name}", delete(folders::delete))
         .route(
@@ -67,6 +71,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/v1/clones", get(clones::list).post(clones::start))
         .route("/api/v1/clones/{name}", delete(clones::stop))
+        .route(
+            "/api/v1/folders/{name}/remote-control/log",
+            get(remote_control::folder_log),
+        )
         .route("/api/v1/git", get(git::status))
         .route("/api/v1/git/github/login", post(git::start_github_login))
         .route("/api/v1/git/github/logout", post(git::log_out_of_github))
@@ -180,6 +188,8 @@ pub struct ErrorBody {
         clones::start,
         clones::stop,
         remote_control::overview,
+        remote_control::projects_log,
+        remote_control::folder_log,
         events::stream,
         manager::status,
         manager::change_password,
