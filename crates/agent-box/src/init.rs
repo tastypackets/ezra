@@ -1,3 +1,4 @@
+mod apt_packages;
 mod environment;
 mod exec;
 mod groups;
@@ -13,6 +14,7 @@ use std::process::ExitCode;
 use nix::errno::Errno;
 use nix::unistd::{AccessFlags, Uid, User, access};
 
+use apt_packages::APT_PACKAGES_VARIABLE;
 use environment::{AccountDetails, EnvironmentOverride};
 use sudo::{SUDO_POLICY_VARIABLE, SudoPolicy};
 
@@ -64,10 +66,12 @@ pub fn run(program: &OsStr, arguments: &[OsString]) -> ExitCode {
 fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
     let sudo_policy =
         SudoPolicy::from_environment_value(env::var_os(SUDO_POLICY_VARIABLE).as_deref())?;
+    let requested_packages = requested_apt_packages();
     let environment_overrides = if Uid::effective().is_root() {
+        apt_packages::install_missing(&requested_packages);
         become_agent_user(sudo_policy)?
     } else {
-        adopt_invoking_user(sudo_policy)?
+        adopt_invoking_user(sudo_policy, &requested_packages)?
     };
     sudo::restrict_process_tree(sudo_policy)?;
     warn_about_unwritable_directories();
@@ -91,7 +95,15 @@ fn become_agent_user(sudo_policy: SudoPolicy) -> Result<Vec<EnvironmentOverride>
     Ok(environment_overrides)
 }
 
-fn adopt_invoking_user(sudo_policy: SudoPolicy) -> Result<Vec<EnvironmentOverride>, InitError> {
+fn requested_apt_packages() -> Vec<String> {
+    let environment_value = env::var_os(APT_PACKAGES_VARIABLE).unwrap_or_default();
+    apt_packages::requested_packages(&environment_value.to_string_lossy())
+}
+
+fn adopt_invoking_user(
+    sudo_policy: SudoPolicy,
+    requested_packages: &[String],
+) -> Result<Vec<EnvironmentOverride>, InitError> {
     let uid = Uid::effective();
     let invoking_user = User::from_uid(uid).map_err(|source| InitError::Lookup {
         subject: format!("uid {uid}"),
@@ -114,6 +126,12 @@ fn adopt_invoking_user(sudo_policy: SudoPolicy) -> Result<Vec<EnvironmentOverrid
     if sudo_policy == SudoPolicy::Full {
         tracing::info!(
             "{SUDO_POLICY_VARIABLE}=full has no effect when the container starts as uid {uid}"
+        );
+    }
+    if !requested_packages.is_empty() {
+        tracing::warn!(
+            "{APT_PACKAGES_VARIABLE} is ignored when the container starts as uid {uid}; not installed: {}",
+            requested_packages.join(" ")
         );
     }
     privileges::clear_inheritable_capabilities()?;

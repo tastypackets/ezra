@@ -79,6 +79,8 @@ check_version_command "envsubst" envsubst --version
 check_version_command "GNU time" /usr/bin/time --version
 check_succeeds "awk is GNU awk" bash -c 'awk --version | grep --quiet "GNU Awk"'
 check_succeeds "man pages are installed" bash -c 'man rsync | grep --quiet "^NAME"'
+check_succeeds "man -k finds pages installed in the image" bash -c 'man -k "^rsync$" | grep --quiet rsync'
+check_succeeds "man-db skips index updates on later installs" test ! -e /var/lib/man-db/auto-update
 check_succeeds "git help shows the manual" bash -c 'git commit --help | grep --quiet "git-commit - Record changes"'
 
 echo "Developer tools:"
