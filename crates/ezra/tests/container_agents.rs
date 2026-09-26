@@ -49,7 +49,7 @@ fn run_as_agent(container: &DockerResource, command: &[&str]) -> std::process::O
 }
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn installed_agents_run_and_offer_sign_in() {
     let container = start_logged_in_manager("agents-install", &[]);
     let saw_download_progress = thread::scope(|scope| {
@@ -136,7 +136,7 @@ fn installed_agents_run_and_offer_sign_in() {
 }
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn configured_agent_is_reinstalled_after_a_recreate() {
     let volume = DockerResource::volume("agents-config");
     let config_mount = format!("{}:/config", volume.name);

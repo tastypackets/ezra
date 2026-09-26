@@ -7,7 +7,7 @@ ARG RUST_VERSION=1.98.1
 ARG NODE_VERSION=26
 ARG PNPM_VERSION=12.6.0
 
-FROM node:${NODE_VERSION}-slim AS agent-box-ui
+FROM node:${NODE_VERSION}-slim AS ezra-ui
 
 ARG PNPM_VERSION
 WORKDIR /ui
@@ -19,7 +19,7 @@ COPY ui/src ./src
 COPY ui/e2e ./e2e
 RUN pnpm build
 
-FROM rust:${RUST_VERSION}-slim-trixie AS agent-box-build
+FROM rust:${RUST_VERSION}-slim-trixie AS ezra-build
 
 ARG TARGETARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -35,17 +35,17 @@ EOF
 RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     --mount=type=bind,source=Cargo.lock,target=Cargo.lock \
     --mount=type=bind,source=crates,target=crates \
-    --mount=type=bind,from=agent-box-ui,source=/ui/dist,target=ui/dist \
+    --mount=type=bind,from=ezra-ui,source=/ui/dist,target=ui/dist \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     <<'EOF'
 set -euo pipefail
 if [[ ${TARGETARCH} != amd64 ]]; then
-    echo "agent-box is only built for amd64 so far, not ${TARGETARCH}" >&2
+    echo "ezra is only built for amd64 so far, not ${TARGETARCH}" >&2
     exit 1
 fi
-cargo build --locked --release --target x86_64-unknown-linux-musl --package agent-box
-install -D target/x86_64-unknown-linux-musl/release/agent-box /out/agent-box
+cargo build --locked --release --target x86_64-unknown-linux-musl --package ezra
+install -D target/x86_64-unknown-linux-musl/release/ezra /out/ezra
 EOF
 
 FROM ubuntu:26.04
@@ -186,13 +186,13 @@ RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
     <<'EOF'
 set -euo pipefail
 mise install --system
-install --directory /usr/local/share/agent-box/shims
+install --directory /usr/local/share/ezra/shims
 for tool_executable in node npm npx pnpm pn pnx corepack yarn yarnpkg gh yq uv uvx jq git-lfs protoc; do
     tool_path="$(mise which "${tool_executable}")"
     printf '#!/bin/sh\nexec %s "$@"\n' "'${tool_path}'" >"/usr/local/bin/${tool_executable}"
     chmod 0755 "/usr/local/bin/${tool_executable}"
     if [[ ${tool_executable} != git-lfs ]]; then
-        ln --symbolic /usr/local/bin/mise "/usr/local/share/agent-box/shims/${tool_executable}"
+        ln --symbolic /usr/local/bin/mise "/usr/local/share/ezra/shims/${tool_executable}"
     fi
 done
 git lfs install --system --skip-repo
@@ -218,7 +218,7 @@ fi
 groupadd --gid 1000 dev
 useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev
 install --directory --owner=dev --group=dev /config /projects
-install --directory /etc/agent-box/setup.d
+install --directory /etc/ezra/setup.d
 EOF
 
 ENV MISE_DATA_DIR=/config/mise \
@@ -228,10 +228,10 @@ ENV MISE_DATA_DIR=/config/mise \
     CLAUDE_CONFIG_DIR=/config/claude \
     CODEX_HOME=/config/codex \
     DISABLE_UPDATES=1 \
-    PATH=/home/dev/.local/bin:/config/mise/shims:/usr/local/share/agent-box/shims:${PATH}
+    PATH=/home/dev/.local/bin:/config/mise/shims:/usr/local/share/ezra/shims:${PATH}
 
-COPY --from=agent-box-build /out/agent-box /usr/local/bin/agent-box
+COPY --from=ezra-build /out/ezra /usr/local/bin/ezra
 
 EXPOSE 8443
-ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/agent-box", "init", "--"]
-CMD ["agent-box", "manager"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/ezra", "init", "--"]
+CMD ["ezra", "manager"]

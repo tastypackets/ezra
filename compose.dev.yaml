@@ -1,12 +1,12 @@
 # Local development: `docker compose -f compose.dev.yaml up -d --build`, then open https://localhost:8443.
 # The volumes keep the manager password and agent sign-ins across rebuilds; never add `-v` to `down`.
-name: agent-box-dev
+name: ezra-dev
 
 services:
-  agent-box:
+  ezra:
     build: .
-    image: agent-box:dev
-    hostname: agent-box-dev
+    image: ezra:dev
+    hostname: ezra-dev
     ports:
       - "8443:8443"
     volumes:

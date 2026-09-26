@@ -327,7 +327,7 @@ impl Release {
     }
 }
 
-/// Whether downloads check the server's certificate, from `AGENT_BOX_TLS_VERIFY`.
+/// Whether downloads check the server's certificate, from `EZRA_TLS_VERIFY`.
 ///
 /// Off only for networks that intercept TLS without a CA the image trusts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

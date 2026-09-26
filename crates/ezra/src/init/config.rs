@@ -4,13 +4,13 @@ use super::apt_packages::RequestedPackages;
 use super::sudo::SudoPolicy;
 use crate::environment_config::FromEnvironment;
 
-/// Settings for `agent-box init`, read only from the environment.
+/// Settings for `ezra init`, read only from the environment.
 ///
 /// Init runs as root, and the settings file on /config is writable by the agent, so it never reads that file.
 #[derive(Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct InitConfig {
-    #[serde(rename = "agent_sudo")]
+    #[serde(rename = "sudo")]
     pub sudo_policy: SudoPolicy,
     pub apt_packages: RequestedPackages,
 }
@@ -29,25 +29,25 @@ mod tests {
     #[test]
     fn unset_or_empty_variables_mean_defaults() {
         assert_eq!(config(&[]).expect("defaults load"), InitConfig::default());
-        let empty = config(&[("AGENT_SUDO", ""), ("APT_PACKAGES", "")]).expect("empty loads");
+        let empty = config(&[("EZRA_SUDO", ""), ("EZRA_APT_PACKAGES", "")]).expect("empty loads");
         assert_eq!(empty, InitConfig::default());
     }
 
     #[test]
     fn sudo_policy_is_full_or_off() {
-        let full = config(&[("AGENT_SUDO", "full")]).expect("full loads");
+        let full = config(&[("EZRA_SUDO", "full")]).expect("full loads");
         assert_eq!(full.sudo_policy, SudoPolicy::Full);
-        let off = config(&[("AGENT_SUDO", "off")]).expect("off loads");
+        let off = config(&[("EZRA_SUDO", "off")]).expect("off loads");
         assert_eq!(off.sudo_policy, SudoPolicy::Off);
         for value in ["FULL", "on", "true", "1"] {
-            let error = config(&[("AGENT_SUDO", value)]).expect_err("value is rejected");
-            assert!(error.to_string().contains("agent_sudo"), "{error}");
+            let error = config(&[("EZRA_SUDO", value)]).expect_err("value is rejected");
+            assert!(error.to_string().contains("`sudo`"), "{error}");
         }
     }
 
     #[test]
     fn apt_packages_are_split_into_arguments() {
-        let requested = config(&[("APT_PACKAGES", "hello, jq=1.7")]).expect("packages load");
+        let requested = config(&[("EZRA_APT_PACKAGES", "hello, jq=1.7")]).expect("packages load");
         assert_eq!(requested.apt_packages.names(), ["hello", "jq=1.7"]);
     }
 

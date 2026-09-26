@@ -1,4 +1,4 @@
-//! Black-box tests of `agent-box manager`. Build the image first, then run: `cargo test -- --ignored`
+//! Black-box tests of `ezra manager`. Build the image first, then run: `cargo test -- --ignored`
 
 mod common;
 
@@ -29,22 +29,22 @@ fn set_password(container: &DockerResource) -> String {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn default_command_serves_the_manager_over_https() {
     let container = DockerResource::start_container("manager", &[], &[]);
     assert_eq!(wait_for_manager(&container, 8443), UNCLAIMED);
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn port_can_be_changed() {
     let container =
-        DockerResource::start_container("manager-port", &["--env", "MANAGER_PORT=9443"], &[]);
+        DockerResource::start_container("manager-port", &["--env", "EZRA_PORT=9443"], &[]);
     assert_eq!(wait_for_manager(&container, 9443), UNCLAIMED);
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn password_and_certificate_survive_a_recreate() {
     let volume = DockerResource::volume("manager-config");
     let config_mount = format!("{}:/config", volume.name);
@@ -53,7 +53,7 @@ fn password_and_certificate_survive_a_recreate() {
             "exec",
             &container.name,
             "sha256sum",
-            "/config/agent-box/tls/certificate.pem",
+            "/config/ezra/tls/certificate.pem",
         ]))
     };
 
@@ -66,7 +66,7 @@ fn password_and_certificate_survive_a_recreate() {
         "stat",
         "--format",
         "%U",
-        "/config/agent-box/settings.toml",
+        "/config/ezra/settings.toml",
     ]));
     assert_eq!(owner, "dev");
     let first_checksum = certificate_checksum(&first);
@@ -83,7 +83,7 @@ fn password_and_certificate_survive_a_recreate() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn docker_stop_shuts_the_manager_down_cleanly() {
     let container = DockerResource::start_container("manager-stop", &[], &[]);
     wait_for_manager(&container, 8443);
@@ -101,7 +101,7 @@ fn docker_stop_shuts_the_manager_down_cleanly() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn page_walks_from_password_to_dashboard() {
     let container = DockerResource::start_container("manager-page", &[], &[]);
     wait_for_manager(&container, 8443);
@@ -121,13 +121,10 @@ fn page_walks_from_password_to_dashboard() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn turning_off_download_certificate_checks_is_logged() {
-    let container = DockerResource::start_container(
-        "manager-tls-off",
-        &["--env", "AGENT_BOX_TLS_VERIFY=off"],
-        &[],
-    );
+    let container =
+        DockerResource::start_container("manager-tls-off", &["--env", "EZRA_TLS_VERIFY=off"], &[]);
     wait_for_manager(&container, 8443);
     let logs = stderr_of(&docker(&["logs", &container.name]));
     assert!(
@@ -137,15 +134,12 @@ fn turning_off_download_certificate_checks_is_logged() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn unknown_certificate_check_setting_stops_the_manager() {
-    let output = run_in_image(
-        &["--env", "AGENT_BOX_TLS_VERIFY=maybe"],
-        &["agent-box", "manager"],
-    );
+    let output = run_in_image(&["--env", "EZRA_TLS_VERIFY=maybe"], &["ezra", "manager"]);
     assert!(!output.status.success());
     assert!(
-        stderr_of(&output).contains("for key `agent_box_tls_verify`"),
+        stderr_of(&output).contains("for key `tls_verify`"),
         "{}",
         stderr_of(&output)
     );

@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn init_takes_the_program_and_its_arguments_after_a_double_dash() {
-        let cli = Cli::try_parse_from(["agent-box", "init", "--", "bash", "-c", "exit 42"])
+        let cli = Cli::try_parse_from(["ezra", "init", "--", "bash", "-c", "exit 42"])
             .expect("valid command line");
 
         let Command::Init { program, arguments } = cli.command else {
@@ -60,6 +60,6 @@ mod tests {
 
     #[test]
     fn init_requires_a_program() {
-        assert!(Cli::try_parse_from(["agent-box", "init"]).is_err());
+        assert!(Cli::try_parse_from(["ezra", "init"]).is_err());
     }
 }

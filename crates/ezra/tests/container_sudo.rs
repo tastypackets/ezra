@@ -1,4 +1,4 @@
-//! Black-box tests of the `AGENT_SUDO` policy. Build the image first, then run: `cargo test -- --ignored`
+//! Black-box tests of the `EZRA_SUDO` policy. Build the image first, then run: `cargo test -- --ignored`
 
 mod common;
 
@@ -11,24 +11,24 @@ fn sudo_succeeds(docker_options: &[&str]) -> bool {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn sudo_is_off_by_default() {
     assert!(!sudo_succeeds(&[]));
     assert_eq!(process_status_field(&[], "NoNewPrivs"), "1");
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn empty_value_means_off() {
-    let options = ["--env", "AGENT_SUDO="];
+    let options = ["--env", "EZRA_SUDO="];
     assert!(!sudo_succeeds(&options));
     assert_eq!(process_status_field(&options, "NoNewPrivs"), "1");
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn full_grants_passwordless_sudo() {
-    let options = ["--env", "AGENT_SUDO=full"];
+    let options = ["--env", "EZRA_SUDO=full"];
     let uid_under_sudo = stdout_of(&run_in_image(
         &options,
         &["sudo", "--non-interactive", "id", "--user"],
@@ -38,11 +38,11 @@ fn full_grants_passwordless_sudo() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn off_blocks_sudo_in_exec_sessions() {
     let container = DockerResource::start_container(
         "sudo-off",
-        &["--env", "AGENT_SUDO=off"],
+        &["--env", "EZRA_SUDO=off"],
         &["sleep", "infinity"],
     );
     let exec_sudo = docker(&[
@@ -58,11 +58,11 @@ fn off_blocks_sudo_in_exec_sessions() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn full_allows_sudo_in_exec_sessions() {
     let container = DockerResource::start_container(
         "sudo-full",
-        &["--env", "AGENT_SUDO=full"],
+        &["--env", "EZRA_SUDO=full"],
         &["sleep", "infinity"],
     );
     let exec_sudo = docker(&[
@@ -79,21 +79,21 @@ fn full_allows_sudo_in_exec_sessions() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn invalid_value_refuses_to_start() {
-    let output = run_in_image(&["--env", "AGENT_SUDO=yes"], &["true"]);
+    let output = run_in_image(&["--env", "EZRA_SUDO=yes"], &["true"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr_of(&output).contains("for key `agent_sudo`"),
+        stderr_of(&output).contains("for key `sudo`"),
         "{}",
         stderr_of(&output)
     );
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn full_on_read_only_root_filesystem_starts_without_sudo() {
-    let options = ["--read-only", "--env", "AGENT_SUDO=full"];
+    let options = ["--read-only", "--env", "EZRA_SUDO=full"];
     let output = run_in_image(&options, &["true"]);
     assert!(output.status.success());
     assert!(
@@ -105,7 +105,7 @@ fn full_on_read_only_root_filesystem_starts_without_sudo() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn non_root_start_is_off_by_default() {
     assert_eq!(
         process_status_field(&["--user", "1000:1000"], "NoNewPrivs"),

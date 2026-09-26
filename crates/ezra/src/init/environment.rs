@@ -66,7 +66,7 @@ impl TemporaryHome {
     }
 
     pub fn prepare(uid: Uid) -> Result<PathBuf, InitError> {
-        let home = std::env::temp_dir().join(format!("agent-box-home-{uid}"));
+        let home = std::env::temp_dir().join(format!("ezra-home-{uid}"));
         fs::create_dir_all(&home).map_err(|source| InitError::TemporaryHome {
             path: home.display().to_string(),
             source,

@@ -23,8 +23,8 @@ use tokio::signal::unix::{SignalKind, signal};
 use crate::environment_config::FromEnvironment;
 use agents::TlsVerification;
 
-const STATE_DIRECTORY: &str = "/config/agent-box";
-const TLS_VERIFY_VARIABLE: &str = "AGENT_BOX_TLS_VERIFY";
+const STATE_DIRECTORY: &str = "/config/ezra";
+const TLS_VERIFY_VARIABLE: &str = "EZRA_TLS_VERIFY";
 const DEFAULT_PORT: u16 = 8443;
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
@@ -104,9 +104,8 @@ async fn serve() -> Result<(), ManagerError> {
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 struct ManagerOptions {
-    #[serde(rename = "manager_port")]
     port: u16,
-    #[serde(rename = "agent_box_tls_verify")]
+    #[serde(rename = "tls_verify")]
     tls_verification: TlsVerification,
 }
 
@@ -161,14 +160,14 @@ mod tests {
 
     #[test]
     fn port_and_certificate_checks_are_typed() {
-        let custom = options(&[("MANAGER_PORT", "9443"), ("AGENT_BOX_TLS_VERIFY", "off")])
+        let custom = options(&[("EZRA_PORT", "9443"), ("EZRA_TLS_VERIFY", "off")])
             .expect("valid values load");
         assert_eq!(custom.port, 9443);
         assert_eq!(custom.tls_verification, TlsVerification::Off);
         for (name, value) in [
-            ("MANAGER_PORT", "eighty"),
-            ("MANAGER_PORT", "70000"),
-            ("AGENT_BOX_TLS_VERIFY", "maybe"),
+            ("EZRA_PORT", "eighty"),
+            ("EZRA_PORT", "70000"),
+            ("EZRA_TLS_VERIFY", "maybe"),
         ] {
             assert!(
                 options(&[(name, value)]).is_err(),

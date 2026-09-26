@@ -9,11 +9,11 @@ use serde::Deserialize;
 use super::InitError;
 use crate::path_ext::PathExt;
 
-pub const SUDO_POLICY_VARIABLE: &str = "AGENT_SUDO";
-const SUDOERS_RULE_PATH: &str = "/etc/sudoers.d/agent-box";
+pub const SUDO_POLICY_VARIABLE: &str = "EZRA_SUDO";
+const SUDOERS_RULE_PATH: &str = "/etc/sudoers.d/ezra";
 const SUDOERS_RULE_MODE: u32 = 0o440;
 
-/// Whether the agent may use sudo, from `AGENT_SUDO`.
+/// Whether the agent may use sudo, from `EZRA_SUDO`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SudoPolicy {

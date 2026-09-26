@@ -1,9 +1,11 @@
 use config::{Config, ConfigError, Environment, Map};
 use serde::de::DeserializeOwned;
 
+const VARIABLE_PREFIX: &str = "EZRA";
+
 /// Typed settings read from environment variables.
 ///
-/// Each field is named after its variable in lowercase, so `agent_sudo` reads `AGENT_SUDO`.
+/// Each field is its variable's name without the `EZRA_` prefix, in lowercase, so `sudo` reads `EZRA_SUDO`.
 /// An empty variable counts as unset, and a value the field's type rejects is an error.
 pub trait FromEnvironment: DeserializeOwned {
     fn from_environment() -> Result<Self, ConfigError> {
@@ -13,7 +15,12 @@ pub trait FromEnvironment: DeserializeOwned {
     /// Reads these variables instead of the process environment.
     fn from_variables(variables: Option<Map<String, String>>) -> Result<Self, ConfigError> {
         Config::builder()
-            .add_source(Environment::default().ignore_empty(true).source(variables))
+            .add_source(
+                Environment::with_prefix(VARIABLE_PREFIX)
+                    .prefix_separator("_")
+                    .ignore_empty(true)
+                    .source(variables),
+            )
             .build()?
             .try_deserialize()
     }

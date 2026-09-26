@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent-box"]
+members = ["crates/ezra"]
 
 [workspace.package]
 edition = "2024"

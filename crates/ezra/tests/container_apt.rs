@@ -1,4 +1,4 @@
-//! Black-box tests of `APT_PACKAGES`. Build the image first, then run: `cargo test -- --ignored`
+//! Black-box tests of `EZRA_APT_PACKAGES`. Build the image first, then run: `cargo test -- --ignored`
 
 mod common;
 
@@ -15,21 +15,21 @@ fn last_line_of_stdout(output: &Output) -> String {
 }
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn listed_package_is_installed_for_the_agent() {
-    let output = run_in_image(&["--env", "APT_PACKAGES=hello"], &["hello"]);
+    let output = run_in_image(&["--env", "EZRA_APT_PACKAGES=hello"], &["hello"]);
     assert_eq!(last_line_of_stdout(&output), "Hello, world!");
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn installed_or_provided_packages_need_no_apt_run() {
     let output = run_in_image(
         &[
             "--network",
             "none",
             "--env",
-            "APT_PACKAGES=bash,awk coreutils",
+            "EZRA_APT_PACKAGES=bash,awk coreutils",
         ],
         &["true"],
     );
@@ -38,74 +38,77 @@ fn installed_or_provided_packages_need_no_apt_run() {
 }
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn unknown_package_does_not_block_the_others() {
     let output = run_in_image(
         &[
             "--env",
-            "APT_PACKAGES=agent-box-no-such-package hello/resolute",
+            "EZRA_APT_PACKAGES=ezra-no-such-package hello/resolute",
         ],
         &["hello"],
     );
     assert_eq!(last_line_of_stdout(&output), "Hello, world!");
     let stderr = stderr_of(&output);
     assert!(
-        stderr.contains("could not install agent-box-no-such-package from APT_PACKAGES"),
+        stderr.contains("could not install ezra-no-such-package from EZRA_APT_PACKAGES"),
         "{stderr}"
     );
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn offline_start_warns_and_continues() {
     let output = run_in_image(
-        &["--network", "none", "--env", "APT_PACKAGES=hello"],
+        &["--network", "none", "--env", "EZRA_APT_PACKAGES=hello"],
         &["true"],
     );
     stdout_of(&output);
     let stderr = stderr_of(&output);
     assert!(
-        stderr.contains("could not install hello from APT_PACKAGES"),
+        stderr.contains("could not install hello from EZRA_APT_PACKAGES"),
         "{stderr}"
     );
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn read_only_root_filesystem_warns_and_continues() {
-    let output = run_in_image(&["--read-only", "--env", "APT_PACKAGES=hello"], &["true"]);
+    let output = run_in_image(
+        &["--read-only", "--env", "EZRA_APT_PACKAGES=hello"],
+        &["true"],
+    );
     stdout_of(&output);
     let stderr = stderr_of(&output);
     assert!(stderr.contains("Not installed: hello"), "{stderr}");
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn non_root_start_ignores_the_list() {
     let output = run_in_image(
-        &["--user", "1000:1000", "--env", "APT_PACKAGES=hello"],
+        &["--user", "1000:1000", "--env", "EZRA_APT_PACKAGES=hello"],
         &["true"],
     );
     stdout_of(&output);
     let stderr = stderr_of(&output);
     assert!(
-        stderr.contains("APT_PACKAGES is ignored when the container starts as uid 1000"),
+        stderr.contains("EZRA_APT_PACKAGES is ignored when the container starts as uid 1000"),
         "{stderr}"
     );
 }
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn restart_keeps_packages_without_running_apt_again() {
     let container = DockerResource::start_container(
         "apt-restart",
-        &["--env", "APT_PACKAGES=hello"],
+        &["--env", "EZRA_APT_PACKAGES=hello"],
         &["hello"],
     );
     docker(&["wait", &container.name]);
     let first_start = stderr_of(&docker(&["logs", &container.name]));
     assert!(
-        first_start.contains("installing hello from APT_PACKAGES"),
+        first_start.contains("installing hello from EZRA_APT_PACKAGES"),
         "{first_start}"
     );
 
@@ -115,12 +118,12 @@ fn restart_keeps_packages_without_running_apt_again() {
 }
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn interrupted_installation_is_finished_without_apt() {
     let leave_hello_unpacked_then_init = "apt-get -qq update \
         && cd /tmp && apt-get -qq download hello \
         && dpkg --unpack hello_*.deb >/dev/null \
-        && exec /usr/local/bin/agent-box init -- hello";
+        && exec /usr/local/bin/ezra init -- hello";
     let output = run_in_image(
         &[
             "--user",
@@ -128,7 +131,7 @@ fn interrupted_installation_is_finished_without_apt() {
             "--entrypoint",
             "bash",
             "--env",
-            "APT_PACKAGES=hello",
+            "EZRA_APT_PACKAGES=hello",
         ],
         &["-c", leave_hello_unpacked_then_init],
     );

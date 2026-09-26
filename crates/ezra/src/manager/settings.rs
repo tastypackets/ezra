@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn saved_settings_load_back() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("agent-box/settings.toml");
+        let path = directory.path().join("ezra/settings.toml");
         let mut settings = Settings {
             manager: ManagerSettings {
                 password_hash: Some(

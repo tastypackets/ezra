@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub fn image_name() -> String {
-    std::env::var("AGENT_BOX_TEST_IMAGE").unwrap_or_else(|_| "agent-box:dev".to_owned())
+    std::env::var("EZRA_TEST_IMAGE").unwrap_or_else(|_| "ezra:dev".to_owned())
 }
 
 pub fn docker(arguments: &[&str]) -> Output {
@@ -129,10 +129,10 @@ impl Drop for DockerResource {
 }
 
 fn unique_name(purpose: &str) -> String {
-    format!("agent-box-test-{purpose}-{}", std::process::id())
+    format!("ezra-test-{purpose}-{}", std::process::id())
 }
 
-/// A temporary host folder of setup scripts, mounted read-only as /etc/agent-box/setup.d.
+/// A temporary host folder of setup scripts, mounted read-only as /etc/ezra/setup.d.
 pub struct SetupDirectory {
     directory: tempfile::TempDir,
 }
@@ -151,10 +151,7 @@ impl SetupDirectory {
     }
 
     pub fn volume_option(&self) -> String {
-        format!(
-            "{}:/etc/agent-box/setup.d:ro",
-            self.directory.path().display()
-        )
+        format!("{}:/etc/ezra/setup.d:ro", self.directory.path().display())
     }
 }
 

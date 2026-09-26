@@ -26,7 +26,7 @@ pub struct TestManager {
 impl TestManager {
     pub fn new() -> Self {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let settings_path = directory.path().join("agent-box/settings.toml");
+        let settings_path = directory.path().join("ezra/settings.toml");
         let install_paths = InstallPaths::under_home(&directory.path().join("home"))
             .with_config_directories(
                 directory.path().join("config/claude"),

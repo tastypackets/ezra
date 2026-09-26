@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::process_ext::{CommandStatusExt, OutputExt};
 
-pub const APT_PACKAGES_VARIABLE: &str = "APT_PACKAGES";
+pub const APT_PACKAGES_VARIABLE: &str = "EZRA_APT_PACKAGES";
 const APT_GET_OPTIONS: [&str; 8] = [
     "-q",
     "-o",
@@ -18,7 +18,7 @@ const APT_GET_OPTIONS: [&str; 8] = [
     "--no-install-recommends",
 ];
 
-/// Package arguments for apt-get from `APT_PACKAGES`, separated by whitespace or commas.
+/// Package arguments for apt-get from `EZRA_APT_PACKAGES`, separated by whitespace or commas.
 #[derive(Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(from = "String")]
 pub struct RequestedPackages(Vec<String>);

@@ -5,7 +5,7 @@ mod common;
 use common::{DockerResource, SetupDirectory, run_in_image, stdout_of};
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn project_pin_overrides_the_image_version() {
     let pin_jq_then_run_it = "mkdir /projects/app && cd /projects/app \
         && printf '[tools]\\njq = \"1.7.1\"\\n' > mise.toml \
@@ -15,14 +15,14 @@ fn project_pin_overrides_the_image_version() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn image_version_is_used_outside_projects() {
     let output = run_in_image(&[], &["node", "--version"]);
     assert!(stdout_of(&output).starts_with("v26."));
 }
 
 #[test]
-#[ignore = "needs Docker, network access and a built agent-box image"]
+#[ignore = "needs Docker, network access and a built ezra image"]
 fn global_tools_persist_on_the_config_volume() {
     let volume = DockerResource::volume("mise-config");
     let config_mount = format!("{}:/config", volume.name);
@@ -36,7 +36,7 @@ fn global_tools_persist_on_the_config_volume() {
 }
 
 #[test]
-#[ignore = "needs Docker and a built agent-box image"]
+#[ignore = "needs Docker and a built ezra image"]
 fn setup_scripts_using_mise_tools_leave_the_agent_mise_directory_alone() {
     let directory = SetupDirectory::with_scripts(&[(
         "10-uses-node",

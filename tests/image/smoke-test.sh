@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: docker run --rm --volume "$PWD/tests/image:/tests:ro" agent-box:dev bash /tests/smoke-test.sh
+# Usage: docker run --rm --volume "$PWD/tests/image:/tests:ro" ezra:dev bash /tests/smoke-test.sh
 
 set -euo pipefail
 
@@ -127,7 +127,7 @@ check_version_command "git-lfs" git lfs version
 check_version_command "protoc" protoc --version
 check_version_command "yarn" yarn --version
 check_succeeds "pnpm is the pinned pnpm, not corepack" grep --quiet "/installs/pnpm/" /usr/local/bin/pnpm
-check_equals "node runs through the mise shims" "/usr/local/share/agent-box/shims/node" "$(command -v node)"
+check_equals "node runs through the mise shims" "/usr/local/share/ezra/shims/node" "$(command -v node)"
 check_equals "git-lfs bypasses mise" "/usr/local/bin/git-lfs" "$(command -v git-lfs)"
 check_succeeds "pnpx is not on PATH" bash -c '! command -v pnpx'
 check_succeeds "install.sh is not on PATH" bash -c '! command -v install.sh'
@@ -159,7 +159,7 @@ check_equals "runs as dev" "1000:1000:dev" "$(id --user):$(id --group):$(id --us
 check_succeeds "the ubuntu user is gone" bash -c '! getent passwd ubuntu'
 tests_directory="$(dirname "${BASH_SOURCE[0]}")"
 files_owned_by_agent_elsewhere="$(find / -xdev \( -path /proc -o -path /tmp -o -path /home/dev -o -path /config -o -path /projects -o -path "${tests_directory}" \) -prune -o -uid 1000 -print 2>/dev/null || true)"
-check_succeeds "dev cannot add setup scripts" bash -c '! touch /etc/agent-box/setup.d/probe'
+check_succeeds "dev cannot add setup scripts" bash -c '! touch /etc/ezra/setup.d/probe'
 check_equals "nothing outside /home/dev, /config and /projects is owned by uid 1000" "" "${files_owned_by_agent_elsewhere}"
 
 finish

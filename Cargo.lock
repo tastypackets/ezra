@@ -9,39 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agent-box"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "axum",
- "axum-extra",
- "axum-server",
- "caps",
- "clap",
- "config",
- "flate2",
- "getrandom 0.4.3",
- "http-body-util",
- "maud",
- "nix",
- "rcgen",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "toml",
- "tower",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -569,6 +536,39 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ezra"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "axum",
+ "axum-extra",
+ "axum-server",
+ "caps",
+ "clap",
+ "config",
+ "flate2",
+ "getrandom 0.4.3",
+ "http-body-util",
+ "maud",
+ "nix",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

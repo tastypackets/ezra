@@ -67,7 +67,7 @@ fn page(show_sign_out: bool, content: Markup) -> Markup {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { "agent-box" }
+                title { "EZ Remote Agent" }
                 link rel="stylesheet" href="assets/app.css";
                 script type="module" src="assets/app.js" {}
             }
@@ -75,7 +75,7 @@ fn page(show_sign_out: bool, content: Markup) -> Markup {
                 div.shell {
                     header.topbar {
                         div {
-                            h1 { "agent-box" }
+                            h1 { "EZ Remote Agent" }
                             p.muted { "Agent manager" }
                         }
                         @if show_sign_out {

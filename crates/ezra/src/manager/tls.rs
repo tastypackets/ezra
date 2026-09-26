@@ -96,13 +96,13 @@ mod tests {
     fn certificate_is_created_once_and_reused() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let tls_directory = directory.path().join("tls");
-        let files = CertificateFiles::ensure_self_signed(&tls_directory, "agent-box")
+        let files = CertificateFiles::ensure_self_signed(&tls_directory, "ezra")
             .expect("certificate is created");
         let first_certificate = read(&files.certificate);
         assert!(first_certificate.starts_with("-----BEGIN CERTIFICATE-----"));
         assert!(read(&files.key).contains("PRIVATE KEY"));
 
-        CertificateFiles::ensure_self_signed(&tls_directory, "agent-box")
+        CertificateFiles::ensure_self_signed(&tls_directory, "ezra")
             .expect("certificate is reused");
         assert_eq!(read(&files.certificate), first_certificate);
     }
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn old_certificate_is_replaced() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let files = CertificateFiles::ensure_self_signed(directory.path(), "agent-box")
+        let files = CertificateFiles::ensure_self_signed(directory.path(), "ezra")
             .expect("certificate is created");
         let first_certificate = read(&files.certificate);
         let long_ago = SystemTime::now()
@@ -122,7 +122,7 @@ mod tests {
             .and_then(|file| file.set_modified(long_ago))
             .expect("certificate modification time can be changed");
 
-        CertificateFiles::ensure_self_signed(directory.path(), "agent-box")
+        CertificateFiles::ensure_self_signed(directory.path(), "ezra")
             .expect("certificate is renewed");
         assert_ne!(read(&files.certificate), first_certificate);
     }

@@ -8,7 +8,7 @@ use nix::unistd::Uid;
 
 use crate::path_ext::PathExt;
 
-pub const SETUP_SCRIPTS_DIRECTORY: &str = "/etc/agent-box/setup.d";
+pub const SETUP_SCRIPTS_DIRECTORY: &str = "/etc/ezra/setup.d";
 const AGENT_MISE_DIRECTORY_VARIABLES: [&str; 3] =
     ["MISE_DATA_DIR", "MISE_CONFIG_DIR", "MISE_STATE_DIR"];
 const EXECUTE_BITS: u32 = 0o111;
