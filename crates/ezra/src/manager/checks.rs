@@ -23,8 +23,9 @@ pub struct AgentChecks {
 }
 
 struct AgentCheck {
-    /// When the check that gave the last answer started, locked while the CLI runs.
-    answered_check_started: Mutex<Option<Instant>>,
+    /// When the check that gave the last answer started, and the CLI version that answered.
+    /// Locked while the CLI runs.
+    answered_check: Mutex<Option<(Instant, Option<String>)>>,
     sign_in: watch::Sender<Option<SignInStatus>>,
     sign_in_ends_at: watch::Sender<Option<OffsetDateTime>>,
     config_bytes: watch::Sender<Option<u64>>,
@@ -33,7 +34,7 @@ struct AgentCheck {
 impl AgentCheck {
     fn new() -> Self {
         Self {
-            answered_check_started: Mutex::new(None),
+            answered_check: Mutex::new(None),
             sign_in: watch::Sender::new(None),
             sign_in_ends_at: watch::Sender::new(None),
             config_bytes: watch::Sender::new(None),
@@ -77,34 +78,46 @@ impl AgentChecks {
         self.measure_config(agent).await;
     }
 
-    /// Asks the CLI unless a check started within `max_age` got an answer. A CLI that does not
-    /// answer leaves the last answer in place. A CLI that is not installed is signed out.
+    /// Asks the CLI unless the same version answered a check started within `max_age`. A CLI that
+    /// does not answer leaves the last answer in place. A CLI that is not installed is signed out.
+    /// Also rereads when the sign-in ends, which runs nothing.
     pub async fn check_sign_in(&self, agent: Agent, max_age: Duration) {
         let check = self.of(agent);
-        let mut answered_check_started = check.answered_check_started.lock().await;
-        if answered_check_started.is_some_and(|started| started.elapsed() < max_age) {
-            return;
+        let mut answered_check = check.answered_check.lock().await;
+        let version = self.install_paths.installed_version(agent);
+        let answer_is_fresh = answered_check
+            .as_ref()
+            .is_some_and(|(started, answered_by)| {
+                started.elapsed() < max_age && *answered_by == version
+            });
+        if !answer_is_fresh {
+            let started = Instant::now();
+            let answer = match AgentCli::installed(agent, &self.install_paths) {
+                Err(_) => Some(SignInStatus::default()),
+                Ok(cli) => timeout(SIGN_IN_CHECK_TIMEOUT, cli.sign_in_status())
+                    .await
+                    .ok()
+                    .flatten(),
+            };
+            match answer {
+                Some(answer) => {
+                    *answered_check = Some((started, version));
+                    self.store(&check.sign_in, Some(answer));
+                }
+                None => tracing::warn!("{agent} did not answer a sign-in check"),
+            }
         }
-        let started = Instant::now();
-        let answer = match AgentCli::installed(agent, &self.install_paths) {
-            Err(_) => Some(SignInStatus::default()),
-            Ok(cli) => timeout(SIGN_IN_CHECK_TIMEOUT, cli.sign_in_status())
-                .await
-                .ok()
-                .flatten(),
-        };
-        let Some(answer) = answer else {
-            tracing::warn!("{agent} did not answer a sign-in check");
-            return;
-        };
-        *answered_check_started = Some(started);
+        let signed_in = check
+            .sign_in
+            .borrow()
+            .as_ref()
+            .is_some_and(|sign_in| sign_in.logged_in);
         let ends_at = match (agent, self.install_paths.config_directory(agent)) {
-            (Agent::Claude, Some(directory)) if answer.logged_in => {
+            (Agent::Claude, Some(directory)) if signed_in => {
                 ClaudeCredentials::read(directory).sign_in_ends_at()
             }
             _ => None,
         };
-        self.store(&check.sign_in, Some(answer));
         self.store(&check.sign_in_ends_at, ends_at);
     }
 
@@ -209,10 +222,10 @@ mod tests {
         let mut events = Box::pin(manager.state.events.stream());
         events.next().await;
 
-        checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
+        checks.check_sign_in(Agent::Claude, Duration::MAX).await;
         assert_eq!(published(&mut events).await, []);
         ending_at(1_790_467_200_000);
-        checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
+        checks.check_sign_in(Agent::Claude, Duration::MAX).await;
         assert_eq!(published(&mut events).await, [Topic::Agents]);
         assert_eq!(
             checks
@@ -220,6 +233,18 @@ mod tests {
                 .map(OffsetDateTime::unix_timestamp),
             Some(1_790_467_200)
         );
+    }
+
+    #[tokio::test]
+    async fn a_newly_installed_cli_is_asked_at_once() {
+        let manager = TestManager::new();
+        let checks = &manager.state.agent_checks;
+        checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
+        assert_eq!(checks.sign_in(Agent::Claude), Some(SignInStatus::default()));
+
+        manager.install_fake_cli(Agent::Claude, CLAUDE_SIGNED_IN);
+        checks.check_sign_in(Agent::Claude, Duration::MAX).await;
+        assert_eq!(checks.sign_in(Agent::Claude), signed_in(None));
     }
 
     #[tokio::test]
