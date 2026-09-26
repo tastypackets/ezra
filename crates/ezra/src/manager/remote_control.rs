@@ -253,42 +253,46 @@ impl RemoteControlStatus {
 pub enum ServerProblem {
     /// Claude rejected Claude Code's sign-in, or it is missing or not a claude.ai sign-in.
     SignIn,
-    /// The account's plan or organization does not allow Remote Control.
+    /// Remote Control is off for the account, which a new sign-in rechecks.
+    NotEnabled,
+    /// The organization does not allow Remote Control.
     NotAllowed,
-    /// Claude could not be reached.
+    /// Claude could not be reached or kept failing.
     Offline,
-    /// Claude answered with server errors.
-    Unavailable,
 }
 
 impl ServerProblem {
     /// Parts of the messages Claude Code 2.1 prints, checked in this order.
-    const MESSAGES: [(&str, Self); 22] = [
+    const MESSAGES: [(&str, Self); 20] = [
         ("You must be logged in to use Remote Control", Self::SignIn),
         ("Unable to determine your organization", Self::SignIn),
         ("Authentication failed (401)", Self::SignIn),
-        ("login expired", Self::SignIn),
-        ("OAuth token unavailable", Self::SignIn),
         ("requires a full-scope login token", Self::SignIn),
         ("requires a claude.ai subscription", Self::SignIn),
         ("requires claude.ai subscription auth", Self::SignIn),
         ("this device is not enrolled", Self::SignIn),
-        ("isn't enabled for this account", Self::NotAllowed),
+        ("isn't enabled for this account", Self::NotEnabled),
         ("disabled by your organization's policy", Self::NotAllowed),
-        ("not available for your account", Self::NotAllowed),
+        (
+            "environments are not available for your account",
+            Self::NotAllowed,
+        ),
         ("Access denied (403)", Self::NotAllowed),
         (
             "may not be available for this organization",
             Self::NotAllowed,
         ),
         ("Server unreachable for", Self::Offline),
+        ("Persistent errors for", Self::Offline),
         ("service was unreachable", Self::Offline),
+        (
+            "Couldn't verify your organization's Remote Control policy",
+            Self::Offline,
+        ),
         ("EAI_AGAIN", Self::Offline),
         ("ENOTFOUND", Self::Offline),
         ("ECONNREFUSED", Self::Offline),
         ("ETIMEDOUT", Self::Offline),
-        ("Persistent errors for", Self::Unavailable),
-        ("Failed with status 5", Self::Unavailable),
     ];
 
     fn in_output(lines: &[&str]) -> Option<Self> {
@@ -1916,7 +1920,7 @@ mod tests {
             ),
             (
                 "Error: Remote Control isn't enabled for this account. If you recently changed plans, run `claude auth logout` then `claude auth login` to refresh your entitlements, or `claude doctor` for details.",
-                Some(ServerProblem::NotAllowed),
+                Some(ServerProblem::NotEnabled),
             ),
             (
                 "Error: Remote Control is disabled by your organization's policy.",
@@ -1944,11 +1948,15 @@ mod tests {
             ),
             (
                 "Persistent errors for 10 minutes, giving up.",
-                Some(ServerProblem::Unavailable),
+                Some(ServerProblem::Offline),
             ),
             (
-                "Error: RegisterEnvironment: Failed with status 503",
-                Some(ServerProblem::Unavailable),
+                "Error: Couldn't verify your organization's Remote Control policy. Retry, or run `claude doctor` for details.",
+                Some(ServerProblem::Offline),
+            ),
+            (
+                "Opus with 1M context is not available for your account. Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m",
+                None,
             ),
             ("Error: Workspace not trusted: /projects.", None),
         ] {

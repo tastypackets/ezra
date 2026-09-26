@@ -6,7 +6,7 @@ import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_PROBLEMS } from "@/content/remote-c
 import { useAgentActionPending, useAgentActions } from "@/hooks/use-agent-actions";
 import { formatDateTime } from "@/lib/utils";
 
-const FIXED_BY_SIGNING_IN: ServerProblem[] = ["sign_in", "not_allowed"];
+const FIXED_BY_SIGNING_IN: ServerProblem[] = ["sign_in", "not_enabled"];
 
 export interface ServerNotesProps {
   status: RemoteControlStatus;

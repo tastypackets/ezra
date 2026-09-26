@@ -2227,9 +2227,9 @@
         "description": "A known reason a server stopped.",
         "enum": [
           "sign_in",
+          "not_enabled",
           "not_allowed",
-          "offline",
-          "unavailable"
+          "offline"
         ]
       },
       "ServerState": {
