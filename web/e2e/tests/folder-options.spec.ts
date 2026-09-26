@@ -2,23 +2,36 @@ import { expect, test } from "@playwright/test";
 
 import { inContainer } from "./manager.ts";
 
-test("a repository's new sessions can work in their own worktrees", async ({ page }, testInfo) => {
-  const folder = `spawn-${testInfo.retry}`;
+test("a repository keeps its own Claude Code options", async ({ page }, testInfo) => {
+  const folder = `options-${testInfo.retry}`;
   inContainer("git", "init", "--quiet", `/projects/${folder}`);
   try {
     await page.goto("./");
     const row = page.getByRole("listitem").filter({ hasText: folder });
     await row.getByRole("button", { name: `More ${folder} actions` }).click();
-    const inFolder = page.getByRole("menuitemradio", { name: /The folder/ });
-    const inWorktree = page.getByRole("menuitemradio", { name: /Their own worktree/ });
-    await expect(inFolder).toBeChecked();
-    await inWorktree.click();
-    await expect(page.getByText(`New ${folder} sessions get their own worktree.`)).toBeVisible();
-    await expect(inWorktree).toBeChecked();
+    await page.getByRole("menuitem", { name: "Claude Code options" }).click();
+    const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
+    await expect(dialog).toContainText("Empty fields follow Settings.");
+    await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
+    const mode = dialog.getByRole("combobox", { name: "Permission mode" });
+    const capacity = dialog.getByRole("spinbutton", { name: "Sessions at once" });
+    await expect(mode).toHaveAttribute("placeholder", "Default: auto");
+    await expect(capacity).toHaveAttribute("placeholder", "Default: Claude Code's");
+
+    await dialog.getByRole("radio", { name: /Their own worktree/ }).click();
+    await mode.fill("plan");
+    await page.keyboard.press("Escape");
+    await capacity.fill("2");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText(`Saved the Claude Code options for ${folder}.`)).toBeVisible();
+    await expect(dialog).toBeHidden();
 
     const folders = await page.request.get("api/v1/folders");
     expect(await folders.json()).toContainEqual(
-      expect.objectContaining({ name: folder, spawn: "worktree" }),
+      expect.objectContaining({
+        name: folder,
+        claude: { spawn: "worktree", permission_mode: "plan", capacity: 2 },
+      }),
     );
   } finally {
     inContainer("rm", "-rf", `/projects/${folder}`);
@@ -32,12 +45,14 @@ test("a plain folder's sessions work in the folder", async ({ page }, testInfo) 
     await page.goto("./");
     const row = page.getByRole("listitem").filter({ hasText: folder });
     await row.getByRole("button", { name: `More ${folder} actions` }).click();
-    await expect(page.getByRole("menuitemradio", { name: /The folder/ })).toBeChecked();
-    const inWorktree = page.getByRole("menuitemradio", { name: /Their own worktree/ });
+    await page.getByRole("menuitem", { name: "Claude Code options" }).click();
+    const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
+    await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
+    const inWorktree = dialog.getByRole("radio", { name: /Their own worktree/ });
     await expect(inWorktree).toBeDisabled();
-    await expect(inWorktree).toContainText("Needs a git repository.");
+    await expect(dialog).toContainText("Needs a git repository.");
 
-    const refused = await page.request.put(`api/v1/folders/${folder}/spawn-mode`, {
+    const refused = await page.request.put(`api/v1/folders/${folder}/claude-options`, {
       data: { spawn: "worktree" },
     });
     expect(refused.status()).toBe(409);

@@ -62,8 +62,8 @@ pub fn router(state: AppState) -> Router {
             post(manager::regenerate_certificate),
         )
         .route(
-            "/api/v1/folders/{name}/spawn-mode",
-            put(folders::choose_spawn_mode),
+            "/api/v1/folders/{name}/claude-options",
+            put(folders::choose_claude_options),
         )
         .route(
             "/api/v1/folders/{name}/unsaved-work",
@@ -181,7 +181,7 @@ pub struct ErrorBody {
         git::update_identity,
         folders::list,
         folders::choose_to_serve,
-        folders::choose_spawn_mode,
+        folders::choose_claude_options,
         folders::unsaved_work,
         folders::delete,
         clones::list,

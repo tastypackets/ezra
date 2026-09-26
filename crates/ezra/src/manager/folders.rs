@@ -15,7 +15,7 @@ use utoipa::ToSchema;
 
 use super::events::Topic;
 use super::git::{GitError, UnsavedWork};
-use super::remote_control::SpawnMode;
+use super::remote_control::{ClaudeOptions, SpawnMode};
 use super::settings::{FolderChoice, SettingsError};
 use super::state::AppState;
 use crate::path_ext::PathExt;
@@ -104,8 +104,8 @@ pub struct FolderStatus {
     pub folder: Folder,
     /// Chosen to be served to the Claude app, by its own choice or by default.
     pub serve: bool,
-    /// Where its sessions work, always `same-dir` outside a repository.
-    pub spawn: SpawnMode,
+    /// Its own Claude Code options.
+    pub claude: ClaudeOptions,
 }
 
 /// The directory whose folders agents work in, usually /projects.
@@ -439,11 +439,11 @@ impl AppState {
         Ok(folders
             .into_iter()
             .map(|folder| {
-                let FolderChoice { serve, spawn } = settings.agents.claude.folder_choice(&folder);
+                let FolderChoice { serve, options } = settings.agents.claude.folder_choice(&folder);
                 FolderStatus {
                     folder,
                     serve,
-                    spawn,
+                    claude: options,
                 }
             })
             .collect())
@@ -464,7 +464,7 @@ impl AppState {
             let claude = &mut settings.agents.claude;
             let mut choice = claude.folder_choice(folder);
             change(&mut choice);
-            if choice.spawn == SpawnMode::Worktree && folder.git.is_none() {
+            if choice.options.spawn == SpawnMode::Worktree && folder.git.is_none() {
                 return Err(FolderChoiceError::NotARepository);
             }
             self.projects
@@ -553,7 +553,7 @@ impl AppState {
             for folder in folders.iter().filter(|folder| folder.git.is_some()) {
                 choices.entry(folder.name.clone()).or_insert(FolderChoice {
                     serve: serve_repositories,
-                    spawn: SpawnMode::SameDir,
+                    ..FolderChoice::default()
                 });
             }
             changed = *choices != before;

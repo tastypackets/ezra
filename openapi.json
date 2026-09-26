@@ -636,6 +636,82 @@
         }
       }
     },
+    "/api/v1/folders/{name}/claude-options": {
+      "put": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Choose a folder's own Claude Code options",
+        "description": "Restarts the folder's Remote Control server if it is running.",
+        "operationId": "chooseFolderClaudeOptions",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The folder's name in /projects",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaudeOptions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "400": {
+            "description": "Claude Code cannot take the options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Worktrees need a git repository",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/folders/{name}/remote-control": {
       "put": {
         "tags": [
@@ -734,72 +810,6 @@
           },
           "404": {
             "description": "The folder has no server",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/folders/{name}/spawn-mode": {
-      "put": {
-        "tags": [
-          "folders"
-        ],
-        "summary": "Choose where a folder's sessions work",
-        "description": "Restarts the folder's Remote Control server if it is running.",
-        "operationId": "chooseFolderSpawnMode",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "description": "The folder's name in /projects",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SpawnModeBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Saved"
-          },
-          "401": {
-            "description": "Not signed in to the manager",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such folder",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Worktrees need a git repository",
             "content": {
               "application/json": {
                 "schema": {
@@ -1522,6 +1532,35 @@
           }
         }
       },
+      "ClaudeOptions": {
+        "type": "object",
+        "description": "A folder's own Claude Code options. Absent ones follow the Settings page.",
+        "required": [
+          "spawn"
+        ],
+        "properties": {
+          "capacity": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The most sessions the folder's server runs at once, at least 1.",
+            "minimum": 1
+          },
+          "permission_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The permission mode for the folder's sessions."
+          },
+          "spawn": {
+            "$ref": "#/components/schemas/SpawnMode",
+            "description": "Where new sessions work, always `same-dir` outside a repository."
+          }
+        }
+      },
       "ClaudeSettingsBody": {
         "type": "object",
         "description": "How the manager installs, updates and serves Claude Code.",
@@ -1745,16 +1784,16 @@
             "type": "object",
             "required": [
               "serve",
-              "spawn"
+              "claude"
             ],
             "properties": {
+              "claude": {
+                "$ref": "#/components/schemas/ClaudeOptions",
+                "description": "Its own Claude Code options."
+              },
               "serve": {
                 "type": "boolean",
                 "description": "Chosen to be served to the Claude app, by its own choice or by default."
-              },
-              "spawn": {
-                "$ref": "#/components/schemas/SpawnMode",
-                "description": "Where its sessions work, always `same-dir` outside a repository."
               }
             }
           }
@@ -2260,18 +2299,6 @@
           "same-dir",
           "worktree"
         ]
-      },
-      "SpawnModeBody": {
-        "type": "object",
-        "description": "Where a folder's sessions work.",
-        "required": [
-          "spawn"
-        ],
-        "properties": {
-          "spawn": {
-            "$ref": "#/components/schemas/SpawnMode"
-          }
-        }
       },
       "Topic": {
         "type": "string",

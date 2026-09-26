@@ -1,4 +1,4 @@
-import type { CloneStatus, FolderStatus, RemoteControlStatus, SpawnMode } from "@ezra/client";
+import type { CloneStatus, FolderStatus, RemoteControlStatus } from "@ezra/client";
 import { useQuery } from "@tanstack/react-query";
 import { EllipsisIcon, ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
@@ -11,9 +11,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -22,20 +19,19 @@ import { Label } from "@/components/ui/label";
 import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { FOLDERS_DESCRIPTIONS, SPAWN_MODES } from "@/content/folders";
+import { FOLDERS_DESCRIPTIONS } from "@/content/folders";
 import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-control";
 import { useCloneActions, useFolderActions } from "@/hooks/use-folder-actions";
 import { errorMessage } from "@/lib/utils";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
+import { ClaudeOptionsDialog } from "./claude-options-dialog";
 import { CloneDialog } from "./clone-dialog";
 import { DeleteFolderDialog } from "./delete-folder-dialog";
 import { SERVER_BADGES } from "./remote-control-card";
 import { ServerLogDialog } from "./server-log-dialog";
 import { ServerNotes } from "./server-notes";
-
-const SPAWN_MODE_ORDER: SpawnMode[] = ["same-dir", "worktree"];
 
 /** The projects agents work in, the clones on their way, and which ones the Claude app lists. */
 export function FoldersCard() {
@@ -133,10 +129,11 @@ function CloneRow({ clone }: { clone: CloneStatus }) {
 }
 
 function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteControlStatus }) {
-  const { chooseToServe, chooseSpawnMode } = useFolderActions();
+  const { chooseToServe } = useFolderActions();
   const [deleting, setDeleting] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const detail = folder.git ? folder.git.repository : FOLDERS_DESCRIPTIONS.not_git;
-  const failure = chooseToServe.error ?? chooseSpawnMode.error;
+  const failure = chooseToServe.error;
   const switchId = useId();
   const switchLabelId = useId();
   const [logOpen, setLogOpen] = useState(false);
@@ -216,36 +213,10 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
           >
             <EllipsisIcon />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuRadioGroup
-              value={
-                chooseSpawnMode.isPending ? chooseSpawnMode.variables.body.spawn : folder.spawn
-              }
-              onValueChange={(spawn: SpawnMode) =>
-                chooseSpawnMode.mutate({ path: { name: folder.name }, body: { spawn } })
-              }
-            >
-              <DropdownMenuLabel>{FOLDERS_DESCRIPTIONS.spawn}</DropdownMenuLabel>
-              {SPAWN_MODE_ORDER.map((mode) => {
-                const unavailable = mode === "worktree" && !folder.git;
-                return (
-                  <DropdownMenuRadioItem
-                    key={mode}
-                    value={mode}
-                    disabled={unavailable || chooseSpawnMode.isPending}
-                  >
-                    <span className="flex flex-col">
-                      {SPAWN_MODES[mode].title}
-                      <span className="text-xs text-muted-foreground">
-                        {unavailable
-                          ? FOLDERS_DESCRIPTIONS.worktree_needs_repository
-                          : SPAWN_MODES[mode].description}
-                      </span>
-                    </span>
-                  </DropdownMenuRadioItem>
-                );
-              })}
-            </DropdownMenuRadioGroup>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setOptionsOpen(true)}>
+              {FOLDERS_DESCRIPTIONS.claude_options}
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             {server ? (
               <DropdownMenuItem onClick={() => setLogOpen(true)}>
@@ -257,6 +228,7 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <ClaudeOptionsDialog folder={folder} open={optionsOpen} onOpenChange={setOptionsOpen} />
         <DeleteFolderDialog
           folder={folder}
           served={server?.state === "running" || server?.state === "starting"}

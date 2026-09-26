@@ -17,6 +17,7 @@ export interface AutocompleteProps {
   onValueChange: (value: string) => void;
   /** Names the button that opens the list. */
   showOptionsLabel: string;
+  placeholder?: string;
   "aria-invalid"?: boolean;
   "aria-describedby"?: string;
 }
@@ -31,6 +32,7 @@ function Autocomplete({
   options,
   onValueChange,
   showOptionsLabel,
+  placeholder,
   "aria-invalid": invalid,
   "aria-describedby": describedBy,
 }: AutocompleteProps) {
@@ -55,6 +57,7 @@ function Autocomplete({
       <div className="relative">
         <AutocompletePrimitive.Input
           id={id}
+          placeholder={placeholder}
           aria-invalid={invalid}
           aria-describedby={describedBy}
           spellCheck={false}

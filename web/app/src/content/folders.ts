@@ -9,7 +9,7 @@ export const FOLDERS_DESCRIPTIONS = {
   worktrees: (count: number) => (count === 1 ? "1 worktree" : `${count} worktrees`),
   more_actions: (folder: string) => `More ${folder} actions`,
   open: (folder: string) => `Open ${folder} on claude.ai/code`,
-  spawn: "New sessions work in",
+  claude_options: "Claude Code options",
   worktree_needs_repository: "Needs a git repository.",
   delete: "Delete",
   cloning: "Cloning",
@@ -38,21 +38,32 @@ export const CLONE_DESCRIPTIONS = {
   submit: "Clone",
 } as const;
 
-export const SPAWN_MODES: Record<
-  SpawnMode,
-  { title: string; description: string; saved: (folder: string) => string }
-> = {
+export const SPAWN_MODES: Record<SpawnMode, { title: string; description: string }> = {
   "same-dir": {
     title: "The folder",
     description: "Sessions share the folder and its branch.",
-    saved: (folder) => `New ${folder} sessions work in the folder.`,
   },
   worktree: {
     title: "Their own worktree",
     description: "Each on a new branch in .claude/worktrees.",
-    saved: (folder) => `New ${folder} sessions get their own worktree.`,
   },
 };
+
+export const CLAUDE_OPTIONS_DESCRIPTIONS = {
+  title: (folder: string) => `Claude Code in ${folder}`,
+  description: "Empty fields follow Settings.",
+  spawn: "New sessions work in",
+  permission_mode: "Permission mode",
+  permission_mode_default: (mode: string) => `Default: ${mode}`,
+  permission_mode_word: "Enter one word, such as plan, or leave it empty.",
+  capacity: "Sessions at once",
+  capacity_default: (capacity: number | null | undefined) =>
+    capacity == null ? "Default: Claude Code's" : `Default: ${capacity}`,
+  capacity_range: "Enter a whole number of 1 or more, or leave it empty.",
+  cancel: "Cancel",
+  save: "Save",
+  saved: (folder: string) => `Saved the Claude Code options for ${folder}.`,
+} as const;
 
 export const DELETE_FOLDER_DESCRIPTIONS = {
   title: (folder: string) => `Delete ${folder}?`,

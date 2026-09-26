@@ -7,7 +7,7 @@ use utoipa::ToSchema;
 use super::{ApiError, AppState, ErrorBody, Session, internal};
 use crate::manager::folders::{FolderChoiceError, FolderDeleteError, FolderStatus};
 use crate::manager::git::UnsavedWork;
-use crate::manager::remote_control::SpawnMode;
+use crate::manager::remote_control::ClaudeOptions;
 
 #[utoipa::path(
     get,
@@ -60,36 +60,35 @@ pub async fn choose_to_serve(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Where a folder's sessions work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct SpawnModeBody {
-    pub spawn: SpawnMode,
-}
-
 #[utoipa::path(
     put,
-    path = "/api/v1/folders/{name}/spawn-mode",
-    operation_id = "chooseFolderSpawnMode",
+    path = "/api/v1/folders/{name}/claude-options",
+    operation_id = "chooseFolderClaudeOptions",
     tag = "folders",
-    summary = "Choose where a folder's sessions work",
+    summary = "Choose a folder's own Claude Code options",
     description = "Restarts the folder's Remote Control server if it is running.",
     params(("name" = String, Path, description = "The folder's name in /projects")),
-    request_body = SpawnModeBody,
+    request_body = ClaudeOptions,
     responses(
         (status = 204, description = "Saved"),
+        (status = 400, description = "Claude Code cannot take the options", body = ErrorBody),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody),
         (status = 404, description = "No such folder", body = ErrorBody),
         (status = 409, description = "Worktrees need a git repository", body = ErrorBody)
     )
 )]
-pub async fn choose_spawn_mode(
+pub async fn choose_claude_options(
     _: Session,
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Json(body): Json<SpawnModeBody>,
+    Json(body): Json<ClaudeOptions>,
 ) -> Result<StatusCode, ApiError> {
+    let options = body.trimmed();
+    if let Some(problem) = options.problem() {
+        return Err(ApiError::BadRequest(problem));
+    }
     state
-        .change_folder_choice(&name, |choice| choice.spawn = body.spawn)
+        .change_folder_choice(&name, |choice| choice.options = options)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -173,6 +172,7 @@ mod tests {
 
     use super::super::test_support::{ResponseExt, TestManager};
     use super::*;
+    use crate::manager::remote_control::SpawnMode;
     use std::collections::BTreeMap;
 
     use crate::manager::folders::{Folder, GitDetails, ProjectsDirectory};
@@ -360,7 +360,7 @@ mod tests {
                         git: None,
                     },
                     serve: false,
-                    spawn: SpawnMode::SameDir,
+                    claude: ClaudeOptions::default(),
                 },
                 FolderStatus {
                     folder: Folder {
@@ -372,7 +372,7 @@ mod tests {
                         }),
                     },
                     serve: true,
-                    spawn: SpawnMode::SameDir,
+                    claude: ClaudeOptions::default(),
                 },
             ]
         );
@@ -410,7 +410,7 @@ mod tests {
                 "repo".to_owned(),
                 FolderChoice {
                     serve: true,
-                    spawn: SpawnMode::SameDir
+                    ..FolderChoice::default()
                 }
             )])
         );
@@ -461,32 +461,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_repositories_can_use_worktrees() {
+    async fn a_folder_keeps_its_own_claude_options() {
         let manager = TestManager::new();
         let cookie = manager.logged_in().await;
         let ProjectsDirectory(projects) = &manager.state.projects;
         fs::create_dir_all(projects.join("notes")).expect("folder is created");
         fs::create_dir_all(projects.join("repo/.git")).expect("repository is created");
-        let worktree = r#"{"spawn":"worktree"}"#;
+        let options = r#"{"spawn":"worktree","permission_mode":" plan ","capacity":2}"#;
         assert_eq!(
             manager
-                .put("/api/v1/folders/repo/spawn-mode", worktree, None)
+                .put("/api/v1/folders/repo/claude-options", options, None)
                 .await
                 .status(),
             StatusCode::UNAUTHORIZED
         );
 
         let chosen = manager
-            .put("/api/v1/folders/repo/spawn-mode", worktree, Some(&cookie))
+            .put(
+                "/api/v1/folders/repo/claude-options",
+                options,
+                Some(&cookie),
+            )
             .await;
         assert_eq!(chosen.status(), StatusCode::NO_CONTENT);
-        assert_eq!(
-            manager.choice_of("repo").await,
-            FolderChoice {
-                serve: true,
-                spawn: SpawnMode::Worktree
-            }
-        );
+        let expected = ClaudeOptions {
+            spawn: SpawnMode::Worktree,
+            permission_mode: Some("plan".to_owned()),
+            capacity: Some(2),
+        };
+        assert_eq!(manager.choice_of("repo").await.options, expected);
         let folders: Vec<FolderStatus> = manager
             .get("/api/v1/folders", Some(&cookie))
             .await
@@ -494,24 +497,47 @@ mod tests {
             .await;
         assert_eq!(
             folders
-                .iter()
-                .map(|folder| folder.spawn)
+                .into_iter()
+                .map(|folder| folder.claude)
                 .collect::<Vec<_>>(),
-            [SpawnMode::SameDir, SpawnMode::Worktree]
+            [ClaudeOptions::default(), expected]
         );
 
-        for (name, status) in [
-            ("notes", StatusCode::CONFLICT),
-            ("gone", StatusCode::NOT_FOUND),
+        let followed = manager
+            .put(
+                "/api/v1/folders/repo/claude-options",
+                r#"{"spawn":"same-dir","permission_mode":""}"#,
+                Some(&cookie),
+            )
+            .await;
+        assert_eq!(followed.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            manager.choice_of("repo").await.options,
+            ClaudeOptions::default()
+        );
+
+        for (name, body, status) in [
+            ("notes", r#"{"spawn":"worktree"}"#, StatusCode::CONFLICT),
+            ("gone", r#"{"spawn":"same-dir"}"#, StatusCode::NOT_FOUND),
+            (
+                "repo",
+                r#"{"spawn":"same-dir","capacity":0}"#,
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                "repo",
+                r#"{"spawn":"same-dir","permission_mode":"two words"}"#,
+                StatusCode::BAD_REQUEST,
+            ),
         ] {
             let refused = manager
                 .put(
-                    &format!("/api/v1/folders/{name}/spawn-mode"),
-                    worktree,
+                    &format!("/api/v1/folders/{name}/claude-options"),
+                    body,
                     Some(&cookie),
                 )
                 .await;
-            assert_eq!(refused.status(), status, "{name}");
+            assert_eq!(refused.status(), status, "{name} {body}");
         }
         assert_eq!(manager.choice_of("notes").await, FolderChoice::default());
     }

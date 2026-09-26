@@ -1,5 +1,5 @@
 import {
-  chooseFolderSpawnModeMutation,
+  chooseFolderClaudeOptionsMutation,
   chooseToServeFolderMutation,
   cloneRepositoryMutation,
   deleteFolderMutation,
@@ -8,7 +8,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
-import { DELETE_FOLDER_DESCRIPTIONS, SPAWN_MODES } from "@/content/folders";
+import { CLAUDE_OPTIONS_DESCRIPTIONS, DELETE_FOLDER_DESCRIPTIONS } from "@/content/folders";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 
 /** Choosing whether the Claude app lists a folder and where its sessions work, and deleting it. Each refreshes the folders. */
@@ -20,10 +20,10 @@ export function useFolderActions() {
     ...chooseToServeFolderMutation(),
     onSettled: refreshFolders,
   });
-  const chooseSpawnMode = useMutation({
-    ...chooseFolderSpawnModeMutation(),
-    onSuccess: (_saved, { path, body }) =>
-      toastManager.add({ title: SPAWN_MODES[body.spawn].saved(path.name) }),
+  const chooseClaudeOptions = useMutation({
+    ...chooseFolderClaudeOptionsMutation(),
+    onSuccess: (_saved, { path }) =>
+      toastManager.add({ title: CLAUDE_OPTIONS_DESCRIPTIONS.saved(path.name) }),
     onSettled: refreshFolders,
   });
   const deleteFolder = useMutation({
@@ -33,7 +33,7 @@ export function useFolderActions() {
     },
     onSettled: refreshFolders,
   });
-  return { chooseToServe, chooseSpawnMode, deleteFolder };
+  return { chooseToServe, chooseClaudeOptions, deleteFolder };
 }
 
 /** Starting a clone, and stopping or dismissing one. Each refreshes the clones. */

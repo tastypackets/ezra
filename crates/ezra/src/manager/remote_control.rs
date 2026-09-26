@@ -85,10 +85,7 @@ impl RemoteControlSettings {
         let mode = self.permission_mode.trim();
         if mode.is_empty() || mode.contains(char::is_whitespace) {
             Some("the permission mode must be one word")
-        } else if self
-            .capacity
-            .is_some_and(|capacity| capacity < 1)
-        {
+        } else if self.capacity.is_some_and(|capacity| capacity < 1) {
             Some("capacity must be at least 1")
         } else {
             None
@@ -129,6 +126,46 @@ impl SpawnMode {
             Self::SameDir => "same-dir",
             Self::Worktree => "worktree",
         }
+    }
+}
+
+/// A folder's own Claude Code options. Absent ones follow the Settings page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClaudeOptions {
+    /// Where new sessions work, always `same-dir` outside a repository.
+    pub spawn: SpawnMode,
+    /// The permission mode for the folder's sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// The most sessions the folder's server runs at once, at least 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(minimum = 1)]
+    pub capacity: Option<u32>,
+}
+
+impl ClaudeOptions {
+    /// `None` when Claude takes the options, or why not.
+    pub fn problem(&self) -> Option<&'static str> {
+        if self
+            .permission_mode
+            .as_deref()
+            .is_some_and(|mode| mode.contains(char::is_whitespace))
+        {
+            Some("the permission mode must be one word")
+        } else if self.capacity.is_some_and(|capacity| capacity < 1) {
+            Some("capacity must be at least 1")
+        } else {
+            None
+        }
+    }
+
+    /// An empty permission mode follows the Settings page.
+    pub fn trimmed(mut self) -> Self {
+        self.permission_mode = self
+            .permission_mode
+            .map(|mode| mode.trim().to_owned())
+            .filter(|mode| !mode.is_empty());
+        self
     }
 }
 
@@ -918,7 +955,7 @@ impl AppState {
                 folder.map(|folder| claude.folder_choice(&folder)),
             )
         };
-        if !settings.enabled || choice.is_some_and(|choice| !choice.serve) {
+        if !settings.enabled || choice.as_ref().is_some_and(|choice| !choice.serve) {
             return Wanted::Off;
         }
         if AgentCli::installed(Agent::Claude, &self.install_paths).is_err() {
@@ -929,6 +966,7 @@ impl AppState {
             Some(_) => return Wanted::Waiting,
             None => return Wanted::Unknown,
         }
+        let options = choice.map(|choice| choice.options).unwrap_or_default();
         Wanted::Server(Launch {
             claude: self.install_paths.command(Agent::Claude),
             claude_version: self.install_paths.installed_version(Agent::Claude),
@@ -937,10 +975,10 @@ impl AppState {
                 .config_directory(Agent::Claude)
                 .map(Path::to_path_buf),
             directory: directory.to_path_buf(),
-            spawn: choice.map_or(SpawnMode::SameDir, |choice| choice.spawn),
+            spawn: options.spawn,
             log: self.remote_control.log(served),
-            permission_mode: settings.permission_mode,
-            capacity: settings.capacity,
+            permission_mode: options.permission_mode.unwrap_or(settings.permission_mode),
+            capacity: options.capacity.or(settings.capacity),
         })
     }
 
@@ -2330,7 +2368,7 @@ esac"#,
     }
 
     #[tokio::test]
-    async fn a_new_spawn_mode_restarts_only_that_folders_server() {
+    async fn a_folders_own_options_restart_only_that_folders_server() {
         let manager = TestManager::new();
         let directory = tempfile::tempdir().expect("temporary directory");
         let starts = directory.path().join("starts");
@@ -2338,7 +2376,7 @@ esac"#,
             &manager,
             directory.path(),
             &format!(
-                "echo \"$(basename \"$PWD\") $3\" >> {}; echo \"https://claude.ai/code?environment=env_$(basename \"$PWD\")\"; exec sleep 60",
+                "echo \"$(basename \"$PWD\") $*\" >> {}; echo \"https://claude.ai/code?environment=env_$(basename \"$PWD\")\"; exec sleep 60",
                 starts.display()
             ),
         );
@@ -2349,24 +2387,44 @@ esac"#,
         wait_in(&state, &app, ServerState::Running).await;
 
         state
-            .change_folder_choice("app", |choice| choice.spawn = SpawnMode::Worktree)
+            .change_folder_choice("app", |choice| {
+                choice.options = ClaudeOptions {
+                    spawn: SpawnMode::Worktree,
+                    permission_mode: Some("plan".to_owned()),
+                    capacity: Some(2),
+                };
+            })
             .await
             .expect("the choice is saved");
         let deadline = Instant::now()
             .checked_add(Duration::from_secs(10))
             .expect("the deadline fits");
-        let expected = ["app same-dir", "app worktree", "projects same-dir"];
+        let arguments = |spawn: &str, rest: &str| {
+            format!("remote-control --spawn {spawn} {rest}--permission-mode")
+        };
         loop {
-            let mut started: Vec<String> = fs::read_to_string(&starts)
-                .unwrap_or_default()
+            let started = fs::read_to_string(&starts).unwrap_or_default();
+            let app_starts: Vec<&str> = started
                 .lines()
-                .map(str::to_owned)
+                .filter(|line| line.starts_with("app "))
                 .collect();
-            started.sort();
-            if started == expected {
+            if let [first, second] = app_starts[..] {
+                assert!(first.contains(&arguments("same-dir", "")), "{first}");
+                assert!(first.contains("--permission-mode auto"), "{first}");
+                assert!(
+                    second.contains(&arguments("worktree", "--capacity 2 ")),
+                    "{second}"
+                );
+                assert!(second.contains("--permission-mode plan"), "{second}");
+                let projects: Vec<&str> = started
+                    .lines()
+                    .filter(|line| line.starts_with("projects "))
+                    .collect();
+                assert_eq!(projects.len(), 1, "{started}");
+                assert!(!projects[0].contains("--capacity"), "{started}");
                 break;
             }
-            assert!(Instant::now() < deadline, "started {started:?}");
+            assert!(Instant::now() < deadline, "started {started}");
             sleep(Duration::from_millis(50)).await;
         }
         wait_in(&state, &app, ServerState::Running).await;
