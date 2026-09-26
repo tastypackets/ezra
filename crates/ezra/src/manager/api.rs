@@ -1,4 +1,5 @@
 mod agents;
+mod git;
 mod login;
 pub mod session;
 mod settings;
@@ -9,7 +10,7 @@ use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::CookieJar;
 use serde::Serialize;
@@ -37,6 +38,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/agents/claude/settings",
             get(settings::claude).put(settings::update_claude),
         )
+        .route("/api/v1/git", get(git::status))
+        .route("/api/v1/git/github/login", post(git::start_github_login))
+        .route("/api/v1/git/github/logout", post(git::log_out_of_github))
+        .route("/api/v1/git/identity", put(git::update_identity))
         .route("/api", any(not_found))
         .route("/api/", any(not_found))
         .route("/api/{*path}", any(not_found))
@@ -127,6 +132,10 @@ pub struct ErrorBody {
         login::log_out,
         settings::claude,
         settings::update_claude,
+        git::status,
+        git::start_github_login,
+        git::log_out_of_github,
+        git::update_identity,
     )
 )]
 pub struct ApiDoc;

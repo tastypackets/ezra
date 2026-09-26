@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
+use super::git::GitTools;
 use super::login::LoginProcess;
 use super::settings::{Settings, SettingsError};
 use super::updates::LatestRelease;
@@ -22,6 +23,8 @@ pub struct AppState {
     pub download_tls_verification: TlsVerification,
     pub installs_in_progress: Arc<Mutex<HashMap<Agent, Arc<InstallProgress>>>>,
     pub latest_releases: Arc<Mutex<HashMap<Agent, LatestRelease>>>,
+    pub git_tools: Arc<GitTools>,
+    pub github_login: Arc<Mutex<Option<LoginProcess>>>,
 }
 
 impl AppState {
@@ -30,6 +33,7 @@ impl AppState {
         settings: Settings,
         install_paths: InstallPaths,
         download_tls_verification: TlsVerification,
+        git_tools: GitTools,
     ) -> Self {
         Self {
             settings_path: Arc::new(settings_path),
@@ -41,6 +45,8 @@ impl AppState {
             download_tls_verification,
             installs_in_progress: Arc::default(),
             latest_releases: Arc::default(),
+            git_tools: Arc::new(git_tools),
+            github_login: Arc::default(),
         }
     }
 

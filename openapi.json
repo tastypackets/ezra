@@ -364,6 +364,185 @@
         }
       }
     },
+    "/api/v1/git": {
+      "get": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Get the GitHub sign-in and commit identity",
+        "operationId": "getGitStatus",
+        "responses": {
+          "200": {
+            "description": "Git status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/git/github/login": {
+      "post": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Start GitHub sign-in",
+        "description": "Starts a device sign-in and returns the page to open and the code to enter there.",
+        "operationId": "startGitHubLogin",
+        "responses": {
+          "200": {
+            "description": "Sign-in started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginPrompt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The sign-in comes from an environment variable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "gh did not start a sign-in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/git/github/logout": {
+      "post": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Sign git out of GitHub",
+        "operationId": "logOutOfGitHub",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The sign-in comes from an environment variable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "gh could not sign out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/git/identity": {
+      "put": {
+        "tags": [
+          "git"
+        ],
+        "summary": "Set the commit name and email",
+        "description": "An empty or missing value removes it.",
+        "operationId": "updateCommitIdentity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitIdentity"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitIdentity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "git could not save it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/login": {
       "post": {
         "tags": [
@@ -607,6 +786,24 @@
           }
         }
       },
+      "CommitIdentity": {
+        "type": "object",
+        "description": "The name and email git writes into commits.",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "DownloadProgress": {
         "type": "object",
         "description": "How far a download has got.",
@@ -643,9 +840,65 @@
           }
         }
       },
+      "GitHubStatus": {
+        "type": "object",
+        "description": "The GitHub sign-in git pushes with.",
+        "required": [
+          "signed_in",
+          "failing",
+          "from_environment"
+        ],
+        "properties": {
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The GitHub account, absent when unknown."
+          },
+          "failing": {
+            "type": "boolean",
+            "description": "An account is set up, but GitHub did not confirm it."
+          },
+          "from_environment": {
+            "type": "boolean",
+            "description": "Comes from `GH_TOKEN` or `GITHUB_TOKEN`, so sign-in and sign-out return 409."
+          },
+          "login_prompt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LoginPrompt",
+                "description": "Present while a sign-in waits for the person signing in."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signed_in": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GitStatus": {
+        "type": "object",
+        "description": "The GitHub sign-in and commit identity git uses.",
+        "required": [
+          "github",
+          "identity"
+        ],
+        "properties": {
+          "github": {
+            "$ref": "#/components/schemas/GitHubStatus"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/CommitIdentity"
+          }
+        }
+      },
       "LoginPrompt": {
         "type": "object",
-        "description": "What the person signing in needs: a link to open, and for Codex a code to type there.",
+        "description": "What the person signing in needs: a page to open, and sometimes a code to enter there.",
         "required": [
           "url"
         ],
@@ -655,7 +908,7 @@
               "string",
               "null"
             ],
-            "description": "The one-time code to enter on that page, Codex only."
+            "description": "The one-time code to enter on that page, when the sign-in uses one."
           },
           "url": {
             "type": "string",

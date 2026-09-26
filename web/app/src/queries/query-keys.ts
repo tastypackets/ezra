@@ -6,3 +6,5 @@ export const AGENTS = "agents";
 export const AGENT_ACTION = "agent_action";
 /** How the manager installs and updates Claude Code. */
 export const CLAUDE_SETTINGS = "claude_settings";
+/** The GitHub sign-in and commit identity git uses. */
+export const GIT = "git";

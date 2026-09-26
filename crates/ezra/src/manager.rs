@@ -1,6 +1,7 @@
 mod agents;
 mod api;
 mod auth;
+mod git;
 mod login;
 mod settings;
 mod state;
@@ -94,9 +95,11 @@ async fn serve() -> Result<(), ManagerError> {
         agents::InstallPaths::under_home(Path::new(&home))
             .with_config_directories_from_environment(),
         tls_verification,
+        git::GitTools::from_environment(Path::new(&home)),
     );
     tokio::spawn(state.clone().reinstall_configured_agents());
     tokio::spawn(state.clone().check_for_updates_regularly());
+    tokio::spawn(state.clone().lend_github_sign_in_at_start());
     let app = state.into_router(web_directory);
     axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
         .handle(handle)

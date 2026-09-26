@@ -125,12 +125,12 @@ impl AgentCli {
     }
 }
 
-/// What the person signing in needs: a link to open, and for Codex a code to type there.
+/// What the person signing in needs: a page to open, and sometimes a code to enter there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct LoginPrompt {
     /// The sign-in page to open.
     pub url: String,
-    /// The one-time code to enter on that page, Codex only.
+    /// The one-time code to enter on that page, when the sign-in uses one.
     pub code: Option<String>,
 }
 
@@ -237,7 +237,16 @@ impl LoginProcess {
     }
 
     pub fn has_finished(&mut self) -> bool {
-        !matches!(self.child.try_wait(), Ok(None))
+        self.outcome().is_some()
+    }
+
+    /// `None` while it runs, then whether it succeeded.
+    pub fn outcome(&mut self) -> Option<bool> {
+        match self.child.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) => Some(status.success()),
+            Err(_) => Some(false),
+        }
     }
 
     /// Claude only: sends the code shown after signing in, then waits for the login to finish.

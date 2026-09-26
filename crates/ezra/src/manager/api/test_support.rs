@@ -12,6 +12,7 @@ use tower::ServiceExt;
 
 use super::session::SessionStatus;
 use crate::manager::agents::{InstallPaths, TlsVerification};
+use crate::manager::git::GitTools;
 use crate::manager::settings::Settings;
 use crate::manager::state::AppState;
 
@@ -51,6 +52,7 @@ impl TestManager {
             Settings::default(),
             install_paths,
             TlsVerification::default(),
+            GitTools::under(directory.path()),
         );
         Self {
             router: state.clone().into_router(directory.path().join("web")),
