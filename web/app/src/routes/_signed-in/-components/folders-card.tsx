@@ -1,4 +1,4 @@
-import type { Folder } from "@ezra/client";
+import type { FolderStatus } from "@ezra/client";
 import { useQuery } from "@tanstack/react-query";
 
 import { Card, CardHeader } from "@/components/ui/card";
@@ -37,7 +37,7 @@ export function FoldersCard() {
   );
 }
 
-function FolderRow({ folder }: { folder: Folder }) {
+function FolderRow({ folder }: { folder: FolderStatus }) {
   const detail = folder.git ? folder.git.repository : FOLDERS_DESCRIPTIONS.not_git;
   return (
     <li className="flex flex-col gap-0.5 px-5 py-3">

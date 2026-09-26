@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -61,6 +62,9 @@ pub struct ClaudeSettings {
     pub release_channel: ReleaseChannel,
     #[serde(default)]
     pub remote_control: RemoteControlSettings,
+    /// Folders in /projects with their own choice of being served, by name.
+    #[serde(default)]
+    pub folders: BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-import type { AgentStatus, Folder, SessionStatus } from "@ezra/client";
+import type { AgentStatus, FolderStatus, SessionStatus } from "@ezra/client";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { agentsQueryOptions } from "@/queries/agent-queries";
@@ -9,7 +9,7 @@ import { sessionQueryOptions } from "@/queries/session-queries";
 interface InitialData {
   session: SessionStatus;
   agents: AgentStatus[] | null;
-  folders: Folder[] | null;
+  folders: FolderStatus[] | null;
 }
 
 /**

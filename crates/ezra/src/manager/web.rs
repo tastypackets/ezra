@@ -13,7 +13,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::api::session::SessionStatus;
-use super::folders::Folder;
+use super::folders::FolderStatus;
 use super::state::AppState;
 use super::status::AgentStatus;
 
@@ -27,7 +27,7 @@ struct InitialData {
     /// Present only when the request is signed in.
     agents: Option<Vec<AgentStatus>>,
     /// Present only when the request is signed in and /projects can be read.
-    folders: Option<Vec<Folder>>,
+    folders: Option<Vec<FolderStatus>>,
 }
 
 impl InitialData {
@@ -43,7 +43,7 @@ impl InitialData {
         Self {
             session,
             agents: Some(AgentStatus::gather_all(app).await),
-            folders: app.folders().await.ok(),
+            folders: app.folder_statuses().await.ok(),
         }
     }
 

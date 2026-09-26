@@ -389,7 +389,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Folder"
+                    "$ref": "#/components/schemas/FolderStatus"
                   }
                 }
               }
@@ -397,6 +397,62 @@
           },
           "401": {
             "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/folders/{name}/remote-control": {
+      "put": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Choose whether the Claude app lists a folder",
+        "description": "Starts or stops the folder's Remote Control server.",
+        "operationId": "chooseToServeFolder",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The folder's name in /projects",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder",
             "content": {
               "application/json": {
                 "schema": {
@@ -923,6 +979,37 @@
           }
         }
       },
+      "FolderStatus": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Folder"
+          },
+          {
+            "type": "object",
+            "required": [
+              "serve"
+            ],
+            "properties": {
+              "remote_control": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RemoteControlStatus",
+                    "description": "The folder's Remote Control server, absent when it has none."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "serve": {
+                "type": "boolean",
+                "description": "Chosen to be served to the Claude app, by its own choice or by default."
+              }
+            }
+          }
+        ],
+        "description": "A folder with what the Claude app sees of it."
+      },
       "GitDetails": {
         "type": "object",
         "description": "Where a repository comes from and what it has checked out.",
@@ -1040,36 +1127,42 @@
       },
       "RemoteControlSettings": {
         "type": "object",
-        "description": "How Claude Code's Remote Control server runs.",
+        "description": "How Claude Code's Remote Control servers run.",
         "required": [
           "enabled",
           "permission_mode",
-          "capacity"
+          "capacity",
+          "serve_folders"
         ],
         "properties": {
           "capacity": {
             "type": "integer",
             "format": "int32",
-            "description": "The most sessions that run at once, from 1 to 32.",
+            "description": "The most sessions each server runs at once, from 1 to 32.",
             "default": 4,
             "maximum": 32,
             "minimum": 1
           },
           "enabled": {
             "type": "boolean",
-            "description": "Serve /projects to the Claude app while Claude Code is signed in.",
+            "description": "Serve /projects, and the folders chosen, to the Claude app while Claude Code is signed in.",
             "default": true
           },
           "permission_mode": {
             "type": "string",
             "description": "The permission mode for sessions started from the Claude app, such as `auto`.",
             "default": "auto"
+          },
+          "serve_folders": {
+            "type": "boolean",
+            "description": "Serve folders in /projects that have no choice of their own.",
+            "default": false
           }
         }
       },
       "RemoteControlStatus": {
         "type": "object",
-        "description": "The manager's view of the Remote Control server.",
+        "description": "The manager's view of one Remote Control server.",
         "required": [
           "state",
           "restarts"
@@ -1100,9 +1193,21 @@
           }
         }
       },
+      "ServeBody": {
+        "type": "object",
+        "description": "Whether the Claude app lists a folder.",
+        "required": [
+          "serve"
+        ],
+        "properties": {
+          "serve": {
+            "type": "boolean"
+          }
+        }
+      },
       "ServerState": {
         "type": "string",
-        "description": "Where the Remote Control server is in its life.",
+        "description": "Where a Remote Control server is in its life.",
         "enum": [
           "off",
           "waiting",

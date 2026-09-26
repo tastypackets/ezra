@@ -94,7 +94,12 @@ impl AgentStatus {
             config_disk_bytes: config_directory.and_then(|directory| directory.total_bytes().ok()),
             install_progress,
             available_update,
-            remote_control: (agent == Agent::Claude).then(|| state.remote_control.status()),
+            remote_control: (agent == Agent::Claude).then(|| {
+                state
+                    .remote_control
+                    .status_of(&state.projects.0)
+                    .unwrap_or_default()
+            }),
         }
     }
 }

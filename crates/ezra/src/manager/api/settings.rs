@@ -134,6 +134,7 @@ mod tests {
                 enabled: false,
                 permission_mode: "plan".to_owned(),
                 capacity: 2,
+                serve_folders: false,
             }
         );
         let on_disk = Settings::load(&manager.settings_path).expect("settings load");

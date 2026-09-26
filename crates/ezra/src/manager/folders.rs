@@ -7,7 +7,19 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{MissedTickBehavior, interval};
 use utoipa::ToSchema;
 
+use super::remote_control::RemoteControlStatus;
+use super::settings::SettingsError;
 use super::state::AppState;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FolderChoiceError {
+    #[error("no such folder")]
+    NoSuchFolder,
+    #[error("could not list the folders in /projects: {0}")]
+    Scan(io::Error),
+    #[error(transparent)]
+    Settings(SettingsError),
+}
 
 pub const PROJECTS_DIRECTORY: &str = "/projects";
 const RESCAN_INTERVAL: Duration = Duration::from_secs(30);
@@ -33,11 +45,26 @@ pub struct GitDetails {
     pub repository: Option<String>,
 }
 
+/// A folder with what the Claude app sees of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FolderStatus {
+    #[serde(flatten)]
+    pub folder: Folder,
+    /// Chosen to be served to the Claude app, by its own choice or by default.
+    pub serve: bool,
+    /// The folder's Remote Control server, absent when it has none.
+    pub remote_control: Option<RemoteControlStatus>,
+}
+
 /// The directory whose folders agents work in, usually /projects.
 #[derive(Debug, Clone)]
 pub struct ProjectsDirectory(pub PathBuf);
 
 impl ProjectsDirectory {
+    pub fn folder(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+
     /// Top-level folders sorted by name. Hidden folders, and ones that vanish or cannot be read
     /// while listing, are left out.
     pub fn folders(&self) -> io::Result<Vec<Folder>> {
@@ -285,21 +312,69 @@ impl AppState {
         }
     }
 
-    /// Keeps the folder list in `/projects/AGENTS.md` current.
+    pub async fn folder_statuses(&self) -> io::Result<Vec<FolderStatus>> {
+        let mut statuses = Vec::new();
+        for folder in self.folders().await? {
+            statuses.push(FolderStatus {
+                serve: self.serves_folder(&folder.name).await,
+                remote_control: self
+                    .remote_control
+                    .status_of(&self.projects.folder(&folder.name)),
+                folder,
+            });
+        }
+        Ok(statuses)
+    }
+
+    /// Records the folder's own choice, and drops the choices of folders that are gone.
+    pub async fn choose_to_serve_folder(
+        &self,
+        name: &str,
+        serve: bool,
+    ) -> Result<(), FolderChoiceError> {
+        let names: Vec<String> = self
+            .folders()
+            .await
+            .map_err(FolderChoiceError::Scan)?
+            .into_iter()
+            .map(|folder| folder.name)
+            .collect();
+        if !names.iter().any(|folder| folder == name) {
+            return Err(FolderChoiceError::NoSuchFolder);
+        }
+        self.update_settings(|settings| {
+            let choices = &mut settings.agents.claude.folders;
+            choices.retain(|folder, _| names.contains(folder));
+            choices.insert(name.to_owned(), serve);
+            Ok::<(), SettingsError>(())
+        })
+        .await
+        .map_err(FolderChoiceError::Settings)?;
+        self.remote_control.reconsider();
+        Ok(())
+    }
+
+    /// Keeps the folder list in `/projects/AGENTS.md` current, and servers in step with it.
     pub async fn describe_folders_regularly(self) {
         let mut rescan = interval(RESCAN_INTERVAL);
         rescan.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut known: Vec<Folder> = Vec::new();
         loop {
             rescan.tick().await;
             let projects = self.projects.clone();
             let described = tokio::task::spawn_blocking(move || {
-                projects
-                    .folders()
-                    .and_then(|folders| projects.describe_folders_for_agents(&folders))
+                let folders = projects.folders()?;
+                projects.describe_folders_for_agents(&folders)?;
+                Ok::<_, io::Error>(folders)
             })
             .await;
             match described {
-                Ok(Ok(())) => {}
+                Ok(Ok(folders)) => {
+                    if folders != known {
+                        known = folders;
+                        self.remote_control.reconsider();
+                    }
+                }
                 Ok(Err(error)) => {
                     tracing::warn!("could not describe the folders in /projects: {error}");
                 }

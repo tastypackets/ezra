@@ -40,6 +40,10 @@ pub fn router(state: AppState) -> Router {
             get(settings::claude).put(settings::update_claude),
         )
         .route("/api/v1/folders", get(folders::list))
+        .route(
+            "/api/v1/folders/{name}/remote-control",
+            put(folders::choose_to_serve),
+        )
         .route("/api/v1/git", get(git::status))
         .route("/api/v1/git/github/login", post(git::start_github_login))
         .route("/api/v1/git/github/logout", post(git::log_out_of_github))
@@ -139,6 +143,7 @@ pub struct ErrorBody {
         git::log_out_of_github,
         git::update_identity,
         folders::list,
+        folders::choose_to_serve,
     )
 )]
 pub struct ApiDoc;
