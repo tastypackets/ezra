@@ -1,12 +1,12 @@
-use std::fs;
 use std::io;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::agents::{self, Agent};
-use super::login::{self, LoginPrompt};
+use super::agents::Agent;
+use super::login::{LoginPrompt, SignInStatus};
 use super::state::AppState;
+use crate::path_ext::PathExt;
 
 /// Everything shown about one agent. Details read from the CLI or its files are `None`
 /// when they cannot be read, for example after a CLI changes how it stores sessions.
@@ -22,153 +22,105 @@ pub struct AgentStatus {
     pub config_disk_bytes: Option<u64>,
 }
 
-pub async fn all_agent_statuses(state: &AppState) -> Vec<AgentStatus> {
-    let mut statuses = Vec::new();
-    for agent in Agent::ALL {
-        statuses.push(agent_status(agent, state).await);
-    }
-    statuses
-}
-
-pub async fn agent_status(agent: Agent, state: &AppState) -> AgentStatus {
-    let login_prompt = {
-        let mut logins = state.logins.lock().await;
-        if logins
-            .get_mut(&agent)
-            .is_some_and(|login| login.has_finished())
-        {
-            logins.remove(&agent);
+impl AgentStatus {
+    pub async fn gather_all(state: &AppState) -> Vec<Self> {
+        let mut statuses = Vec::new();
+        for agent in Agent::ALL {
+            statuses.push(Self::gather(agent, state).await);
         }
-        logins.get(&agent).and_then(|login| login.prompt().cloned())
-    };
-    let sign_in = login::sign_in_status(agent, &state.install_paths).await;
-    let config_directory = state.install_paths.config_directory(agent);
-    AgentStatus {
-        agent,
-        configured: state.settings.lock().await.agent(agent).configured,
-        installed_version: agents::installed_version(agent, &state.install_paths),
-        logged_in: sign_in.logged_in,
-        account: sign_in.account,
-        login_prompt,
-        session_count: config_directory.and_then(|directory| session_count(agent, directory).ok()),
-        config_disk_bytes: config_directory.and_then(|directory| disk_bytes(directory).ok()),
+        statuses
     }
-}
 
-/// Claude keeps `projects/<project>/<session>.jsonl`; Codex keeps `sessions/<year>/<month>/<day>/rollout-*.jsonl`.
-fn session_count(agent: Agent, config_directory: &Path) -> io::Result<u64> {
-    match agent {
-        Agent::Claude => {
-            let projects = config_directory.join("projects");
-            let mut count = 0;
-            for project in read_dir_or_empty(&projects)? {
-                if project.is_dir() {
-                    count += count_jsonl_files(&project, false)?;
-                }
+    pub async fn gather(agent: Agent, state: &AppState) -> Self {
+        let login_prompt = {
+            let mut logins = state.logins.lock().await;
+            if logins
+                .get_mut(&agent)
+                .is_some_and(|login| login.has_finished())
+            {
+                logins.remove(&agent);
             }
-            Ok(count)
-        }
-        Agent::Codex => count_jsonl_files(&config_directory.join("sessions"), true),
-    }
-}
-
-fn count_jsonl_files(directory: &Path, recursive: bool) -> io::Result<u64> {
-    let mut count = 0;
-    for path in read_dir_or_empty(directory)? {
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.is_dir() && recursive {
-            count += count_jsonl_files(&path, true)?;
-        } else if metadata.is_file()
-            && path
-                .extension()
-                .is_some_and(|extension| extension == "jsonl")
-        {
-            count += 1;
+            logins.get(&agent).and_then(|login| login.prompt().cloned())
+        };
+        let sign_in = SignInStatus::query(agent, &state.install_paths).await;
+        let config_directory = state.install_paths.config_directory(agent);
+        Self {
+            agent,
+            configured: state.settings.lock().await.agent(agent).configured,
+            installed_version: state.install_paths.installed_version(agent),
+            logged_in: sign_in.logged_in,
+            account: sign_in.account,
+            login_prompt,
+            session_count: config_directory
+                .and_then(|directory| agent.session_count(directory).ok()),
+            config_disk_bytes: config_directory.and_then(|directory| directory.total_bytes().ok()),
         }
     }
-    Ok(count)
 }
 
-fn disk_bytes(path: &Path) -> io::Result<u64> {
-    let metadata = match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
-        metadata => metadata?,
-    };
-    if !metadata.is_dir() {
-        return Ok(metadata.len());
-    }
-    let mut total = 0;
-    for entry in read_dir_or_empty(path)? {
-        total += disk_bytes(&entry)?;
-    }
-    Ok(total)
-}
-
-fn read_dir_or_empty(directory: &Path) -> io::Result<Vec<std::path::PathBuf>> {
-    match fs::read_dir(directory) {
-        Ok(entries) => entries
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error),
+impl Agent {
+    /// Claude keeps `projects/<project>/<session>.jsonl`; Codex keeps `sessions/<year>/<month>/<day>/rollout-*.jsonl`.
+    fn session_count(self, config_directory: &Path) -> io::Result<u64> {
+        match self {
+            Self::Claude => config_directory
+                .join("projects")
+                .entries_or_empty()?
+                .iter()
+                .filter(|project| project.is_dir())
+                .try_fold(0_u64, |count, project| {
+                    Ok(count.saturating_add(project.count_files_with_extension("jsonl", false)?))
+                }),
+            Self::Codex => config_directory
+                .join("sessions")
+                .count_files_with_extension("jsonl", true),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
-    fn write(path: &Path, contents: &str) {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
+    fn write(path: &Path) {
+        fs::create_dir_all(path.parent().expect("test paths have a parent"))
+            .expect("parent directory is created");
+        fs::write(path, "{}").expect("test file is written");
+    }
+
+    fn session_count(agent: Agent, config: &Path) -> u64 {
+        agent
+            .session_count(config)
+            .expect("sessions can be counted")
     }
 
     #[test]
     fn claude_sessions_are_jsonl_files_per_project() {
-        let config = tempfile::tempdir().unwrap();
-        write(
-            &config.path().join("projects/-projects-app/one.jsonl"),
-            "{}",
-        );
-        write(
-            &config.path().join("projects/-projects-app/two.jsonl"),
-            "{}",
-        );
-        write(
-            &config.path().join("projects/-projects-other/three.jsonl"),
-            "{}",
-        );
-        write(&config.path().join("projects/-projects-app/notes.txt"), "");
-        assert_eq!(session_count(Agent::Claude, config.path()).unwrap(), 3);
+        let config = tempfile::tempdir().expect("temporary directory");
+        for session in [
+            "projects/-projects-app/one.jsonl",
+            "projects/-projects-app/two.jsonl",
+            "projects/-projects-other/three.jsonl",
+            "projects/-projects-app/notes.txt",
+        ] {
+            write(&config.path().join(session));
+        }
+        assert_eq!(session_count(Agent::Claude, config.path()), 3);
     }
 
     #[test]
     fn codex_sessions_are_nested_by_date() {
-        let config = tempfile::tempdir().unwrap();
-        write(
-            &config.path().join("sessions/2026/09/25/rollout-a.jsonl"),
-            "{}",
-        );
-        write(
-            &config.path().join("sessions/2026/09/26/rollout-b.jsonl"),
-            "{}",
-        );
-        assert_eq!(session_count(Agent::Codex, config.path()).unwrap(), 2);
+        let config = tempfile::tempdir().expect("temporary directory");
+        write(&config.path().join("sessions/2026/09/25/rollout-a.jsonl"));
+        write(&config.path().join("sessions/2026/09/26/rollout-b.jsonl"));
+        assert_eq!(session_count(Agent::Codex, config.path()), 2);
     }
 
     #[test]
     fn no_session_store_means_no_sessions() {
-        let config = tempfile::tempdir().unwrap();
-        assert_eq!(session_count(Agent::Claude, config.path()).unwrap(), 0);
-        assert_eq!(session_count(Agent::Codex, config.path()).unwrap(), 0);
-    }
-
-    #[test]
-    fn disk_use_adds_up_file_sizes() {
-        let config = tempfile::tempdir().unwrap();
-        write(&config.path().join("a"), "12345");
-        write(&config.path().join("nested/b"), "123");
-        assert_eq!(disk_bytes(config.path()).unwrap(), 8);
-        assert_eq!(disk_bytes(&config.path().join("missing")).unwrap(), 0);
+        let config = tempfile::tempdir().expect("temporary directory");
+        assert_eq!(session_count(Agent::Claude, config.path()), 0);
+        assert_eq!(session_count(Agent::Codex, config.path()), 0);
     }
 }

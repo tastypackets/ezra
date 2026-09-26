@@ -14,9 +14,8 @@ use axum_extra::extract::cookie::CookieJar;
 use serde::Serialize;
 
 use super::auth::SESSION_COOKIE;
+use super::settings::SettingsError;
 use super::state::AppState;
-
-pub use agents::reinstall_configured_agents;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -76,6 +75,12 @@ impl IntoResponse for ApiError {
             }
         };
         (status, Json(ErrorBody { error: message })).into_response()
+    }
+}
+
+impl From<SettingsError> for ApiError {
+    fn from(error: SettingsError) -> Self {
+        Self::Internal(error.to_string())
     }
 }
 

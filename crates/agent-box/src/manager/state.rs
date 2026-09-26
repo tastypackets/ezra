@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use super::agents::{Agent, InstallPaths};
 use super::auth::Sessions;
 use super::login::LoginProcess;
-use super::settings::Settings;
+use super::settings::{Settings, SettingsError};
 
 /// Shared by the API and the pages.
 #[derive(Clone)]
@@ -30,6 +30,19 @@ impl AppState {
             install_lock: Arc::default(),
             logins: Arc::default(),
         }
+    }
+
+    /// Applies a change and saves it; the change becomes visible only once it is on disk.
+    pub async fn update_settings<E: From<SettingsError>>(
+        &self,
+        change: impl FnOnce(&mut Settings) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut settings = self.settings.lock().await;
+        let mut updated_settings = settings.clone();
+        change(&mut updated_settings)?;
+        updated_settings.save(&self.settings_path)?;
+        *settings = updated_settings;
+        Ok(())
     }
 
     pub fn is_session(&self, token: Option<&str>) -> bool {

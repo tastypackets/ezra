@@ -15,8 +15,13 @@ use std::process::ExitCode;
 use nix::errno::Errno;
 use nix::unistd::{AccessFlags, Uid, User, access};
 
-use apt_packages::APT_PACKAGES_VARIABLE;
-use environment::{AccountDetails, EnvironmentOverride};
+use apt_packages::{APT_PACKAGES_VARIABLE, RequestedPackages};
+use environment::{AccountDetails, EnvironmentOverride, TemporaryHome};
+use exec::Program;
+use groups::SupplementaryGroups;
+use privileges::{Capabilities, UserExt};
+use setup_scripts::SetupScripts;
+use stdio::StandardStreams;
 use sudo::{SUDO_POLICY_VARIABLE, SudoPolicy};
 
 const AGENT_USER_NAME: &str = "dev";
@@ -54,9 +59,11 @@ pub enum InitError {
 
 pub fn run(program: &OsStr, arguments: &[OsString]) -> ExitCode {
     match prepare() {
-        Ok(environment_overrides) => {
-            exec::replace_process(program, arguments, &environment_overrides)
+        Ok(environment_overrides) => Program {
+            name: program,
+            arguments,
         }
+        .replace_current_process(&environment_overrides),
         Err(error) => {
             tracing::error!("{error}");
             ExitCode::FAILURE
@@ -67,44 +74,37 @@ pub fn run(program: &OsStr, arguments: &[OsString]) -> ExitCode {
 fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
     let sudo_policy =
         SudoPolicy::from_environment_value(env::var_os(SUDO_POLICY_VARIABLE).as_deref())?;
-    let requested_packages = requested_apt_packages();
+    let requested_packages = RequestedPackages::from_environment();
     let environment_overrides = if Uid::effective().is_root() {
-        apt_packages::install_missing(&requested_packages);
-        setup_scripts::run_all();
+        requested_packages.install_missing();
+        SetupScripts::run_all();
         become_agent_user(sudo_policy)?
     } else {
         adopt_invoking_user(sudo_policy, &requested_packages)?
     };
-    sudo::restrict_process_tree(sudo_policy)?;
+    sudo_policy.restrict_process_tree()?;
     warn_about_unwritable_directories();
     Ok(environment_overrides)
 }
 
 fn become_agent_user(sudo_policy: SudoPolicy) -> Result<Vec<EnvironmentOverride>, InitError> {
-    let agent = look_up_user_by_name(AGENT_USER_NAME)?.ok_or(InitError::AgentUserMissing)?;
+    let agent = User::look_up_by_name(AGENT_USER_NAME)?.ok_or(InitError::AgentUserMissing)?;
     if agent.uid.is_root() || agent.gid.as_raw() == 0 {
         return Err(InitError::AgentUserIsPrivileged);
     }
 
-    let supplementary_groups = groups::supplementary_groups_for(&agent)?;
-    stdio::hand_over_to(agent.uid);
-    let environment_overrides = environment::agent_user_overrides(
-        env::var_os("HOME").as_deref(),
-        &AccountDetails::from(&agent),
-    );
-    sudo::configure_sudoers(sudo_policy, &agent.name);
-    privileges::drop_to(&agent, &supplementary_groups)?;
+    let supplementary_groups = SupplementaryGroups::for_agent(&agent)?;
+    StandardStreams::hand_over_to(agent.uid);
+    let environment_overrides =
+        AccountDetails::from(&agent).agent_overrides(env::var_os("HOME").as_deref());
+    sudo_policy.configure_sudoers(&agent.name);
+    agent.switch_process_to(&supplementary_groups)?;
     Ok(environment_overrides)
-}
-
-fn requested_apt_packages() -> Vec<String> {
-    let environment_value = env::var_os(APT_PACKAGES_VARIABLE).unwrap_or_default();
-    apt_packages::requested_packages(&environment_value.to_string_lossy())
 }
 
 fn adopt_invoking_user(
     sudo_policy: SudoPolicy,
-    requested_packages: &[String],
+    requested_packages: &RequestedPackages,
 ) -> Result<Vec<EnvironmentOverride>, InitError> {
     let uid = Uid::effective();
     let invoking_user = User::from_uid(uid).map_err(|source| InitError::Lookup {
@@ -113,9 +113,9 @@ fn adopt_invoking_user(
     })?;
 
     let environment_overrides = match invoking_user {
-        Some(user) => environment::identity_overrides(&AccountDetails::from(&user)),
-        None if environment::home_is_unusable(env::var_os("HOME").as_deref()) => {
-            let home = environment::prepare_temporary_home(uid)?;
+        Some(user) => AccountDetails::from(&user).identity_overrides(),
+        None if TemporaryHome::is_needed(env::var_os("HOME").as_deref()) => {
+            let home = TemporaryHome::prepare(uid)?;
             tracing::info!(
                 "uid {uid} has no passwd entry; using {} as HOME",
                 home.display()
@@ -133,31 +133,12 @@ fn adopt_invoking_user(
     if !requested_packages.is_empty() {
         tracing::warn!(
             "{APT_PACKAGES_VARIABLE} is ignored when the container starts as uid {uid}; not installed: {}",
-            requested_packages.join(" ")
+            requested_packages.names().join(" ")
         );
     }
-    warn_about_ignored_setup_scripts(uid);
-    privileges::clear_inheritable_capabilities()?;
+    SetupScripts::warn_if_ignored(uid);
+    Capabilities::clear_inheritable()?;
     Ok(environment_overrides)
-}
-
-fn warn_about_ignored_setup_scripts(uid: Uid) {
-    let directory = Path::new(setup_scripts::SETUP_SCRIPTS_DIRECTORY);
-    let has_scripts = setup_scripts::setup_scripts_in(directory)
-        .is_ok_and(|scripts| !scripts.executable.is_empty());
-    if has_scripts {
-        tracing::warn!(
-            "{} is ignored when the container starts as uid {uid}",
-            directory.display()
-        );
-    }
-}
-
-fn look_up_user_by_name(user_name: &str) -> Result<Option<User>, InitError> {
-    User::from_name(user_name).map_err(|source| InitError::Lookup {
-        subject: format!("user {user_name:?}"),
-        source,
-    })
 }
 
 fn warn_about_unwritable_directories() {

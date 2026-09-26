@@ -8,27 +8,40 @@ use super::environment::EnvironmentOverride;
 const COMMAND_NOT_FOUND: u8 = 127;
 const COMMAND_NOT_EXECUTABLE: u8 = 126;
 
-/// Only returns if the program could not be executed.
-pub fn replace_process(
-    program: &OsStr,
-    arguments: &[OsString],
-    environment_overrides: &[EnvironmentOverride],
-) -> ExitCode {
-    let mut command = Command::new(program);
-    command.args(arguments);
-    for variable in environment_overrides {
-        command.env(variable.name, &variable.value);
-    }
-
-    let error = command.exec();
-    tracing::error!("could not run {}: {error}", program.to_string_lossy());
-    ExitCode::from(exit_code_for(&error))
+/// The program init hands the container over to.
+pub struct Program<'a> {
+    pub name: &'a OsStr,
+    pub arguments: &'a [OsString],
 }
 
-pub fn exit_code_for(error: &io::Error) -> u8 {
-    match error.kind() {
-        io::ErrorKind::NotFound => COMMAND_NOT_FOUND,
-        _ => COMMAND_NOT_EXECUTABLE,
+impl Program<'_> {
+    /// Only returns if the program could not be executed.
+    pub fn replace_current_process(
+        &self,
+        environment_overrides: &[EnvironmentOverride],
+    ) -> ExitCode {
+        let mut command = Command::new(self.name);
+        command.args(self.arguments);
+        for variable in environment_overrides {
+            command.env(variable.name, &variable.value);
+        }
+        let error = command.exec();
+        tracing::error!("could not run {}: {error}", self.name.to_string_lossy());
+        ExitCode::from(error.shell_exit_code())
+    }
+}
+
+trait ExecErrorExt {
+    /// The code a shell exits with when it cannot run a program: 127 when missing, 126 otherwise.
+    fn shell_exit_code(&self) -> u8;
+}
+
+impl ExecErrorExt for io::Error {
+    fn shell_exit_code(&self) -> u8 {
+        match self.kind() {
+            io::ErrorKind::NotFound => COMMAND_NOT_FOUND,
+            _ => COMMAND_NOT_EXECUTABLE,
+        }
     }
 }
 
@@ -39,7 +52,7 @@ mod tests {
     #[test]
     fn missing_program_exits_like_a_shell() {
         assert_eq!(
-            exit_code_for(&io::Error::from(io::ErrorKind::NotFound)),
+            io::Error::from(io::ErrorKind::NotFound).shell_exit_code(),
             127
         );
     }
@@ -47,11 +60,11 @@ mod tests {
     #[test]
     fn unexecutable_program_exits_like_a_shell() {
         assert_eq!(
-            exit_code_for(&io::Error::from(io::ErrorKind::PermissionDenied)),
+            io::Error::from(io::ErrorKind::PermissionDenied).shell_exit_code(),
             126
         );
         assert_eq!(
-            exit_code_for(&io::Error::from_raw_os_error(nix::libc::ENOEXEC)),
+            io::Error::from_raw_os_error(nix::libc::ENOEXEC).shell_exit_code(),
             126
         );
     }

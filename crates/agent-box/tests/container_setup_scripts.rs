@@ -2,32 +2,12 @@
 
 mod common;
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-
-use common::{run_in_image, stderr_of, stdout_of};
-use tempfile::TempDir;
-
-fn setup_directory_with(scripts: &[(&str, u32, &str)]) -> TempDir {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
-    for (name, mode, contents) in scripts {
-        let path = directory.path().join(name);
-        fs::write(&path, contents).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(*mode)).unwrap();
-    }
-    directory
-}
-
-fn mount_option(directory: &Path) -> String {
-    format!("{}:/etc/agent-box/setup.d:ro", directory.display())
-}
+use common::{SetupDirectory, run_in_image, stderr_of, stdout_of};
 
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn scripts_run_as_root_in_name_order_before_the_agent_starts() {
-    let directory = setup_directory_with(&[
+    let directory = SetupDirectory::with_scripts(&[
         (
             "20-second",
             0o755,
@@ -40,7 +20,7 @@ fn scripts_run_as_root_in_name_order_before_the_agent_starts() {
         ),
     ]);
     let output = run_in_image(
-        &["--volume", &mount_option(directory.path())],
+        &["--volume", &directory.volume_option()],
         &["cat", "/tmp/setup-order"],
     );
     assert_eq!(stdout_of(&output), "10:0\n20:0");
@@ -50,20 +30,20 @@ fn scripts_run_as_root_in_name_order_before_the_agent_starts() {
 #[ignore = "needs Docker and a built agent-box image"]
 fn script_output_goes_to_the_container_log() {
     let directory =
-        setup_directory_with(&[("10-hello", 0o755, "#!/bin/sh\necho hello from setup\n")]);
-    let output = run_in_image(&["--volume", &mount_option(directory.path())], &["true"]);
+        SetupDirectory::with_scripts(&[("10-hello", 0o755, "#!/bin/sh\necho hello from setup\n")]);
+    let output = run_in_image(&["--volume", &directory.volume_option()], &["true"]);
     assert_eq!(stdout_of(&output), "hello from setup");
 }
 
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn failing_script_warns_and_the_rest_still_run() {
-    let directory = setup_directory_with(&[
+    let directory = SetupDirectory::with_scripts(&[
         ("10-fails", 0o755, "#!/bin/sh\nexit 3\n"),
         ("20-runs", 0o755, "#!/bin/sh\ntouch /tmp/second-ran\n"),
     ]);
     let output = run_in_image(
-        &["--volume", &mount_option(directory.path())],
+        &["--volume", &directory.volume_option()],
         &["test", "-e", "/tmp/second-ran"],
     );
     stdout_of(&output);
@@ -77,12 +57,12 @@ fn failing_script_warns_and_the_rest_still_run() {
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn file_that_is_not_executable_is_skipped_with_a_warning() {
-    let directory = setup_directory_with(&[
+    let directory = SetupDirectory::with_scripts(&[
         ("10-forgot-chmod.sh", 0o644, "#!/bin/sh\ntouch /tmp/ran\n"),
         (".gitkeep", 0o644, ""),
     ]);
     let output = run_in_image(
-        &["--volume", &mount_option(directory.path())],
+        &["--volume", &directory.volume_option()],
         &["test", "!", "-e", "/tmp/ran"],
     );
     stdout_of(&output);
@@ -99,8 +79,8 @@ fn file_that_is_not_executable_is_skipped_with_a_warning() {
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn script_without_an_interpreter_line_warns() {
-    let directory = setup_directory_with(&[("10-no-shebang", 0o755, "touch /tmp/ran\n")]);
-    let output = run_in_image(&["--volume", &mount_option(directory.path())], &["true"]);
+    let directory = SetupDirectory::with_scripts(&[("10-no-shebang", 0o755, "touch /tmp/ran\n")]);
+    let output = run_in_image(&["--volume", &directory.volume_option()], &["true"]);
     stdout_of(&output);
     let stderr = stderr_of(&output);
     assert!(
@@ -112,13 +92,14 @@ fn script_without_an_interpreter_line_warns() {
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
 fn non_root_start_ignores_the_scripts() {
-    let directory = setup_directory_with(&[("10-root-only", 0o755, "#!/bin/sh\ntouch /tmp/ran\n")]);
+    let directory =
+        SetupDirectory::with_scripts(&[("10-root-only", 0o755, "#!/bin/sh\ntouch /tmp/ran\n")]);
     let output = run_in_image(
         &[
             "--user",
             "1000:1000",
             "--volume",
-            &mount_option(directory.path()),
+            &directory.volume_option(),
         ],
         &["test", "!", "-e", "/tmp/ran"],
     );

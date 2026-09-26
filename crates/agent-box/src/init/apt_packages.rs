@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 
+use crate::process_ext::{CommandStatusExt, OutputExt};
+
 pub const APT_PACKAGES_VARIABLE: &str = "APT_PACKAGES";
 const APT_GET_OPTIONS: [&str; 8] = [
     "-q",
@@ -14,67 +16,117 @@ const APT_GET_OPTIONS: [&str; 8] = [
     "--no-install-recommends",
 ];
 
-/// Package arguments for apt-get, separated by whitespace or commas.
-pub fn requested_packages(environment_value: &str) -> Vec<String> {
-    environment_value
-        .split(|character: char| character.is_whitespace() || character == ',')
-        .filter(|package| !package.is_empty())
-        .map(str::to_owned)
-        .collect()
+/// Package arguments for apt-get from `APT_PACKAGES`, separated by whitespace or commas.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RequestedPackages(Vec<String>);
+
+impl RequestedPackages {
+    pub fn from_environment() -> Self {
+        let environment_value = std::env::var_os(APT_PACKAGES_VARIABLE).unwrap_or_default();
+        Self::from_environment_value(&environment_value.to_string_lossy())
+    }
+
+    pub fn from_environment_value(environment_value: &str) -> Self {
+        Self(
+            environment_value
+                .split(|character: char| character.is_whitespace() || character == ',')
+                .filter(|package| !package.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn names(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Runs as root, before switching to the agent user.
+    pub fn install_missing(&self) {
+        if self.is_empty() {
+            return;
+        }
+        let mut database = DpkgDatabase::query();
+        if database.as_ref().is_ok_and(|database| database.interrupted) {
+            tracing::info!("finishing an interrupted package installation");
+            if let Err(error) = Command::new("dpkg")
+                .args(["--configure", "-a"])
+                .run_checked()
+            {
+                tracing::warn!("dpkg --configure -a failed ({error})");
+            }
+            database = DpkgDatabase::query();
+        }
+        let missing_names = match database {
+            Ok(database) => database.missing(&self.0),
+            Err(error) => {
+                tracing::warn!(
+                    "could not read the dpkg database ({error}); skipping {APT_PACKAGES_VARIABLE}"
+                );
+                return;
+            }
+        };
+        if !missing_names.is_empty() {
+            AptGet::install(&missing_names);
+        }
+    }
 }
 
-/// Runs as root, before switching to the agent user.
-pub fn install_missing(requested_names: &[String]) {
-    if requested_names.is_empty() {
-        return;
-    }
-    let mut database = query_dpkg_database();
-    if database.as_ref().is_ok_and(|database| database.interrupted) {
-        tracing::info!("finishing an interrupted package installation");
-        if let Err(error) = run(Command::new("dpkg").args(["--configure", "-a"])) {
-            tracing::warn!("dpkg --configure -a failed ({error})");
-        }
-        database = query_dpkg_database();
-    }
-    let missing_names = match database {
-        Ok(database) => database.missing(requested_names),
-        Err(error) => {
+/// apt-get, non-interactive and quiet enough for a container log.
+struct AptGet;
+
+impl AptGet {
+    fn install(missing_names: &[String]) {
+        tracing::info!(
+            "installing {} from {APT_PACKAGES_VARIABLE}",
+            missing_names.join(" ")
+        );
+        if let Err(error) = Self::command().arg("update").run_checked() {
             tracing::warn!(
-                "could not read the dpkg database ({error}); skipping {APT_PACKAGES_VARIABLE}"
+                "apt-get update failed ({error}); not installed: {}",
+                missing_names.join(" ")
             );
             return;
         }
-    };
-    if missing_names.is_empty() {
-        return;
+        if Self::command()
+            .arg("install")
+            .args(missing_names)
+            .run_checked()
+            .is_ok()
+        {
+            return;
+        }
+
+        tracing::info!("retrying each package on its own");
+        let failed_names: Vec<&str> = missing_names
+            .iter()
+            .filter(|name| {
+                Self::command()
+                    .arg("install")
+                    .arg(name)
+                    .run_checked()
+                    .is_err()
+            })
+            .map(String::as_str)
+            .collect();
+        if !failed_names.is_empty() {
+            tracing::warn!(
+                "could not install {} from {APT_PACKAGES_VARIABLE}; see the apt-get output above",
+                failed_names.join(" ")
+            );
+        }
     }
 
-    tracing::info!(
-        "installing {} from {APT_PACKAGES_VARIABLE}",
-        missing_names.join(" ")
-    );
-    if let Err(error) = run(apt_get().arg("update")) {
-        tracing::warn!(
-            "apt-get update failed ({error}); not installed: {}",
-            missing_names.join(" ")
-        );
-        return;
-    }
-    if run(apt_get().arg("install").args(&missing_names)).is_ok() {
-        return;
-    }
-
-    tracing::info!("retrying each package on its own");
-    let failed_names: Vec<&str> = missing_names
-        .iter()
-        .filter(|name| run(apt_get().arg("install").arg(name)).is_err())
-        .map(String::as_str)
-        .collect();
-    if !failed_names.is_empty() {
-        tracing::warn!(
-            "could not install {} from {APT_PACKAGES_VARIABLE}; see the apt-get output above",
-            failed_names.join(" ")
-        );
+    fn command() -> Command {
+        let mut command = Command::new("apt-get");
+        command
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .args(APT_GET_OPTIONS)
+            .arg("--yes");
+        command
     }
 }
 
@@ -86,6 +138,21 @@ struct DpkgDatabase {
 }
 
 impl DpkgDatabase {
+    fn query() -> io::Result<Self> {
+        let output = Command::new("dpkg-query")
+            .args([
+                "--show",
+                "--showformat=${db:Status-Status}\t${Package}\t${Provides}\n",
+            ])
+            .stdin(Stdio::null())
+            .output()?;
+        io::stderr().write_all(&output.stderr)?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!("dpkg-query {}", output.status)));
+        }
+        Ok(Self::parse(&output.stdout_text()))
+    }
+
     /// Parses `dpkg-query --show --showformat='${db:Status-Status}\t${Package}\t${Provides}\n'`.
     fn parse(listing: &str) -> Self {
         let mut database = Self::default();
@@ -129,44 +196,6 @@ impl DpkgDatabase {
     }
 }
 
-fn query_dpkg_database() -> io::Result<DpkgDatabase> {
-    let output = Command::new("dpkg-query")
-        .args([
-            "--show",
-            "--showformat=${db:Status-Status}\t${Package}\t${Provides}\n",
-        ])
-        .stdin(Stdio::null())
-        .output()?;
-    io::stderr().write_all(&output.stderr)?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!("dpkg-query {}", output.status)));
-    }
-    Ok(DpkgDatabase::parse(&String::from_utf8_lossy(
-        &output.stdout,
-    )))
-}
-
-fn apt_get() -> Command {
-    let mut command = Command::new("apt-get");
-    command
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .args(APT_GET_OPTIONS)
-        .arg("--yes");
-    command
-}
-
-fn run(command: &mut Command) -> io::Result<()> {
-    let status = command.stdin(Stdio::null()).status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "{} {status}",
-            command.get_program().to_string_lossy()
-        )))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,14 +207,15 @@ mod tests {
     #[test]
     fn packages_are_separated_by_spaces_or_commas() {
         assert_eq!(
-            requested_packages("hello, jq=1.7  ripgrep,,hello/resolute\n"),
+            RequestedPackages::from_environment_value("hello, jq=1.7  ripgrep,,hello/resolute\n")
+                .names(),
             ["hello", "jq=1.7", "ripgrep", "hello/resolute"]
         );
     }
 
     #[test]
     fn empty_value_requests_nothing() {
-        assert!(requested_packages("  , ").is_empty());
+        assert!(RequestedPackages::from_environment_value("  , ").is_empty());
     }
 
     #[test]

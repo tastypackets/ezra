@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::{ApiError, AppState, Session};
 use crate::manager::agents::Agent;
-use crate::manager::login::{self, LoginError, LoginProcess, LoginPrompt};
+use crate::manager::login::{AgentCli, LoginError, LoginPrompt};
 
 impl From<LoginError> for ApiError {
     fn from(error: LoginError) -> Self {
@@ -31,7 +31,9 @@ pub async fn start(
     Path(agent): Path<Agent>,
 ) -> Result<Json<LoginPrompt>, ApiError> {
     state.logins.lock().await.remove(&agent);
-    let (login, prompt) = LoginProcess::start(agent, &state.install_paths).await?;
+    let (login, prompt) = AgentCli::installed(agent, &state.install_paths)?
+        .start_login()
+        .await?;
     state.logins.lock().await.insert(agent, login);
     Ok(Json(prompt))
 }
@@ -65,7 +67,9 @@ pub async fn log_out(
     Path(agent): Path<Agent>,
 ) -> Result<StatusCode, ApiError> {
     state.logins.lock().await.remove(&agent);
-    login::log_out(agent, &state.install_paths).await?;
+    AgentCli::installed(agent, &state.install_paths)?
+        .log_out()
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

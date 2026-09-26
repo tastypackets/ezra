@@ -12,55 +12,73 @@ const KEY_FILE: &str = "key.pem";
 const VALIDITY_DAYS: i64 = 820;
 const RENEW_AFTER: Duration = Duration::from_secs(790 * 24 * 60 * 60);
 
+/// The PEM files the manager serves HTTPS with.
 pub struct CertificateFiles {
     pub certificate: PathBuf,
     pub key: PathBuf,
 }
 
-/// Creates a self-signed certificate when there is none or it is close to expiring.
-pub fn ensure_certificate(directory: &Path, hostname: &str) -> io::Result<CertificateFiles> {
-    let files = CertificateFiles {
-        certificate: directory.join(CERTIFICATE_FILE),
-        key: directory.join(KEY_FILE),
-    };
-    if needs_new_certificate(&files) {
-        let (certificate_pem, key_pem) =
-            self_signed_certificate(hostname).map_err(io::Error::other)?;
-        fs::create_dir_all(directory)?;
-        fs::write(&files.key, key_pem)?;
-        fs::write(&files.certificate, certificate_pem)?;
-        tracing::info!(
-            "created a self-signed certificate in {}; browsers will ask you to accept it",
-            directory.display()
-        );
+impl CertificateFiles {
+    fn in_directory(directory: &Path) -> Self {
+        Self {
+            certificate: directory.join(CERTIFICATE_FILE),
+            key: directory.join(KEY_FILE),
+        }
     }
-    Ok(files)
+
+    /// Creates a self-signed certificate when there is none or it is close to expiring.
+    pub fn ensure_self_signed(directory: &Path, hostname: &str) -> io::Result<Self> {
+        let files = Self::in_directory(directory);
+        if files.needs_renewal() {
+            let certificate =
+                SelfSignedCertificate::generate(hostname).map_err(io::Error::other)?;
+            fs::create_dir_all(directory)?;
+            fs::write(&files.key, certificate.key_pem)?;
+            fs::write(&files.certificate, certificate.certificate_pem)?;
+            tracing::info!(
+                "created a self-signed certificate in {}; browsers will ask you to accept it",
+                directory.display()
+            );
+        }
+        Ok(files)
+    }
+
+    fn needs_renewal(&self) -> bool {
+        let certificate_age = fs::metadata(&self.certificate)
+            .and_then(|metadata| metadata.modified())
+            .map(|modified| modified.elapsed().unwrap_or_default());
+        match certificate_age {
+            Ok(age) => age > RENEW_AFTER || !self.key.exists(),
+            Err(_) => true,
+        }
+    }
 }
 
-fn needs_new_certificate(files: &CertificateFiles) -> bool {
-    let certificate_age = fs::metadata(&files.certificate)
-        .and_then(|metadata| metadata.modified())
-        .map(|modified| modified.elapsed().unwrap_or_default());
-    match certificate_age {
-        Ok(age) => age > RENEW_AFTER || !files.key.exists(),
-        Err(_) => true,
-    }
+struct SelfSignedCertificate {
+    certificate_pem: String,
+    key_pem: String,
 }
 
-fn self_signed_certificate(hostname: &str) -> Result<(String, String), rcgen::Error> {
-    let mut parameters = CertificateParams::new(vec!["localhost".to_owned(), hostname.to_owned()])?;
-    parameters
-        .distinguished_name
-        .push(DnType::CommonName, hostname);
-    let now = OffsetDateTime::now_utc();
-    parameters.not_before = now - time::Duration::days(1);
-    parameters.not_after = now + time::Duration::days(VALIDITY_DAYS);
-    parameters.is_ca = IsCa::ExplicitNoCa;
-    parameters.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    parameters.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-    let key_pair = KeyPair::generate()?;
-    let certificate = parameters.self_signed(&key_pair)?;
-    Ok((certificate.pem(), key_pair.serialize_pem()))
+impl SelfSignedCertificate {
+    fn generate(hostname: &str) -> Result<Self, rcgen::Error> {
+        let mut parameters =
+            CertificateParams::new(vec!["localhost".to_owned(), hostname.to_owned()])?;
+        parameters
+            .distinguished_name
+            .push(DnType::CommonName, hostname);
+        let now = OffsetDateTime::now_utc();
+        parameters.not_before = now.saturating_sub(time::Duration::days(1));
+        parameters.not_after = now.saturating_add(time::Duration::days(VALIDITY_DAYS));
+        parameters.is_ca = IsCa::ExplicitNoCa;
+        parameters.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        parameters.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let key_pair = KeyPair::generate()?;
+        let certificate = parameters.self_signed(&key_pair)?;
+        Ok(Self {
+            certificate_pem: certificate.pem(),
+            key_pem: key_pair.serialize_pem(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -70,43 +88,42 @@ mod tests {
 
     use super::*;
 
+    fn read(path: &Path) -> String {
+        fs::read_to_string(path).expect("certificate file is readable")
+    }
+
     #[test]
     fn certificate_is_created_once_and_reused() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().expect("temporary directory");
         let tls_directory = directory.path().join("tls");
-        let files = ensure_certificate(&tls_directory, "agent-box").unwrap();
-        let first_certificate = fs::read_to_string(&files.certificate).unwrap();
+        let files = CertificateFiles::ensure_self_signed(&tls_directory, "agent-box")
+            .expect("certificate is created");
+        let first_certificate = read(&files.certificate);
         assert!(first_certificate.starts_with("-----BEGIN CERTIFICATE-----"));
-        assert!(
-            fs::read_to_string(&files.key)
-                .unwrap()
-                .contains("PRIVATE KEY")
-        );
+        assert!(read(&files.key).contains("PRIVATE KEY"));
 
-        ensure_certificate(&tls_directory, "agent-box").unwrap();
-        assert_eq!(
-            fs::read_to_string(&files.certificate).unwrap(),
-            first_certificate
-        );
+        CertificateFiles::ensure_self_signed(&tls_directory, "agent-box")
+            .expect("certificate is reused");
+        assert_eq!(read(&files.certificate), first_certificate);
     }
 
     #[test]
     fn old_certificate_is_replaced() {
-        let directory = tempfile::tempdir().unwrap();
-        let files = ensure_certificate(directory.path(), "agent-box").unwrap();
-        let first_certificate = fs::read_to_string(&files.certificate).unwrap();
-        let long_ago = SystemTime::now() - RENEW_AFTER - Duration::from_secs(60);
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let files = CertificateFiles::ensure_self_signed(directory.path(), "agent-box")
+            .expect("certificate is created");
+        let first_certificate = read(&files.certificate);
+        let long_ago = SystemTime::now()
+            .checked_sub(RENEW_AFTER.saturating_add(Duration::from_secs(60)))
+            .expect("the clock is past the renewal age");
         File::options()
             .write(true)
             .open(&files.certificate)
-            .unwrap()
-            .set_modified(long_ago)
-            .unwrap();
+            .and_then(|file| file.set_modified(long_ago))
+            .expect("certificate modification time can be changed");
 
-        ensure_certificate(directory.path(), "agent-box").unwrap();
-        assert_ne!(
-            fs::read_to_string(&files.certificate).unwrap(),
-            first_certificate
-        );
+        CertificateFiles::ensure_self_signed(directory.path(), "agent-box")
+            .expect("certificate is renewed");
+        assert_ne!(read(&files.certificate), first_certificate);
     }
 }

@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 use common::{DockerResource, curl_in, docker, stdout_of, wait_for_manager};
 
+const REINSTALL_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Posts to the manager API and returns the status code and body.
 fn post(container: &DockerResource, path: &str, body: &str) -> (String, String) {
     let url = format!("https://localhost:8443{path}");
@@ -131,12 +133,15 @@ fn configured_agent_is_reinstalled_after_a_recreate() {
 
     let second =
         DockerResource::start_container("agents-second", &["--volume", &config_mount], &[]);
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let started = Instant::now();
     while !run_as_agent(&second, &["codex", "--version"])
         .status
         .success()
     {
-        assert!(Instant::now() < deadline, "codex was not reinstalled");
+        assert!(
+            started.elapsed() < REINSTALL_TIMEOUT,
+            "codex was not reinstalled"
+        );
         thread::sleep(Duration::from_secs(2));
     }
     assert!(

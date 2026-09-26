@@ -38,36 +38,41 @@ impl From<&User> for AccountDetails {
     }
 }
 
-pub fn agent_user_overrides(
-    current_home: Option<&OsStr>,
-    agent: &AccountDetails,
-) -> Vec<EnvironmentOverride> {
-    let mut overrides = identity_overrides(agent);
-    if current_home.is_none_or(|home| home == "/root") {
-        overrides.push(EnvironmentOverride::new("HOME", &agent.home));
+impl AccountDetails {
+    /// The agent's identity, plus its home unless the operator chose one.
+    pub fn agent_overrides(&self, current_home: Option<&OsStr>) -> Vec<EnvironmentOverride> {
+        let mut overrides = self.identity_overrides();
+        if current_home.is_none_or(|home| home == "/root") {
+            overrides.push(EnvironmentOverride::new("HOME", &self.home));
+        }
+        overrides
     }
-    overrides
+
+    pub fn identity_overrides(&self) -> Vec<EnvironmentOverride> {
+        vec![
+            EnvironmentOverride::new("USER", &self.name),
+            EnvironmentOverride::new("LOGNAME", &self.name),
+            EnvironmentOverride::new("SHELL", &self.shell),
+        ]
+    }
 }
 
-pub fn identity_overrides(account: &AccountDetails) -> Vec<EnvironmentOverride> {
-    vec![
-        EnvironmentOverride::new("USER", &account.name),
-        EnvironmentOverride::new("LOGNAME", &account.name),
-        EnvironmentOverride::new("SHELL", &account.shell),
-    ]
-}
+/// A private HOME under /tmp for a uid the image has no account for.
+pub struct TemporaryHome;
 
-pub fn home_is_unusable(current_home: Option<&OsStr>) -> bool {
-    current_home.is_none_or(|home| home == "/")
-}
+impl TemporaryHome {
+    pub fn is_needed(current_home: Option<&OsStr>) -> bool {
+        current_home.is_none_or(|home| home == "/")
+    }
 
-pub fn prepare_temporary_home(uid: Uid) -> Result<PathBuf, InitError> {
-    let home = std::env::temp_dir().join(format!("agent-box-home-{uid}"));
-    fs::create_dir_all(&home).map_err(|source| InitError::TemporaryHome {
-        path: home.display().to_string(),
-        source,
-    })?;
-    Ok(home)
+    pub fn prepare(uid: Uid) -> Result<PathBuf, InitError> {
+        let home = std::env::temp_dir().join(format!("agent-box-home-{uid}"));
+        fs::create_dir_all(&home).map_err(|source| InitError::TemporaryHome {
+            path: home.display().to_string(),
+            source,
+        })?;
+        Ok(home)
+    }
 }
 
 #[cfg(test)]
@@ -91,7 +96,7 @@ mod tests {
 
     #[test]
     fn agent_gets_its_identity() {
-        let overrides = agent_user_overrides(Some(OsStr::new("/root")), &dev_account());
+        let overrides = dev_account().agent_overrides(Some(OsStr::new("/root")));
 
         assert_eq!(value_of(&overrides, "USER"), Some(OsStr::new("dev")));
         assert_eq!(value_of(&overrides, "LOGNAME"), Some(OsStr::new("dev")));
@@ -100,28 +105,28 @@ mod tests {
 
     #[test]
     fn agent_home_replaces_root_home() {
-        let overrides = agent_user_overrides(Some(OsStr::new("/root")), &dev_account());
+        let overrides = dev_account().agent_overrides(Some(OsStr::new("/root")));
 
         assert_eq!(value_of(&overrides, "HOME"), Some(OsStr::new("/home/dev")));
     }
 
     #[test]
     fn agent_home_is_set_when_home_is_missing() {
-        let overrides = agent_user_overrides(None, &dev_account());
+        let overrides = dev_account().agent_overrides(None);
 
         assert_eq!(value_of(&overrides, "HOME"), Some(OsStr::new("/home/dev")));
     }
 
     #[test]
     fn operator_home_is_kept() {
-        let overrides = agent_user_overrides(Some(OsStr::new("/projects")), &dev_account());
+        let overrides = dev_account().agent_overrides(Some(OsStr::new("/projects")));
 
         assert_eq!(value_of(&overrides, "HOME"), None);
     }
 
     #[test]
     fn identity_leaves_home_to_the_runtime() {
-        let overrides = identity_overrides(&dev_account());
+        let overrides = dev_account().identity_overrides();
 
         assert_eq!(value_of(&overrides, "HOME"), None);
         assert_eq!(value_of(&overrides, "USER"), Some(OsStr::new("dev")));
@@ -129,8 +134,8 @@ mod tests {
 
     #[test]
     fn filesystem_root_and_missing_home_are_unusable() {
-        assert!(home_is_unusable(None));
-        assert!(home_is_unusable(Some(OsStr::new("/"))));
-        assert!(!home_is_unusable(Some(OsStr::new("/home/dev"))));
+        assert!(TemporaryHome::is_needed(None));
+        assert!(TemporaryHome::is_needed(Some(OsStr::new("/"))));
+        assert!(!TemporaryHome::is_needed(Some(OsStr::new("/home/dev"))));
     }
 }

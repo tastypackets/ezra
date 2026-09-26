@@ -1,5 +1,7 @@
 mod init;
 mod manager;
+mod path_ext;
+mod process_ext;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;

@@ -5,8 +5,7 @@ use axum_extra::extract::cookie::{Cookie, CookieJar};
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState, internal};
-use crate::manager::auth::{self, SESSION_COOKIE};
-use crate::manager::settings;
+use crate::manager::auth::{HashedPassword, SESSION_COOKIE};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionStatus {
@@ -39,16 +38,17 @@ pub async fn set_up_password(
     if body.password.is_empty() {
         return Err(ApiError::BadRequest("the password must not be empty"));
     }
-    let mut settings = state.settings.lock().await;
-    if settings.manager.password_hash.is_some() {
-        return Err(ApiError::Conflict("a password is already set".to_owned()));
-    }
-    let mut updated_settings = settings.clone();
-    updated_settings.manager.password_hash =
-        Some(auth::hash_password(&body.password).map_err(internal)?);
-    settings::save(&state.settings_path, &updated_settings).map_err(internal)?;
-    *settings = updated_settings;
-    start_session(&state, cookies)
+    let password_hash = HashedPassword::from_password(&body.password).map_err(internal)?;
+    state
+        .update_settings(|settings| {
+            if settings.manager.password_hash.is_some() {
+                return Err(ApiError::Conflict("a password is already set".to_owned()));
+            }
+            settings.manager.password_hash = Some(password_hash);
+            Ok(())
+        })
+        .await?;
+    state.start_session(cookies)
 }
 
 pub async fn log_in(
@@ -60,10 +60,10 @@ pub async fn log_in(
     let Some(password_hash) = password_hash else {
         return Err(ApiError::Conflict("no password is set yet".to_owned()));
     };
-    if !auth::password_matches(&body.password, &password_hash) {
+    if !password_hash.matches(&body.password) {
         return Err(ApiError::Unauthorized("wrong password"));
     }
-    start_session(&state, cookies)
+    state.start_session(cookies)
 }
 
 pub async fn log_out(State(state): State<AppState>, cookies: CookieJar) -> (CookieJar, StatusCode) {
@@ -76,21 +76,18 @@ pub async fn log_out(State(state): State<AppState>, cookies: CookieJar) -> (Cook
     )
 }
 
-fn start_session(
-    state: &AppState,
-    cookies: CookieJar,
-) -> Result<(CookieJar, StatusCode), ApiError> {
-    let token = state.sessions.start().map_err(internal)?;
-    Ok((
-        cookies.add(auth::session_cookie(token)),
-        StatusCode::NO_CONTENT,
-    ))
+impl AppState {
+    fn start_session(&self, cookies: CookieJar) -> Result<(CookieJar, StatusCode), ApiError> {
+        let token = self.sessions.start().map_err(internal)?;
+        Ok((cookies.add(token.into_cookie()), StatusCode::NO_CONTENT))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{PASSWORD, TestManager, session_cookie_of};
+    use super::super::test_support::{PASSWORD, ResponseExt, TestManager};
     use super::*;
+    use crate::manager::settings::Settings;
 
     #[tokio::test]
     async fn fresh_manager_is_unclaimed() {
@@ -109,7 +106,7 @@ mod tests {
         let manager = TestManager::new();
         let response = manager.post("/api/v1/setup", PASSWORD, None).await;
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        let cookie = session_cookie_of(&response);
+        let cookie = response.session_cookie();
 
         assert_eq!(
             manager.session_status(Some(&cookie)).await,
@@ -118,11 +115,9 @@ mod tests {
                 authenticated: true
             }
         );
-        let saved = settings::load(&manager.settings_path).unwrap();
-        assert!(auth::password_matches(
-            "correct horse",
-            saved.manager.password_hash.as_deref().unwrap()
-        ));
+        let saved = Settings::load(&manager.settings_path).expect("settings load");
+        let saved_hash = saved.manager.password_hash.expect("password hash is saved");
+        assert!(saved_hash.matches("correct horse"));
     }
 
     #[tokio::test]
@@ -156,7 +151,7 @@ mod tests {
 
         let right = manager.post("/api/v1/login", PASSWORD, None).await;
         assert_eq!(right.status(), StatusCode::NO_CONTENT);
-        let cookie = session_cookie_of(&right);
+        let cookie = right.session_cookie();
         assert!(manager.session_status(Some(&cookie)).await.authenticated);
     }
 

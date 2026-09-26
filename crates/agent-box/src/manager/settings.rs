@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::agents::Agent;
+use super::auth::HashedPassword;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -33,7 +34,7 @@ impl Settings {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManagerSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password_hash: Option<String>,
+    pub password_hash: Option<HashedPassword>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,33 +67,35 @@ pub enum SettingsError {
     Serialize(#[from] toml::ser::Error),
 }
 
-/// A missing file means default settings.
-pub fn load(path: &Path) -> Result<Settings, SettingsError> {
-    match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).map_err(|source| SettingsError::Parse {
-            path: path.to_owned(),
-            source,
-        }),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Settings::default()),
-        Err(source) => Err(SettingsError::Read {
-            path: path.to_owned(),
-            source,
-        }),
-    }
-}
-
-pub fn save(path: &Path, settings: &Settings) -> Result<(), SettingsError> {
-    let text = toml::to_string_pretty(settings)?;
-    let write = || -> io::Result<()> {
-        if let Some(directory) = path.parent() {
-            fs::create_dir_all(directory)?;
+impl Settings {
+    /// A missing file means default settings.
+    pub fn load(path: &Path) -> Result<Self, SettingsError> {
+        match fs::read_to_string(path) {
+            Ok(text) => toml::from_str(&text).map_err(|source| SettingsError::Parse {
+                path: path.to_owned(),
+                source,
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(source) => Err(SettingsError::Read {
+                path: path.to_owned(),
+                source,
+            }),
         }
-        fs::write(path, text)
-    };
-    write().map_err(|source| SettingsError::Write {
-        path: path.to_owned(),
-        source,
-    })
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), SettingsError> {
+        let text = toml::to_string_pretty(self)?;
+        let write = || -> io::Result<()> {
+            if let Some(directory) = path.parent() {
+                fs::create_dir_all(directory)?;
+            }
+            fs::write(path, text)
+        };
+        write().map_err(|source| SettingsError::Write {
+            path: path.to_owned(),
+            source,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -101,33 +104,38 @@ mod tests {
 
     #[test]
     fn missing_file_means_defaults() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().expect("temporary directory");
         assert_eq!(
-            load(&directory.path().join("settings.toml")).unwrap(),
+            Settings::load(&directory.path().join("settings.toml")).expect("defaults load"),
             Settings::default()
         );
     }
 
     #[test]
     fn saved_settings_load_back() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("agent-box/settings.toml");
         let mut settings = Settings {
             manager: ManagerSettings {
-                password_hash: Some("$argon2id$example".to_owned()),
+                password_hash: Some(
+                    HashedPassword::from_password("correct horse").expect("password hashes"),
+                ),
             },
             ..Settings::default()
         };
         settings.agent_mut(Agent::Codex).configured = true;
-        save(&path, &settings).unwrap();
-        assert_eq!(load(&path).unwrap(), settings);
+        settings.save(&path).expect("settings save");
+        assert_eq!(Settings::load(&path).expect("settings load"), settings);
     }
 
     #[test]
     fn invalid_toml_is_an_error() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("settings.toml");
-        fs::write(&path, "[manager\n").unwrap();
-        assert!(matches!(load(&path), Err(SettingsError::Parse { .. })));
+        fs::write(&path, "[manager\n").expect("settings file is written");
+        assert!(matches!(
+            Settings::load(&path),
+            Err(SettingsError::Parse { .. })
+        ));
     }
 }

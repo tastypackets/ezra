@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::{Command, Output};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -48,6 +51,8 @@ pub fn process_status_field(docker_options: &[&str], field_name: &str) -> String
         .to_owned()
 }
 
+const MANAGER_START_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Runs curl inside the container, keeping the manager session cookie in /tmp/manager-cookies.
 pub fn curl_in(container: &DockerResource, arguments: &[&str]) -> Output {
     let mut command = vec![
@@ -68,14 +73,14 @@ pub fn curl_in(container: &DockerResource, arguments: &[&str]) -> Output {
 /// Waits until the manager answers and returns its session status.
 pub fn wait_for_manager(container: &DockerResource, port: u16) -> String {
     let url = format!("https://localhost:{port}/api/v1/session");
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let started = Instant::now();
     loop {
         let response = curl_in(container, &["--fail", &url]);
         if response.status.success() {
             return stdout_of(&response);
         }
         assert!(
-            Instant::now() < deadline,
+            started.elapsed() < MANAGER_START_TIMEOUT,
             "manager did not answer: {}",
             stderr_of(&docker(&["logs", &container.name]))
         );
@@ -125,4 +130,34 @@ impl Drop for DockerResource {
 
 fn unique_name(purpose: &str) -> String {
     format!("agent-box-test-{purpose}-{}", std::process::id())
+}
+
+/// A temporary host folder of setup scripts, mounted read-only as /etc/agent-box/setup.d.
+pub struct SetupDirectory {
+    directory: tempfile::TempDir,
+}
+
+impl SetupDirectory {
+    /// Each script is `(file name, mode, contents)`.
+    pub fn with_scripts(scripts: &[(&str, u32, &str)]) -> Self {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        set_mode(directory.path(), 0o755);
+        for (name, mode, contents) in scripts {
+            let path = directory.path().join(name);
+            fs::write(&path, contents).expect("setup script is written");
+            set_mode(&path, *mode);
+        }
+        Self { directory }
+    }
+
+    pub fn volume_option(&self) -> String {
+        format!(
+            "{}:/etc/agent-box/setup.d:ro",
+            self.directory.path().display()
+        )
+    }
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("file mode is set");
 }
