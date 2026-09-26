@@ -29,19 +29,31 @@ import {
   useAgentActionPending,
   useAgentActions,
 } from "@/hooks/use-agent-actions";
+import { useNow } from "@/hooks/use-now";
 import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
 import { handOffFocus } from "@/lib/focus";
 import { signInEnd } from "@/lib/sign-in";
+import type { SignInEnd } from "@/lib/sign-in";
 import { downloadPercent, formatDateTime } from "@/lib/utils";
 
 type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
+
+/** How often the sign-in warning is checked against the clock. */
+const CLOCK_MS = 60_000;
 
 export interface AgentsCardProps {
   agents: AgentStatus[];
 }
 
+interface AgentProps {
+  status: AgentStatus;
+  /** Set once the sign-in end is close enough to warn about. */
+  end: SignInEnd | undefined;
+}
+
 /** Every agent with its install and sign-in actions: a table on wide screens, a list on phones. */
 export function AgentsCard({ agents }: AgentsCardProps) {
+  const now = useNow(CLOCK_MS);
   return (
     <Card>
       <CardHeader>
@@ -65,7 +77,7 @@ export function AgentsCard({ agents }: AgentsCardProps) {
           </TableHeader>
           <TableBody>
             {agents.map((status) => (
-              <AgentRow key={status.agent} status={status} />
+              <AgentRow key={status.agent} status={status} end={signInEnd(status, now)} />
             ))}
           </TableBody>
         </Table>
@@ -73,7 +85,7 @@ export function AgentsCard({ agents }: AgentsCardProps) {
       <CardContent className="lg:hidden">
         <ul className="flex flex-col divide-y">
           {agents.map((status) => (
-            <AgentListItem key={status.agent} status={status} />
+            <AgentListItem key={status.agent} status={status} end={signInEnd(status, now)} />
           ))}
         </ul>
       </CardContent>
@@ -81,10 +93,10 @@ export function AgentsCard({ agents }: AgentsCardProps) {
   );
 }
 
-function AgentRow({ status }: { status: AgentStatus }) {
+function AgentRow({ status, end }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
-  const state = agentState(status);
+  const state = agentState(status, end);
   return (
     <TableRow>
       <TableHead scope="row" id={nameId}>
@@ -96,20 +108,20 @@ function AgentRow({ status }: { status: AgentStatus }) {
       <TableCell className={cn(status.installed_version && "font-mono")}>{facts.version}</TableCell>
       <TableCell>
         {facts.account}
-        <SignInEndNote status={status} />
+        <SignInEndNote end={end} />
       </TableCell>
       <TableCell className="text-right tabular-nums">{facts.savedData}</TableCell>
       <TableCell>
-        <AgentActions status={status} nameId={nameId} className="items-end" />
+        <AgentActions status={status} nameId={nameId} ending={Boolean(end)} className="items-end" />
       </TableCell>
     </TableRow>
   );
 }
 
-function AgentListItem({ status }: { status: AgentStatus }) {
+function AgentListItem({ status, end }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
-  const state = agentState(status);
+  const state = agentState(status, end);
   return (
     <li className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
       <div className="flex items-center justify-between gap-3">
@@ -124,20 +136,19 @@ function AgentListItem({ status }: { status: AgentStatus }) {
         <dt className="text-muted-foreground">{AGENTS_DESCRIPTIONS.column_account}</dt>
         <dd className="truncate">
           {facts.account}
-          <SignInEndNote status={status} />
+          <SignInEndNote end={end} />
         </dd>
         <dt className="text-muted-foreground">
           <SavedDataLabel />
         </dt>
         <dd className="tabular-nums">{facts.savedData}</dd>
       </dl>
-      <AgentActions status={status} nameId={nameId} className="items-start" />
+      <AgentActions status={status} nameId={nameId} ending={Boolean(end)} className="items-start" />
     </li>
   );
 }
 
-function SignInEndNote({ status }: { status: AgentStatus }) {
-  const end = signInEnd(status);
+function SignInEndNote({ end }: { end: SignInEnd | undefined }) {
   if (!end) {
     return null;
   }
@@ -161,10 +172,12 @@ function SavedDataLabel() {
 function AgentActions({
   status,
   nameId,
+  ending,
   className,
 }: {
   status: AgentStatus;
   nameId: string;
+  ending: boolean;
   className: string;
 }) {
   const { install, startSignIn, signOut } = useAgentActions(status.agent);
@@ -180,7 +193,7 @@ function AgentActions({
   const name = AGENT_NAMES[status.agent];
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
-  const step = nextAgentStep(status, installing, Boolean(signInEnd(status)));
+  const step = nextAgentStep(status, installing, ending);
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
   const path = { agent: status.agent };
   const installNow = () => install.mutate({ path });
@@ -264,12 +277,14 @@ function agentFacts(status: AgentStatus) {
   };
 }
 
-function agentState(status: AgentStatus): { label: string; variant: BadgeVariant } {
+function agentState(
+  status: AgentStatus,
+  end: SignInEnd | undefined,
+): { label: string; variant: BadgeVariant } {
   if (!status.installed_version) {
     return { label: AGENTS_DESCRIPTIONS.status_not_installed, variant: "secondary" };
   }
   if (status.logged_in) {
-    const end = signInEnd(status);
     if (end) {
       return end.ended
         ? { label: AGENTS_DESCRIPTIONS.status_sign_in_ended, variant: "destructive" }
