@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::future;
 use std::io;
@@ -121,6 +121,17 @@ impl ProjectsDirectory {
     pub fn has_folder(&self, name: &str) -> bool {
         name.is_folder_name()
             && fs::symlink_metadata(self.folder(name)).is_ok_and(|metadata| metadata.is_dir())
+    }
+
+    /// Drops the choices of folders that are neither in `listed` nor in the directory now.
+    fn forget_gone_folders<Choice>(
+        &self,
+        choices: &mut BTreeMap<String, Choice>,
+        listed: &[Folder],
+    ) {
+        choices.retain(|name, _| {
+            listed.iter().any(|folder| folder.name == *name) || self.has_folder(name)
+        });
     }
 
     /// The listed top-level folder called `name`, when there is one.
@@ -456,9 +467,8 @@ impl AppState {
             if choice.spawn == SpawnMode::Worktree && folder.git.is_none() {
                 return Err(FolderChoiceError::NotARepository);
             }
-            claude
-                .folders
-                .retain(|recorded, _| folders.iter().any(|present| present.name == *recorded));
+            self.projects
+                .forget_gone_folders(&mut claude.folders, &folders);
             claude.folders.insert(name.to_owned(), choice);
             Ok(())
         })
@@ -539,9 +549,7 @@ impl AppState {
             let serve_repositories = settings.agents.claude.remote_control.serve_repositories;
             let choices = &mut settings.agents.claude.folders;
             let before = choices.clone();
-            choices.retain(|name, _| {
-                folders.iter().any(|folder| folder.name == *name) || self.projects.has_folder(name)
-            });
+            self.projects.forget_gone_folders(choices, folders);
             for folder in folders.iter().filter(|folder| folder.git.is_some()) {
                 choices.entry(folder.name.clone()).or_insert(FolderChoice {
                     serve: serve_repositories,
@@ -1006,6 +1014,23 @@ mod tests {
                 .await
                 .is_err(),
             "scanning counted as a change"
+        );
+    }
+
+    #[test]
+    fn choices_are_kept_for_folders_that_appeared_after_listing() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let projects = ProjectsDirectory(directory.path().to_path_buf());
+        fs::create_dir(projects.folder("app")).expect("folder is created");
+        let mut choices = BTreeMap::from([
+            ("app".to_owned(), false),
+            ("gone".to_owned(), true),
+            ("notes".to_owned(), true),
+        ]);
+        projects.forget_gone_folders(&mut choices, &[folder("notes", None)]);
+        assert_eq!(
+            choices,
+            BTreeMap::from([("app".to_owned(), false), ("notes".to_owned(), true)])
         );
     }
 
