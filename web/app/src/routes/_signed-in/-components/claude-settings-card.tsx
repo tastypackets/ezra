@@ -43,8 +43,7 @@ export function ClaudeSettingsCard() {
   };
   const { data: settings } = useSuspenseQuery(claudeSettingsQueryOptions);
   const save = useMutation({
-    mutationFn: async (body: ClaudeSettingsBody) =>
-      (await updateClaudeSettings({ body, throwOnError: true })).data,
+    mutationFn: async (body: ClaudeSettingsBody) => (await updateClaudeSettings({ body })).data,
     onSuccess: (saved) => {
       queryClient.setQueryData(claudeSettingsQueryOptions.queryKey, saved);
       void queryClient.invalidateQueries({ queryKey: [AGENTS] });

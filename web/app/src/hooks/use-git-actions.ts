@@ -13,16 +13,16 @@ export function useGitActions() {
     queryClient.invalidateQueries({ queryKey: gitStatusQueryOptions.queryKey });
 
   const startGitHubSignIn = useMutation({
-    mutationFn: async () => startGitHubLogin({ throwOnError: true }),
+    mutationFn: async () => startGitHubLogin(),
     onSettled: refreshGit,
   });
   const signOutOfGitHub = useMutation({
-    mutationFn: async () => logOutOfGitHub({ throwOnError: true }),
+    mutationFn: async () => logOutOfGitHub(),
     onSettled: refreshGit,
   });
   const saveIdentity = useMutation({
     mutationFn: async (identity: CommitIdentity) =>
-      (await updateCommitIdentity({ body: identity, throwOnError: true })).data,
+      (await updateCommitIdentity({ body: identity })).data,
     onMutate: () => queryClient.cancelQueries({ queryKey: gitStatusQueryOptions.queryKey }),
     onSuccess: (identity) => {
       queryClient.setQueryData(gitStatusQueryOptions.queryKey, (status: GitStatus | undefined) =>

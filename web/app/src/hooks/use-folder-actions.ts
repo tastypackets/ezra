@@ -7,8 +7,7 @@ import { foldersQueryOptions } from "@/queries/folder-queries";
 export function useFolderActions(name: string) {
   const queryClient = useQueryClient();
   const chooseToServe = useMutation({
-    mutationFn: async (serve: boolean) =>
-      chooseToServeFolder({ path: { name }, body: { serve }, throwOnError: true }),
+    mutationFn: async (serve: boolean) => chooseToServeFolder({ path: { name }, body: { serve } }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: foldersQueryOptions.queryKey }),
   });
   return { chooseToServe };

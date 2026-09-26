@@ -24,8 +24,7 @@ export function useAgentActions(agent: Agent) {
 
   const install = useMutation({
     mutationKey: mutationKey("install"),
-    mutationFn: async (_versionBefore: string | null) =>
-      (await installAgent({ path, throwOnError: true })).data,
+    mutationFn: async (_versionBefore: string | null) => (await installAgent({ path })).data,
     onSuccess: (status, versionBefore) => {
       const name = AGENT_NAMES[agent];
       if (!versionBefore || !status.installed_version) {
@@ -42,18 +41,17 @@ export function useAgentActions(agent: Agent) {
   });
   const startSignIn = useMutation({
     mutationKey: mutationKey("start_sign_in"),
-    mutationFn: async () => startAgentLogin({ path, throwOnError: true }),
+    mutationFn: async () => startAgentLogin({ path }),
     onSettled: refreshAgents,
   });
   const submitCode = useMutation({
     mutationKey: mutationKey("submit_code"),
-    mutationFn: async (code: string) =>
-      submitAgentLoginCode({ path, body: { code }, throwOnError: true }),
+    mutationFn: async (code: string) => submitAgentLoginCode({ path, body: { code } }),
     onSettled: refreshAgents,
   });
   const signOut = useMutation({
     mutationKey: mutationKey("sign_out"),
-    mutationFn: async () => logOutAgent({ path, throwOnError: true }),
+    mutationFn: async () => logOutAgent({ path }),
     onSettled: refreshAgents,
   });
   return { install, startSignIn, submitCode, signOut };

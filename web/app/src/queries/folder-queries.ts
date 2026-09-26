@@ -5,6 +5,6 @@ import { FOLDERS } from "./query-keys";
 
 export const foldersQueryOptions = queryOptions({
   queryKey: [FOLDERS],
-  queryFn: async () => (await listFolders({ throwOnError: true })).data,
+  queryFn: async () => (await listFolders()).data,
   staleTime: 5_000,
 });

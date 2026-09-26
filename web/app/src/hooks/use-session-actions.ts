@@ -13,8 +13,7 @@ export function useSessionActions() {
     queryClient.setQueryData(sessionQueryOptions.queryKey, { claimed: true, authenticated: true });
 
   const setUp = useMutation({
-    mutationFn: async (password: string) =>
-      setUpPassword({ body: { password }, throwOnError: true }),
+    mutationFn: async (password: string) => setUpPassword({ body: { password } }),
     onSuccess: markSignedIn,
     onError: async () => {
       await queryClient.refetchQueries({ queryKey: sessionQueryOptions.queryKey });
@@ -22,11 +21,11 @@ export function useSessionActions() {
     },
   });
   const signIn = useMutation({
-    mutationFn: async (password: string) => logIn({ body: { password }, throwOnError: true }),
+    mutationFn: async (password: string) => logIn({ body: { password } }),
     onSuccess: markSignedIn,
   });
   const signOut = useMutation({
-    mutationFn: async () => logOut({ throwOnError: true }),
+    mutationFn: async () => logOut(),
     onSuccess: () => {
       queryClient.setQueryData(sessionQueryOptions.queryKey, {
         claimed: true,

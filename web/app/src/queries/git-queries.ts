@@ -8,6 +8,6 @@ const SIGN_IN_POLL_MS = 3_000;
 
 export const gitStatusQueryOptions = queryOptions({
   queryKey: [GIT],
-  queryFn: async () => (await getGitStatus({ throwOnError: true })).data,
+  queryFn: async () => (await getGitStatus()).data,
   refetchInterval: (query) => (query.state.data?.github.login_prompt ? SIGN_IN_POLL_MS : false),
 });

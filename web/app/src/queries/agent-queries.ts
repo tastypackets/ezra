@@ -14,7 +14,7 @@ const RETRYING_POLL_MS = 15_000;
 /** Every agent's state. Polls only while something is in progress. */
 export const agentsQueryOptions = queryOptions({
   queryKey: [AGENTS],
-  queryFn: async () => (await listAgents({ throwOnError: true })).data,
+  queryFn: async () => (await listAgents()).data,
   staleTime: 5_000,
   refetchInterval: (query) => pollInterval(query.state.data),
 });
