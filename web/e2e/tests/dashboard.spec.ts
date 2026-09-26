@@ -103,6 +103,31 @@ test("a folder's switch and server follow changes made elsewhere", async ({ page
   }
 });
 
+test("a served folder's link names the folder", async ({ page }, testInfo) => {
+  const folder = `linked-${testInfo.retry}`;
+  const url = "https://claude.ai/code?environment=env_e2e";
+  // A running server needs a signed-in Claude Code, so the manager's reply is stubbed.
+  await page.route("**/api/v1/remote-control", async (route) => {
+    const overview: { folders: Record<string, object> } = await (await route.fetch()).json();
+    overview.folders[folder] = { state: "running", restarts: 0, url };
+    await route.fulfill({ json: overview });
+  });
+  inContainer("mkdir", `/projects/${folder}`);
+  try {
+    await page.goto("./");
+    const row = page.getByRole("listitem").filter({ hasText: folder });
+    const serve = row.getByRole("switch", { name: `Serve ${folder} in the Claude app` });
+    await serve.click();
+    await expect(
+      row.getByRole("link", { name: `Open ${folder} on claude.ai/code` }),
+    ).toHaveAttribute("href", url);
+    await serve.click();
+    await expect(serve).not.toBeChecked();
+  } finally {
+    inContainer("rmdir", `/projects/${folder}`);
+  }
+});
+
 test("a new repository starts with its switch on", async ({ page }, testInfo) => {
   const folder = `repository-${testInfo.retry}`;
   await page.goto("./");

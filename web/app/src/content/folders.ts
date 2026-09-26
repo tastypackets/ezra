@@ -8,6 +8,7 @@ export const FOLDERS_DESCRIPTIONS = {
   serve_label: (folder: string) => `Serve ${folder} in the Claude app`,
   worktrees: (count: number) => (count === 1 ? "1 worktree" : `${count} worktrees`),
   more_actions: (folder: string) => `More ${folder} actions`,
+  open: (folder: string) => `Open ${folder} on claude.ai/code`,
   spawn: "New sessions work in",
   worktree_needs_repository: "Needs a git repository.",
   delete: "Delete",

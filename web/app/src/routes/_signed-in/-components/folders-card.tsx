@@ -177,7 +177,7 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
             href={server.url}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={REMOTE_CONTROL_DESCRIPTIONS.open}
+            aria-label={FOLDERS_DESCRIPTIONS.open(folder.name)}
             className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
           >
             <ExternalLinkIcon />
