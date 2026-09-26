@@ -111,7 +111,6 @@ mod tests {
 
     use super::super::test_support::{ResponseExt, TestManager};
     use super::*;
-    use crate::manager::remote_control::RemoteControlStatus;
 
     #[tokio::test]
     async fn agents_require_a_login() {
@@ -147,7 +146,12 @@ mod tests {
                 config_disk_bytes: Some(0),
                 install_progress: None,
                 available_update: None,
-                remote_control: (agent == Agent::Claude).then(RemoteControlStatus::default),
+                remote_control: (agent == Agent::Claude).then(|| {
+                    manager
+                        .state
+                        .remote_control
+                        .status_or_waiting(&manager.state.projects.0)
+                }),
             })
         );
     }

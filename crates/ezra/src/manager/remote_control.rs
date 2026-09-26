@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
-use nix::unistd::Pid;
+use nix::unistd::{Pid, gethostname};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -121,11 +121,14 @@ pub struct RemoteControlStatus {
     pub last_error: Option<String>,
     /// Unexpected stops since the manager started.
     pub restarts: u32,
+    /// The device the Claude app lists this server under, the container's hostname.
+    pub device: Option<String>,
 }
 
 /// The shared handle the API reads statuses from and signals changes through.
 #[derive(Debug)]
 pub struct RemoteControl {
+    device: Option<String>,
     servers: SyncMutex<BTreeMap<PathBuf, RemoteControlStatus>>,
     sign_in: watch::Sender<SignIn>,
     changes: watch::Sender<u64>,
@@ -137,6 +140,9 @@ pub struct RemoteControl {
 impl Default for RemoteControl {
     fn default() -> Self {
         Self {
+            device: gethostname()
+                .ok()
+                .and_then(|hostname| hostname.into_string().ok()),
             servers: SyncMutex::default(),
             sign_in: watch::Sender::new(SignIn::Unknown),
             changes: watch::Sender::new(0),
@@ -150,11 +156,25 @@ impl Default for RemoteControl {
 impl RemoteControl {
     /// The server for `directory`, absent when it has none.
     pub fn status_of(&self, directory: &Path) -> Option<RemoteControlStatus> {
-        self.servers
+        let status = self
+            .servers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(directory)
-            .cloned()
+            .cloned()?;
+        Some(RemoteControlStatus {
+            device: self.device.clone(),
+            ..status
+        })
+    }
+
+    /// The server for `directory`, waiting when it has not started yet.
+    pub fn status_or_waiting(&self, directory: &Path) -> RemoteControlStatus {
+        self.status_of(directory)
+            .unwrap_or_else(|| RemoteControlStatus {
+                device: self.device.clone(),
+                ..RemoteControlStatus::default()
+            })
     }
 
     /// Settings, folders or the install changed, so servers may need to start, stop or restart.

@@ -1168,6 +1168,13 @@
           "restarts"
         ],
         "properties": {
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device the Claude app lists this server under, the container's hostname."
+          },
           "last_error": {
             "type": [
               "string",
