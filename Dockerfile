@@ -202,12 +202,22 @@ git lfs install --system --skip-repo
 rm --recursive --force /root/.local/share/mise /root/.local/state/mise
 EOF
 
-ARG PLAYWRIGHT_VERSION=1
+ARG PLAYWRIGHT_VERSION=1.63.0
 RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
     <<'EOF'
 set -euo pipefail
-npx --yes "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium
+npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install-deps chromium
+EOF
+
+RUN --mount=type=cache,target=/root/.npm,sharing=locked <<'EOF'
+set -euo pipefail
+browsers_directory="$(mktemp --directory)"
+PLAYWRIGHT_BROWSERS_PATH="${browsers_directory}" npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --no-shell chromium
+mv "${browsers_directory}"/chromium-*/chrome-linux* /opt/chromium
+rm --recursive --force "${browsers_directory}"
+printf '#!/bin/sh\nexec /opt/chromium/chrome --no-sandbox --disable-dev-shm-usage "$@"\n' >/usr/local/bin/chromium
+chmod 0755 /usr/local/bin/chromium
 EOF
 
 RUN <<'EOF'
@@ -234,6 +244,7 @@ ENV MISE_DATA_DIR=/config/mise \
     GH_PATH=/usr/local/share/ezra/shims/gh \
     GIT_CONFIG_GLOBAL=/config/git/config \
     DISABLE_UPDATES=1 \
+    PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/local/bin/chromium \
     PATH=/home/dev/.local/bin:/config/mise/shims:/usr/local/share/ezra/shims:${PATH}
 
 COPY --from=ezra-build /out/ezra /usr/local/bin/ezra

@@ -154,6 +154,28 @@ for shared_library in libnss3.so libgbm.so.1 libasound.so.2 libatk-bridge-2.0.so
     check_succeeds "${shared_library}" bash -c "ldconfig --print-cache | grep --quiet '${shared_library}'"
 done
 
+echo "Chromium:"
+check_version_command "chromium" chromium --version
+check_equals "Playwright MCP and playwright-cli launch chromium" "$(command -v chromium)" "${PLAYWRIGHT_MCP_EXECUTABLE_PATH:-}"
+check_succeeds "chromium renders a page headless" \
+    bash -c "chromium --headless --dump-dom 'data:text/html,<p>ezra</p>' | grep --quiet '<p>ezra</p>'"
+playwright_directory="$(mktemp --directory)"
+cat >"${playwright_directory}/load-page.mjs" <<'SCRIPT'
+import { chromium } from "playwright-core";
+
+const browser = await chromium.launch({ executablePath: process.argv[2] });
+const page = await browser.newPage();
+await page.goto("data:text/html,<title>ezra</title>");
+const title = await page.title();
+const version = browser.version();
+await browser.close();
+if (title !== "ezra") throw new Error(`page title is '${title}'`);
+console.log(`Chromium ${version}`);
+SCRIPT
+check_succeeds "npm installs playwright-core" npm install --prefix "${playwright_directory}" --silent playwright-core
+check_version_command "Playwright loads a page in chromium" node "${playwright_directory}/load-page.mjs" "$(command -v chromium)"
+rm --recursive --force "${playwright_directory}"
+
 echo "Agent user:"
 check_equals "runs as dev" "1000:1000:dev" "$(id --user):$(id --group):$(id --user --name)"
 check_succeeds "the ubuntu user is gone" bash -c '! getent passwd ubuntu'
