@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::{self, Permissions};
+use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use nix::sys::prctl;
@@ -10,8 +10,6 @@ use super::InitError;
 
 pub const SUDO_POLICY_VARIABLE: &str = "AGENT_SUDO";
 const SUDOERS_RULE_PATH: &str = "/etc/sudoers.d/agent-box";
-// sudo skips files in sudoers.d whose names contain a dot, so a half-written file is never read.
-const SUDOERS_RULE_STAGING_PATH: &str = "/etc/sudoers.d/.agent-box.new";
 const SUDOERS_RULE_MODE: u32 = 0o440;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,15 +54,8 @@ pub fn sudoers_rule_for(agent_user_name: &str) -> String {
 }
 
 fn write_sudoers_rule(rule: &str) -> io::Result<()> {
-    let mut staging_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(SUDOERS_RULE_MODE)
-        .open(SUDOERS_RULE_STAGING_PATH)?;
-    staging_file.write_all(rule.as_bytes())?;
-    staging_file.sync_all()?;
-    fs::rename(SUDOERS_RULE_STAGING_PATH, SUDOERS_RULE_PATH)
+    fs::write(SUDOERS_RULE_PATH, rule)?;
+    fs::set_permissions(SUDOERS_RULE_PATH, Permissions::from_mode(SUDOERS_RULE_MODE))
 }
 
 fn remove_sudoers_rule() -> io::Result<()> {

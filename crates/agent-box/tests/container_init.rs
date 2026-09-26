@@ -142,7 +142,7 @@ fn user_1000_gets_the_agent_environment() {
 
 #[test]
 #[ignore = "needs Docker and a built agent-box image"]
-fn unknown_user_gets_a_private_home() {
+fn unknown_user_gets_a_temporary_home() {
     let output = run_in_image(
         &["--user", "4321:4321"],
         &["bash", "-c", "test -w \"$HOME\" && printenv HOME"],

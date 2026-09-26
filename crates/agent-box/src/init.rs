@@ -113,7 +113,7 @@ fn adopt_invoking_user(
     let environment_overrides = match invoking_user {
         Some(user) => environment::identity_overrides(&AccountDetails::from(&user)),
         None if environment::home_is_unusable(env::var_os("HOME").as_deref()) => {
-            let home = environment::prepare_private_home(uid)?;
+            let home = environment::prepare_temporary_home(uid)?;
             tracing::info!(
                 "uid {uid} has no passwd entry; using {} as HOME",
                 home.display()

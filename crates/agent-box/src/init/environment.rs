@@ -1,14 +1,10 @@
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, DirBuilder};
-use std::io;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::PathBuf;
 
 use nix::unistd::{Uid, User};
 
 use super::InitError;
-
-const PRIVATE_HOME_MODE: u32 = 0o700;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentOverride {
@@ -65,33 +61,13 @@ pub fn home_is_unusable(current_home: Option<&OsStr>) -> bool {
     current_home.is_none_or(|home| home == "/")
 }
 
-pub fn prepare_private_home(uid: Uid) -> Result<PathBuf, InitError> {
+pub fn prepare_temporary_home(uid: Uid) -> Result<PathBuf, InitError> {
     let home = std::env::temp_dir().join(format!("agent-box-home-{uid}"));
-    ensure_private_directory(&home, uid).map_err(|source| InitError::TemporaryHome {
+    fs::create_dir_all(&home).map_err(|source| InitError::TemporaryHome {
         path: home.display().to_string(),
         source,
     })?;
     Ok(home)
-}
-
-fn ensure_private_directory(directory: &Path, owner: Uid) -> io::Result<()> {
-    match DirBuilder::new().mode(PRIVATE_HOME_MODE).create(directory) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            let metadata = fs::symlink_metadata(directory)?;
-            let is_private_and_ours = metadata.is_dir()
-                && metadata.uid() == owner.as_raw()
-                && metadata.permissions().mode() & 0o777 == PRIVATE_HOME_MODE;
-            if is_private_and_ours {
-                Ok(())
-            } else {
-                Err(io::Error::other(
-                    "it already exists and is not a private directory owned by this uid",
-                ))
-            }
-        }
-        Err(error) => Err(error),
-    }
 }
 
 #[cfg(test)]
