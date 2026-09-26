@@ -14,8 +14,9 @@ WORKDIR /ui
 RUN npm install --global "pnpm@${PNPM_VERSION}"
 COPY ui/package.json ui/pnpm-lock.yaml ui/pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
-COPY ui/tsconfig.json ./
+COPY ui/tsconfig.json ui/playwright.config.ts ./
 COPY ui/src ./src
+COPY ui/e2e ./e2e
 RUN pnpm build
 
 FROM rust:${RUST_VERSION}-slim-trixie AS agent-box-build

@@ -27,6 +27,7 @@ async function submitToApi(form: HTMLFormElement, path: string): Promise<void> {
   const button = form.querySelector("button");
   const idleLabel = button?.textContent ?? "";
   const busyLabel = form.dataset["busy"];
+  const body = JSON.stringify(Object.fromEntries(new FormData(form)));
   setError(form, null);
   setBusy(form, true);
   if (button !== null && busyLabel !== undefined) {
@@ -37,7 +38,7 @@ async function submitToApi(form: HTMLFormElement, path: string): Promise<void> {
     const response = await fetch(API_ROOT + path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(Object.fromEntries(new FormData(form))),
+      body,
     });
     if (response.ok) {
       window.location.reload();
@@ -73,15 +74,16 @@ function setError(form: HTMLFormElement, message: string | null): void {
 }
 
 async function errorMessageOf(response: Response): Promise<string> {
+  const text = await response.text().catch(() => "");
   try {
-    const body = (await response.json()) as ErrorBody;
+    const body = JSON.parse(text) as ErrorBody;
     if (typeof body.error === "string" && body.error !== "") {
       return body.error;
     }
   } catch {
-    // Not JSON; fall back to the status line.
+    // Not JSON, e.g. a request the server could not parse.
   }
-  return `${response.status} ${response.statusText}`.trim();
+  return text.trim() !== "" ? text.trim() : `Request failed (${response.status})`;
 }
 
 async function reloadWhenSignInEnds(agent: string): Promise<void> {
