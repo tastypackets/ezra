@@ -20,7 +20,8 @@ export const REMOTE_CONTROL_DESCRIPTIONS = {
     `Restarts on Claude Code ${version} once no sessions run, by ${time} at the latest.`,
   update_waiting_short: (version: string) =>
     `Restarts on Claude Code ${version} once no sessions run.`,
-  log_title: (server: string) => `${server} log`,
+  projects_log_title: "/projects log",
+  log_title: (folder: string) => `${folder} log`,
   log_description: (path: string) => `The last lines of ${path}.`,
   log_empty: "Nothing logged yet.",
   log_lines: "Log lines",

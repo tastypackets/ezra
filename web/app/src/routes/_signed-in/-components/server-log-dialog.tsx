@@ -36,7 +36,11 @@ export function ServerLogDialog({ folder, open, onOpenChange }: ServerLogDialogP
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent closeLabel={REMOTE_CONTROL_DESCRIPTIONS.close} className="sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{REMOTE_CONTROL_DESCRIPTIONS.log_title(folder ?? "/projects")}</DialogTitle>
+          <DialogTitle>
+            {folder === undefined
+              ? REMOTE_CONTROL_DESCRIPTIONS.projects_log_title
+              : REMOTE_CONTROL_DESCRIPTIONS.log_title(folder)}
+          </DialogTitle>
           {log.data ? (
             <DialogDescription className="break-all">
               {REMOTE_CONTROL_DESCRIPTIONS.log_description(log.data.path)}
