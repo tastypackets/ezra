@@ -140,7 +140,7 @@ fn agents_find_the_project_list_in_projects() {
             "cat",
             "/projects/AGENTS.md",
         ]));
-        if agents_file.contains("| app |  |  |") {
+        if agents_file.contains("Folders:\n- app\n") {
             assert!(
                 agents_file.contains("<!-- ezra:folders:start -->"),
                 "{agents_file}"
