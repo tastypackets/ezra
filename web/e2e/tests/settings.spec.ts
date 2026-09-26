@@ -125,6 +125,11 @@ test("git starts signed out of GitHub and keeps the commit identity", async ({ p
   await git.getByLabel("Email").fill("ada@example.com");
   await git.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Commit identity saved.")).toBeVisible();
+  const footerPadding = await git.evaluate((section) => {
+    const save = section.querySelector("button[type=submit]");
+    return section.getBoundingClientRect().bottom - (save?.getBoundingClientRect().bottom ?? 0);
+  });
+  expect(footerPadding).toBe(16);
 
   await page.reload();
   await expect(git.getByLabel("Name")).toHaveValue("Ada Lovelace");
