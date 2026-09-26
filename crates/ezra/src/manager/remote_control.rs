@@ -24,6 +24,7 @@ use utoipa::ToSchema;
 
 use super::agents::Agent;
 use super::events::{Events, Topic};
+use super::folders::Folder;
 use super::login::{AgentCli, SignInStatus, StrExt};
 use super::processes::{Process, ProcessStat};
 use super::state::AppState;
@@ -389,6 +390,19 @@ impl RemoteControl {
         }
     }
 
+    /// Removes the logs of folders that are not in /projects any more.
+    fn remove_logs_of_gone_folders(&self, present: &[Folder]) -> io::Result<()> {
+        for log in self.logs.join("folders").entries_or_empty()? {
+            let gone = log
+                .file_name()
+                .is_none_or(|name| !present.iter().any(|folder| name == folder.name.as_str()));
+            if gone {
+                log.remove_if_present()?;
+            }
+        }
+        Ok(())
+    }
+
     fn forget(&self, directory: &Path) {
         let forgotten = self
             .servers
@@ -742,10 +756,15 @@ impl AppState {
                 break;
             }
             folders.retain(|_, supervisor| !supervisor.is_finished());
-            for name in self.served_folder_names().await {
-                folders.entry(name.clone()).or_insert_with(|| {
-                    tokio::spawn(self.clone().supervise_server(Served::Folder(name)))
-                });
+            if let Ok(present) = self.folders().await {
+                if let Err(error) = self.remote_control.remove_logs_of_gone_folders(&present) {
+                    tracing::warn!("could not remove the logs of folders that are gone: {error}");
+                }
+                for name in self.served_folder_names(present).await {
+                    folders.entry(name.clone()).or_insert_with(|| {
+                        tokio::spawn(self.clone().supervise_server(Served::Folder(name)))
+                    });
+                }
             }
             if signals.wait_for_change(RECHECK_INTERVAL).await == Wake::ShutDown {
                 break;
@@ -769,10 +788,7 @@ impl AppState {
         true
     }
 
-    async fn served_folder_names(&self) -> Vec<String> {
-        let Ok(folders) = self.folders().await else {
-            return Vec::new();
-        };
+    async fn served_folder_names(&self, folders: Vec<Folder>) -> Vec<String> {
         let settings = self.settings.lock().await;
         let claude = &settings.agents.claude;
         if !claude.remote_control.enabled {
@@ -2374,6 +2390,61 @@ esac"#,
         assert!(state.projects.0.join("stopped-app").exists());
         assert_eq!(state.remote_control.status_of(&app), None);
         assert!(state.settings.lock().await.agents.claude.folders.is_empty());
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn the_logs_of_folders_gone_from_projects_are_removed() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            "echo \"https://claude.ai/code?environment=env_$(basename \"$PWD\")\"; exec sleep 60",
+        );
+        let log = |name: &str| state.remote_control.log(&Served::Folder(name.to_owned())).0;
+        fs::create_dir_all(log("renamed")).expect("an old log is created");
+        let (served, unserved) = (
+            state.projects.folder("served"),
+            state.projects.folder("unserved"),
+        );
+        for (folder, name) in [(&served, "served"), (&unserved, "unserved")] {
+            fs::create_dir_all(folder).expect("folder is created");
+            state
+                .change_folder_choice(name, |choice| choice.serve = true)
+                .await
+                .expect("the choice is saved");
+        }
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_in(&state, &served, ServerState::Running).await;
+        wait_in(&state, &unserved, ServerState::Running).await;
+        assert!(!log("renamed").exists());
+        assert!(log("served").is_dir() && log("unserved").is_dir());
+
+        state
+            .change_folder_choice("unserved", |choice| choice.serve = false)
+            .await
+            .expect("the choice is saved");
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .expect("the deadline fits");
+        while state.remote_control.status_of(&unserved).is_some() {
+            assert!(Instant::now() < deadline, "the folder server did not stop");
+            sleep(Duration::from_millis(50)).await;
+        }
+        assert!(log("unserved").is_dir());
+
+        for folder in [&served, &unserved] {
+            fs::remove_dir_all(folder).expect("folder is removed");
+        }
+        state.remote_control.reconsider();
+        while log("served").exists() || log("unserved").exists() {
+            assert!(Instant::now() < deadline, "a log of a gone folder is left");
+            sleep(Duration::from_millis(50)).await;
+        }
+        assert!(state.remote_control.log(&Served::Projects).0.is_dir());
 
         state.remote_control.begin_shut_down();
         supervisor.await.expect("supervisor stops");
