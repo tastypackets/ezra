@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 
 use axum::Router;
@@ -9,7 +10,6 @@ use http_body_util::BodyExt;
 use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 
-use super::router;
 use super::session::SessionStatus;
 use crate::manager::agents::{InstallPaths, TlsVerification};
 use crate::manager::settings::Settings;
@@ -19,12 +19,26 @@ pub const PASSWORD: &str = r#"{"password": "correct horse"}"#;
 
 pub struct TestManager {
     router: Router,
+    pub state: AppState,
     pub settings_path: PathBuf,
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
 }
 
 impl TestManager {
     pub fn new() -> Self {
+        let manager = Self::without_web_app();
+        let web = manager.directory.path().join("web");
+        fs::create_dir_all(web.join("assets")).expect("assets directory is created");
+        fs::write(
+            web.join("index.html"),
+            "<html><head></head><body></body></html>",
+        )
+        .expect("index is written");
+        fs::write(web.join("assets/app-1a2b.js"), "").expect("asset is written");
+        manager
+    }
+
+    pub fn without_web_app() -> Self {
         let directory = tempfile::tempdir().expect("temporary directory");
         let settings_path = directory.path().join("ezra/settings.toml");
         let install_paths = InstallPaths::under_home(&directory.path().join("home"))
@@ -32,16 +46,17 @@ impl TestManager {
                 directory.path().join("config/claude"),
                 directory.path().join("config/codex"),
             );
-        let router = router(AppState::new(
+        let state = AppState::new(
             settings_path.clone(),
             Settings::default(),
             install_paths,
             TlsVerification::default(),
-        ));
+        );
         Self {
-            router,
+            router: state.clone().into_router(directory.path().join("web")),
+            state,
             settings_path,
-            _directory: directory,
+            directory,
         }
     }
 
@@ -77,7 +92,7 @@ impl TestManager {
         self.get("/api/v1/session", cookie).await.json().await
     }
 
-    async fn send(&self, request: Request<Body>) -> Response {
+    pub async fn send(&self, request: Request<Body>) -> Response {
         self.router
             .clone()
             .oneshot(request)

@@ -95,12 +95,19 @@ async fn serve() -> Result<(), ManagerError> {
         tls_verification,
     );
     tokio::spawn(state.clone().reinstall_configured_agents());
-    let app = api::router(state.clone()).merge(web::router(state, web_directory));
+    let app = state.into_router(web_directory);
     axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
         .handle(handle)
         .serve(app.into_make_service())
         .await
         .map_err(|source| ManagerError::Serve { port, source })
+}
+
+impl state::AppState {
+    /// The API and the web app.
+    fn into_router(self, web_directory: PathBuf) -> axum::Router {
+        api::router(self.clone()).merge(web::router(self, web_directory))
+    }
 }
 
 /// How the manager is started, read from the environment.

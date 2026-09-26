@@ -2,13 +2,13 @@ mod agents;
 mod login;
 pub mod session;
 #[cfg(test)]
-mod test_support;
+pub mod test_support;
 
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::CookieJar;
 use serde::Serialize;
@@ -32,6 +32,9 @@ pub fn router(state: AppState) -> Router {
             post(login::submit_code),
         )
         .route("/api/v1/agents/{agent}/logout", post(login::log_out))
+        .route("/api", any(not_found))
+        .route("/api/", any(not_found))
+        .route("/api/{*path}", any(not_found))
         .with_state(state)
 }
 
@@ -55,6 +58,7 @@ impl FromRequestParts<AppState> for Session {
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized(&'static str),
+    NotFound(&'static str),
     Conflict(String),
     AgentFailed(String),
     Internal(String),
@@ -65,6 +69,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.to_owned()),
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.to_owned()),
+            Self::NotFound(message) => (StatusCode::NOT_FOUND, message.to_owned()),
             Self::Conflict(message) => (StatusCode::CONFLICT, message),
             Self::AgentFailed(message) => {
                 tracing::warn!("{message}");
@@ -83,6 +88,10 @@ impl From<SettingsError> for ApiError {
     fn from(error: SettingsError) -> Self {
         Self::Internal(error.to_string())
     }
+}
+
+async fn not_found() -> ApiError {
+    ApiError::NotFound("no such endpoint")
 }
 
 fn internal(error: impl std::fmt::Display) -> ApiError {
