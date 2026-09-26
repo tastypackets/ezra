@@ -236,16 +236,15 @@ test.describe("in a narrow window", () => {
       await page.goto("./");
       const row = page.getByRole("listitem").filter({ hasText: folder });
       const group = row.getByRole("group", { name: "Claude Code" });
-      const state = group.getByText("Running", { exact: true });
       await expect(group.getByText("0 sessions")).toBeVisible();
-      await expect(state).toBeVisible();
+      await expect(group.getByText("Running", { exact: true })).toBeVisible();
       await expect(row.getByText(repository)).toBeVisible();
       const middle = (element: Element) => {
         const box = element.getBoundingClientRect();
         return box.top + box.height / 2;
       };
       expect(await group.getByRole("switch").evaluate(middle)).toBeCloseTo(
-        await state.evaluate(middle),
+        await group.getByText("Claude Code", { exact: true }).evaluate(middle),
         0,
       );
       expect(
