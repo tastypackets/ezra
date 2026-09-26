@@ -1,0 +1,124 @@
+mod environment;
+mod exec;
+mod groups;
+mod privileges;
+mod stdio;
+
+use std::env;
+use std::ffi::{NulError, OsStr, OsString};
+use std::path::Path;
+use std::process::ExitCode;
+
+use nix::errno::Errno;
+use nix::unistd::{AccessFlags, Uid, User, access};
+
+use environment::{AccountDetails, EnvironmentOverride};
+
+const AGENT_USER_NAME: &str = "dev";
+const DIRECTORIES_AGENT_MUST_WRITE: [&str; 2] = ["/config", "/projects"];
+
+#[derive(Debug, thiserror::Error)]
+pub enum InitError {
+    #[error("user {AGENT_USER_NAME:?} does not exist in /etc/passwd")]
+    AgentUserMissing,
+    #[error("user {AGENT_USER_NAME:?} must not have uid 0 or gid 0")]
+    AgentUserIsPrivileged,
+    #[error("could not look up {subject}: {source}")]
+    Lookup { subject: String, source: Errno },
+    #[error("user name {0:?} contains a NUL byte")]
+    InvalidUserName(#[from] NulError),
+    #[error(
+        "could not switch to {AGENT_USER_NAME}: {step} failed: {source}; \
+         if the container runs without CAP_SETUID/CAP_SETGID, start it with --user 1000:1000 instead"
+    )]
+    DropPrivileges { step: &'static str, source: Errno },
+    #[error("root privileges could still be regained after switching to {AGENT_USER_NAME}")]
+    PrivilegesStillRecoverable,
+    #[error("could not clear the inheritable capability set: {0}")]
+    ClearCapabilities(#[from] caps::errors::CapsError),
+    #[error("could not prepare {path} as HOME: {source}")]
+    TemporaryHome {
+        path: String,
+        source: std::io::Error,
+    },
+}
+
+pub fn run(program: &OsStr, arguments: &[OsString]) -> ExitCode {
+    match prepare() {
+        Ok(environment_overrides) => {
+            exec::replace_process(program, arguments, &environment_overrides)
+        }
+        Err(error) => {
+            tracing::error!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
+    let environment_overrides = if Uid::effective().is_root() {
+        become_agent_user()?
+    } else {
+        adopt_invoking_user()?
+    };
+    warn_about_unwritable_directories();
+    Ok(environment_overrides)
+}
+
+fn become_agent_user() -> Result<Vec<EnvironmentOverride>, InitError> {
+    let agent = look_up_user_by_name(AGENT_USER_NAME)?.ok_or(InitError::AgentUserMissing)?;
+    if agent.uid.is_root() || agent.gid.as_raw() == 0 {
+        return Err(InitError::AgentUserIsPrivileged);
+    }
+
+    let supplementary_groups = groups::supplementary_groups_for(&agent)?;
+    stdio::hand_over_to(agent.uid);
+    let environment_overrides = environment::agent_user_overrides(
+        env::var_os("HOME").as_deref(),
+        &AccountDetails::from(&agent),
+    );
+    privileges::drop_to(&agent, &supplementary_groups)?;
+    Ok(environment_overrides)
+}
+
+fn adopt_invoking_user() -> Result<Vec<EnvironmentOverride>, InitError> {
+    let uid = Uid::effective();
+    let invoking_user = User::from_uid(uid).map_err(|source| InitError::Lookup {
+        subject: format!("uid {uid}"),
+        source,
+    })?;
+
+    let environment_overrides = match invoking_user {
+        Some(user) => environment::identity_overrides(&AccountDetails::from(&user)),
+        None if environment::home_is_unusable(env::var_os("HOME").as_deref()) => {
+            let home = environment::prepare_private_home(uid)?;
+            tracing::info!(
+                "uid {uid} has no passwd entry; using {} as HOME",
+                home.display()
+            );
+            vec![EnvironmentOverride::new("HOME", home)]
+        }
+        None => Vec::new(),
+    };
+
+    privileges::clear_inheritable_capabilities()?;
+    Ok(environment_overrides)
+}
+
+fn look_up_user_by_name(user_name: &str) -> Result<Option<User>, InitError> {
+    User::from_name(user_name).map_err(|source| InitError::Lookup {
+        subject: format!("user {user_name:?}"),
+        source,
+    })
+}
+
+fn warn_about_unwritable_directories() {
+    for directory in DIRECTORIES_AGENT_MUST_WRITE {
+        if let Err(problem) = access(Path::new(directory), AccessFlags::W_OK) {
+            tracing::warn!(
+                "{directory} is not writable by uid {} ({problem}); fix the ownership or mount options of the mounted directory on the host",
+                Uid::effective()
+            );
+        }
+    }
+}

@@ -14,6 +14,33 @@ report_failure() {
     failure_count=$((failure_count + 1))
 }
 
+check_succeeds() {
+    local description="$1"
+    shift
+    if "$@" >/dev/null 2>&1; then
+        report_pass "${description}"
+    else
+        report_failure "${description}"
+    fi
+}
+
+check_equals() {
+    local description="$1" expected="$2" actual="$3"
+    if [[ ${actual} == "${expected}" ]]; then
+        report_pass "${description}"
+    else
+        report_failure "${description}: expected '${expected}', got '${actual}'"
+    fi
+}
+
+finish() {
+    if ((failure_count > 0)); then
+        echo "${failure_count} check(s) failed." >&2
+        exit 1
+    fi
+    echo "All checks passed."
+}
+
 check_version_command() {
     local description="$1"
     shift
@@ -22,16 +49,6 @@ check_version_command() {
         report_pass "${description}: $(head --lines=1 <<<"${version_output}")"
     else
         report_failure "${description}: '$*' failed: ${version_output}"
-    fi
-}
-
-check_succeeds() {
-    local description="$1"
-    shift
-    if "$@" >/dev/null 2>&1; then
-        report_pass "${description}"
-    else
-        report_failure "${description}"
     fi
 }
 
@@ -133,8 +150,11 @@ for shared_library in libnss3.so libgbm.so.1 libasound.so.2 libatk-bridge-2.0.so
     check_succeeds "${shared_library}" bash -c "ldconfig --print-cache | grep --quiet '${shared_library}'"
 done
 
-if ((failure_count > 0)); then
-    echo "${failure_count} check(s) failed." >&2
-    exit 1
-fi
-echo "All checks passed."
+echo "Agent user:"
+check_equals "runs as dev" "1000:1000:dev" "$(id --user):$(id --group):$(id --user --name)"
+check_succeeds "the ubuntu user is gone" bash -c '! getent passwd ubuntu'
+tests_directory="$(dirname "${BASH_SOURCE[0]}")"
+files_owned_by_agent_elsewhere="$(find / -xdev \( -path /proc -o -path /tmp -o -path /home/dev -o -path /config -o -path /projects -o -path "${tests_directory}" \) -prune -o -uid 1000 -print 2>/dev/null || true)"
+check_equals "nothing outside /home/dev, /config and /projects is owned by uid 1000" "" "${files_owned_by_agent_elsewhere}"
+
+finish

@@ -2,6 +2,32 @@
 
 # Optional: --secret id=github_token,env=GITHUB_TOKEN avoids GitHub rate limits during mise installs.
 
+# Must match the rust version in mise.toml.
+ARG RUST_VERSION=1.98.1
+
+FROM rust:${RUST_VERSION}-slim-trixie AS agent-box-build
+
+ARG TARGETARCH
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+WORKDIR /src
+
+RUN rustup target add x86_64-unknown-linux-musl
+
+RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
+    --mount=type=bind,source=Cargo.lock,target=Cargo.lock \
+    --mount=type=bind,source=crates,target=crates \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    <<'EOF'
+set -euo pipefail
+if [[ ${TARGETARCH} != amd64 ]]; then
+    echo "agent-box is only built for amd64 so far, not ${TARGETARCH}" >&2
+    exit 1
+fi
+cargo build --locked --release --target x86_64-unknown-linux-musl --package agent-box
+install -D target/x86_64-unknown-linux-musl/release/agent-box /out/agent-box
+EOF
+
 FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -155,3 +181,20 @@ RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
 set -euo pipefail
 npx --yes "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium
 EOF
+
+RUN <<'EOF'
+set -euo pipefail
+userdel --remove ubuntu
+if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null; then
+    echo "UID or GID 1000 is still taken after removing the ubuntu user" >&2
+    exit 1
+fi
+groupadd --gid 1000 dev
+useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev
+install --directory --owner=dev --group=dev /config /projects
+EOF
+
+COPY --from=agent-box-build /out/agent-box /usr/local/bin/agent-box
+
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/agent-box", "init", "--"]
+CMD ["bash"]
