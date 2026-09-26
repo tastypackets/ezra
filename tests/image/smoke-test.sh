@@ -172,8 +172,26 @@ await browser.close();
 if (title !== "ezra") throw new Error(`page title is '${title}'`);
 console.log(`Chromium ${version}`);
 SCRIPT
+cat >"${playwright_directory}/record-video.mjs" <<'SCRIPT'
+import { statSync } from "node:fs";
+import { chromium } from "playwright-core";
+
+const browser = await chromium.launch({ executablePath: process.argv[2] });
+const context = await browser.newContext({ recordVideo: { dir: process.argv[3] } });
+const page = await context.newPage();
+await page.goto("data:text/html,<p>ezra</p>");
+const video = page.video();
+await context.close();
+await browser.close();
+const size = statSync(await video.path()).size;
+if (size === 0) throw new Error("the video is empty");
+console.log(`${size} bytes`);
+SCRIPT
 check_succeeds "npm installs playwright-core" npm install --prefix "${playwright_directory}" --silent playwright-core
 check_version_command "Playwright loads a page in chromium" node "${playwright_directory}/load-page.mjs" "$(command -v chromium)"
+check_equals "dev owns the Playwright cache" "dev" "$(stat --format=%U "${HOME}/.cache/ms-playwright")"
+check_version_command "Playwright records video with the baked ffmpeg" \
+    node "${playwright_directory}/record-video.mjs" "$(command -v chromium)" "${playwright_directory}/videos"
 rm --recursive --force "${playwright_directory}"
 
 echo "Agent user:"

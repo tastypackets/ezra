@@ -210,16 +210,6 @@ set -euo pipefail
 npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install-deps chromium
 EOF
 
-RUN --mount=type=cache,target=/root/.npm,sharing=locked <<'EOF'
-set -euo pipefail
-browsers_directory="$(mktemp --directory)"
-PLAYWRIGHT_BROWSERS_PATH="${browsers_directory}" npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --no-shell chromium
-mv "${browsers_directory}"/chromium-*/chrome-linux* /opt/chromium
-rm --recursive --force "${browsers_directory}"
-printf '#!/bin/sh\nexec /opt/chromium/chrome --no-sandbox --disable-dev-shm-usage "$@"\n' >/usr/local/bin/chromium
-chmod 0755 /usr/local/bin/chromium
-EOF
-
 RUN <<'EOF'
 set -euo pipefail
 rm --force /var/lib/man-db/auto-update
@@ -232,6 +222,19 @@ groupadd --gid 1000 dev
 useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev
 install --directory --owner=dev --group=dev /config /projects /cache
 install --directory /etc/ezra/setup.d
+EOF
+
+RUN --mount=type=cache,target=/root/.npm,sharing=locked <<'EOF'
+set -euo pipefail
+browsers_directory="$(mktemp --directory)"
+PLAYWRIGHT_BROWSERS_PATH="${browsers_directory}" npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --no-shell chromium
+mv "${browsers_directory}"/chromium-*/chrome-linux* /opt/chromium
+install --directory --owner=dev --group=dev /home/dev/.cache /home/dev/.cache/ms-playwright
+mv "${browsers_directory}"/ffmpeg-* /home/dev/.cache/ms-playwright/
+chown --recursive dev:dev /home/dev/.cache/ms-playwright
+rm --recursive --force "${browsers_directory}"
+printf '#!/bin/sh\nexec /opt/chromium/chrome --no-sandbox --disable-dev-shm-usage "$@"\n' >/usr/local/bin/chromium
+chmod 0755 /usr/local/bin/chromium
 EOF
 
 ENV MISE_DATA_DIR=/config/mise \
