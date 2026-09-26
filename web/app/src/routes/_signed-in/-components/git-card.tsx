@@ -6,7 +6,7 @@ import type { RefObject } from "react";
 
 import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
 import { Badge } from "@/components/ui/badge";
-import type { badgeVariants } from "@/components/ui/badge";
+import type { BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -24,8 +24,6 @@ import { useGitActions } from "@/hooks/use-git-actions";
 import { handOffFocus } from "@/lib/focus";
 import { errorMessage } from "@/lib/utils";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
-
-type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
 
 /** The GitHub sign-in and commit identity every agent's git uses. */
 export function GitCard() {

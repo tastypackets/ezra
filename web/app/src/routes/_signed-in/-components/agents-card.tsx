@@ -1,11 +1,11 @@
-import type { AgentStatus } from "@ezra/client";
+import type { AgentStatus, RemoteControlOverview } from "@ezra/client";
 import { cn } from "cn";
 import { EllipsisIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
 import { useCallback, useId, useRef } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import type { badgeVariants } from "@/components/ui/badge";
+import type { BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -32,28 +32,32 @@ import {
 import { useNow } from "@/hooks/use-now";
 import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
 import { handOffFocus } from "@/lib/focus";
+import { remoteControlSummary } from "@/lib/remote-control";
 import { signInEnd } from "@/lib/sign-in";
 import type { SignInEnd } from "@/lib/sign-in";
 import { downloadPercent, formatDateTime } from "@/lib/utils";
-
-type BadgeVariant = NonNullable<Parameters<typeof badgeVariants>[0]>["variant"];
 
 /** How often the sign-in warning is checked against the clock. */
 const CLOCK_MS = 60_000;
 
 export interface AgentsCardProps {
   agents: AgentStatus[];
+  remoteControl: RemoteControlOverview;
 }
 
 interface AgentProps {
   status: AgentStatus;
   /** Set once the sign-in end is close enough to warn about. */
   end: SignInEnd | undefined;
+  /** Remote Control in a few words, for the agents that have it. */
+  remote: string;
 }
 
 /** Every agent with its install and sign-in actions: a table on wide screens, a list on phones. */
-export function AgentsCard({ agents }: AgentsCardProps) {
+export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
   const now = useNow(CLOCK_MS);
+  const remote = (status: AgentStatus) =>
+    status.agent === "claude" ? remoteControlSummary(remoteControl) : "—";
   return (
     <Card>
       <CardHeader>
@@ -67,6 +71,9 @@ export function AgentsCard({ agents }: AgentsCardProps) {
               <TableHead>{AGENTS_DESCRIPTIONS.column_status}</TableHead>
               <TableHead>{AGENTS_DESCRIPTIONS.column_version}</TableHead>
               <TableHead>{AGENTS_DESCRIPTIONS.column_account}</TableHead>
+              <TableHead>
+                <RemoteLabel />
+              </TableHead>
               <TableHead className="text-right">
                 <SavedDataLabel />
               </TableHead>
@@ -77,7 +84,12 @@ export function AgentsCard({ agents }: AgentsCardProps) {
           </TableHeader>
           <TableBody>
             {agents.map((status) => (
-              <AgentRow key={status.agent} status={status} end={signInEnd(status, now)} />
+              <AgentRow
+                key={status.agent}
+                status={status}
+                end={signInEnd(status, now)}
+                remote={remote(status)}
+              />
             ))}
           </TableBody>
         </Table>
@@ -85,7 +97,12 @@ export function AgentsCard({ agents }: AgentsCardProps) {
       <CardContent className="lg:hidden">
         <ul className="flex flex-col divide-y">
           {agents.map((status) => (
-            <AgentListItem key={status.agent} status={status} end={signInEnd(status, now)} />
+            <AgentListItem
+              key={status.agent}
+              status={status}
+              end={signInEnd(status, now)}
+              remote={remote(status)}
+            />
           ))}
         </ul>
       </CardContent>
@@ -93,7 +110,7 @@ export function AgentsCard({ agents }: AgentsCardProps) {
   );
 }
 
-function AgentRow({ status, end }: AgentProps) {
+function AgentRow({ status, end, remote }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status, end);
@@ -110,6 +127,7 @@ function AgentRow({ status, end }: AgentProps) {
         {facts.account}
         <SignInEndNote end={end} />
       </TableCell>
+      <TableCell className="tabular-nums">{remote}</TableCell>
       <TableCell className="text-right tabular-nums">{facts.savedData}</TableCell>
       <TableCell>
         <AgentActions status={status} nameId={nameId} ending={Boolean(end)} className="items-end" />
@@ -118,7 +136,7 @@ function AgentRow({ status, end }: AgentProps) {
   );
 }
 
-function AgentListItem({ status, end }: AgentProps) {
+function AgentListItem({ status, end, remote }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status, end);
@@ -139,6 +157,10 @@ function AgentListItem({ status, end }: AgentProps) {
           <SignInEndNote end={end} />
         </dd>
         <dt className="text-muted-foreground">
+          <RemoteLabel />
+        </dt>
+        <dd className="tabular-nums">{remote}</dd>
+        <dt className="text-muted-foreground">
           <SavedDataLabel />
         </dt>
         <dd className="tabular-nums">{facts.savedData}</dd>
@@ -158,6 +180,10 @@ function SignInEndNote({ end }: { end: SignInEnd | undefined }) {
       {end.ended ? AGENTS_DESCRIPTIONS.sign_in_ended(when) : AGENTS_DESCRIPTIONS.sign_in_ends(when)}
     </span>
   );
+}
+
+function RemoteLabel() {
+  return <Hint content={AGENTS_DESCRIPTIONS.remote_hint}>{AGENTS_DESCRIPTIONS.column_remote}</Hint>;
 }
 
 function SavedDataLabel() {

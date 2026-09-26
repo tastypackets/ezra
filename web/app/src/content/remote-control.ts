@@ -1,6 +1,6 @@
 import type { ServerProblem, ServerState } from "@ezra/client";
 
-function sessionCount(sessions: number, capacity: number | null | undefined): string {
+function sessionCount(sessions: number, capacity?: number | null): string {
   if (capacity != null) {
     return `${sessions} of ${capacity} sessions`;
   }
@@ -18,8 +18,9 @@ export const REMOTE_CONTROL_DESCRIPTIONS = {
   last_stop: "Last stop",
   usage: (sessions: number, capacity: number | null | undefined, memory: string) =>
     `${sessionCount(sessions, capacity)} running, using ${memory} of memory.`,
-  sessions: (sessions: number, capacity: number | null | undefined) =>
-    sessionCount(sessions, capacity),
+  sessions: sessionCount,
+  summary: (servers: number, sessions: number) =>
+    `${servers === 1 ? "1 server" : `${servers} servers`}, ${sessionCount(sessions)}`,
   memory_hint: "Memory this server and its sessions use.",
   more_actions: "More Remote Control actions",
   show_log: "Show log",

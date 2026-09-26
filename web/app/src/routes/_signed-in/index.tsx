@@ -29,7 +29,7 @@ function DashboardPage() {
   const { data: remoteControl } = useSuspenseQuery(remoteControlQueryOptions);
   return (
     <div className="flex flex-col gap-4">
-      <AgentsCard agents={agents} />
+      <AgentsCard agents={agents} remoteControl={remoteControl} />
       {agents.map((status) =>
         status.login_prompt ? (
           <SignInPanel key={status.agent} agent={status.agent} prompt={status.login_prompt} />
