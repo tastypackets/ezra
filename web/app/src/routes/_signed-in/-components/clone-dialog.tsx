@@ -26,8 +26,14 @@ import type { TakenNames } from "@/lib/repositories";
 import { errorMessage } from "@/lib/utils";
 import { gitHubRepositoriesQueryOptions } from "@/queries/git-queries";
 
+interface CloneDialogProps {
+  taken: TakenNames;
+  /** Shows the switch that serves the new folder in the Claude app. */
+  claudeInstalled: boolean;
+}
+
 /** "Clone repository" and the dialog it opens. */
-export function CloneDialog({ taken }: { taken: TakenNames }) {
+export function CloneDialog({ taken, claudeInstalled }: CloneDialogProps) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -38,19 +44,22 @@ export function CloneDialog({ taken }: { taken: TakenNames }) {
         <DialogHeader>
           <DialogTitle>{CLONE_DESCRIPTIONS.title}</DialogTitle>
         </DialogHeader>
-        <CloneFormLoader taken={taken} onStarted={() => setOpen(false)} />
+        <CloneFormLoader
+          taken={taken}
+          claudeInstalled={claudeInstalled}
+          onStarted={() => setOpen(false)}
+        />
       </DialogContent>
     </Dialog>
   );
 }
 
-interface CloneFormProps {
-  taken: TakenNames;
+interface CloneFormProps extends CloneDialogProps {
   onStarted: () => void;
 }
 
 /** Waits for the "Serve new repositories" setting, which the serve switch starts from. */
-function CloneFormLoader({ taken, onStarted }: CloneFormProps) {
+function CloneFormLoader({ taken, claudeInstalled, onStarted }: CloneFormProps) {
   const settings = useQuery(getClaudeSettingsOptions());
   if (settings.isPending) {
     return (
@@ -62,6 +71,7 @@ function CloneFormLoader({ taken, onStarted }: CloneFormProps) {
   return (
     <CloneForm
       taken={taken}
+      claudeInstalled={claudeInstalled}
       onStarted={onStarted}
       serveByDefault={settings.data?.remote_control.serve_repositories ?? true}
     />
@@ -70,6 +80,7 @@ function CloneFormLoader({ taken, onStarted }: CloneFormProps) {
 
 function CloneForm({
   taken,
+  claudeInstalled,
   onStarted,
   serveByDefault,
 }: CloneFormProps & { serveByDefault: boolean }) {
@@ -94,7 +105,7 @@ function CloneForm({
           body: {
             repository: value.repository.trim(),
             name: value.name.trim(),
-            serve: value.serve,
+            serve: claudeInstalled ? value.serve : undefined,
           },
         });
       } catch {
@@ -175,21 +186,23 @@ function CloneForm({
             );
           }}
         </form.Field>
-        <form.Field name="serve">
-          {(field) => (
-            <Field orientation="horizontal">
-              <Switch
-                id={ids.serve}
-                aria-labelledby={ids.serveLabel}
-                checked={field.state.value}
-                onCheckedChange={field.handleChange}
-              />
-              <FieldLabel id={ids.serveLabel} htmlFor={ids.serve}>
-                {CLONE_DESCRIPTIONS.serve}
-              </FieldLabel>
-            </Field>
-          )}
-        </form.Field>
+        {claudeInstalled ? (
+          <form.Field name="serve">
+            {(field) => (
+              <Field orientation="horizontal">
+                <Switch
+                  id={ids.serve}
+                  aria-labelledby={ids.serveLabel}
+                  checked={field.state.value}
+                  onCheckedChange={field.handleChange}
+                />
+                <FieldLabel id={ids.serveLabel} htmlFor={ids.serve}>
+                  {CLONE_DESCRIPTIONS.serve}
+                </FieldLabel>
+              </Field>
+            )}
+          </form.Field>
+        ) : null}
       </FieldGroup>
       {startClone.isError ? (
         <p role="alert" className="text-destructive">

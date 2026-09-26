@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-import { inContainer, recordApiCalls } from "./manager.ts";
+import {
+  inContainer,
+  installFakeClaude,
+  nudgeRemoteControl,
+  recordApiCalls,
+  removeFakeClaude,
+} from "./manager.ts";
 
 test("the dashboard arrives with its data, then fetches only what changes", async ({
   page,
@@ -92,77 +98,80 @@ test("keyboard focus stays in an agent's row", async ({ page }) => {
   await expect(more).toBeFocused();
 });
 
-test("a folder's switch and server follow changes made elsewhere", async ({ page }, testInfo) => {
-  const folder = `notes-${testInfo.retry}`;
-  inContainer("mkdir", `/projects/${folder}`);
-  try {
-    await page.goto("./");
-    const row = page.getByRole("listitem").filter({ hasText: folder });
-    const serve = row.getByRole("switch", { name: `Serve ${folder} in the Claude app` });
-    await expect(serve).not.toBeChecked();
-    const chosen = await page.request.put(`api/v1/folders/${folder}/remote-control`, {
-      data: { serve: true },
-    });
-    expect(chosen.status()).toBe(204);
-    await expect(serve).toBeChecked();
-    await expect(row.getByText("Waiting")).toBeVisible();
-    await serve.click();
-    await expect(serve).not.toBeChecked();
-    await expect(row.getByText("Waiting")).toBeHidden();
-  } finally {
-    inContainer("rmdir", `/projects/${folder}`);
-  }
-});
+test.describe("with Claude Code installed", () => {
+  test.beforeEach(() => installFakeClaude("2.1.0-e2e"));
+  test.afterEach(({ request }) => removeFakeClaude(request));
 
-test("a served folder's link names the folder", async ({ page }, testInfo) => {
-  const folder = `linked-${testInfo.retry}`;
-  const url = "https://claude.ai/code?environment=env_e2e";
-  // A running server needs a signed-in Claude Code, so the manager's reply is stubbed.
-  await page.route("**/api/v1/remote-control", async (route) => {
-    const overview: { folders: Record<string, object> } = await (await route.fetch()).json();
-    overview.folders[folder] = { state: "running", restarts: 0, url };
-    await route.fulfill({ json: overview });
+  test("a folder's switch and server follow changes made elsewhere", async ({ page }, testInfo) => {
+    const folder = `notes-${testInfo.retry}`;
+    inContainer("mkdir", `/projects/${folder}`);
+    try {
+      await page.goto("./");
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      const serve = row.getByRole("switch", { name: `Serve ${folder} in the Claude app` });
+      await expect(serve).not.toBeChecked();
+      const chosen = await page.request.put(`api/v1/folders/${folder}/remote-control`, {
+        data: { serve: true },
+      });
+      expect(chosen.status()).toBe(204);
+      await expect(serve).toBeChecked();
+      await expect(row.getByText("Waiting")).toBeVisible();
+      await serve.click();
+      await expect(serve).not.toBeChecked();
+      await expect(row.getByText("Waiting")).toBeHidden();
+    } finally {
+      inContainer("rmdir", `/projects/${folder}`);
+    }
   });
-  inContainer("mkdir", `/projects/${folder}`);
-  try {
+
+  test("a served folder's link names the folder", async ({ page }, testInfo) => {
+    const folder = `linked-${testInfo.retry}`;
+    const url = "https://claude.ai/code?environment=env_e2e";
+    // A running server needs a signed-in Claude Code, so the manager's reply is stubbed.
+    await page.route("**/api/v1/remote-control", async (route) => {
+      const overview: { folders: Record<string, object> } = await (await route.fetch()).json();
+      overview.folders[folder] = { state: "running", restarts: 0, url };
+      await route.fulfill({ json: overview });
+    });
+    inContainer("mkdir", `/projects/${folder}`);
+    try {
+      await page.goto("./");
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      const serve = row.getByRole("switch", { name: `Serve ${folder} in the Claude app` });
+      await serve.click();
+      await expect(
+        row.getByRole("link", { name: `Open ${folder} on claude.ai/code` }),
+      ).toHaveAttribute("href", url);
+      await serve.click();
+      await expect(serve).not.toBeChecked();
+    } finally {
+      inContainer("rmdir", `/projects/${folder}`);
+    }
+  });
+
+  test("a new repository starts with its switch on", async ({ page }, testInfo) => {
+    const folder = `repository-${testInfo.retry}`;
     await page.goto("./");
-    const row = page.getByRole("listitem").filter({ hasText: folder });
-    const serve = row.getByRole("switch", { name: `Serve ${folder} in the Claude app` });
-    await serve.click();
-    await expect(
-      row.getByRole("link", { name: `Open ${folder} on claude.ai/code` }),
-    ).toHaveAttribute("href", url);
-    await serve.click();
-    await expect(serve).not.toBeChecked();
-  } finally {
-    inContainer("rmdir", `/projects/${folder}`);
-  }
-});
+    await expect(page.getByRole("heading", { name: "Folders" })).toBeVisible();
+    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    try {
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      await expect(
+        row.getByRole("switch", { name: `Serve ${folder} in the Claude app` }),
+      ).toBeChecked();
+      await expect(row.getByText("Waiting")).toBeVisible();
+    } finally {
+      inContainer("rm", "-rf", `/projects/${folder}`);
+    }
+  });
 
-test("a new repository starts with its switch on", async ({ page }, testInfo) => {
-  const folder = `repository-${testInfo.retry}`;
-  await page.goto("./");
-  await expect(page.getByRole("heading", { name: "Folders" })).toBeVisible();
-  inContainer("git", "init", "--quiet", `/projects/${folder}`);
-  try {
-    const row = page.getByRole("listitem").filter({ hasText: folder });
-    await expect(
-      row.getByRole("switch", { name: `Serve ${folder} in the Claude app` }),
-    ).toBeChecked();
-    await expect(row.getByText("Waiting")).toBeVisible();
-  } finally {
-    inContainer("rm", "-rf", `/projects/${folder}`);
-  }
-});
-
-test("Remote Control waits for Claude Code", async ({ page }) => {
-  await page.goto("./");
-  const projects = page.getByRole("listitem").filter({ hasText: "All projects" });
-  await expect(projects.getByText("Waiting")).toBeVisible();
-  await expect(
-    projects.getByText("Starts once Claude Code is installed and signed in."),
-  ).toBeVisible();
-  await expect(page.getByRole("row", { name: /Claude Code/ })).toContainText("Waiting");
+  test("Remote Control waits for Claude Code's sign-in", async ({ page }) => {
+    await page.goto("./");
+    const projects = page.getByRole("listitem").filter({ hasText: "All projects" });
+    await expect(projects.getByText("Waiting")).toBeVisible();
+    await expect(projects.getByText("Starts once Claude Code is signed in.")).toBeVisible();
+    await expect(page.getByRole("row", { name: /Claude Code/ })).toContainText("Waiting");
+  });
 });
 
 test("hovering Settings loads its data before the click", async ({ page }) => {
@@ -213,5 +222,34 @@ test.describe("on a phone", () => {
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
     expect(overflow).toBe(0);
+  });
+
+  test("a served folder fits the screen", async ({ page, request }, testInfo) => {
+    const folder = `phone-${testInfo.retry}`;
+    installFakeClaude(
+      "2.1.0-e2e",
+      "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600",
+    );
+    await nudgeRemoteControl(request);
+    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    try {
+      await page.goto("./");
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      await expect(row.getByText("Running", { exact: true })).toBeVisible();
+      await row.scrollIntoViewIfNeeded();
+      await expect(
+        row.getByRole("switch", { name: `Serve ${folder} in the Claude app` }),
+      ).toBeInViewport({ ratio: 1 });
+      await expect(row.getByRole("button", { name: `More ${folder} actions` })).toBeInViewport({
+        ratio: 1,
+      });
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      );
+      expect(overflow).toBe(0);
+    } finally {
+      inContainer("rm", "-rf", `/projects/${folder}`);
+      await removeFakeClaude(request);
+    }
   });
 });

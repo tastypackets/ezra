@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { inContainer } from "./manager.ts";
+import { inContainer, installFakeClaude, removeFakeClaude } from "./manager.ts";
 
 const COMMIT = ["-c", "user.name=E2E", "-c", "user.email=e2e@example.com", "commit", "--quiet"];
 
@@ -17,10 +17,14 @@ function folderRow(page: Page, folder: string) {
   return page.getByRole("listitem").filter({ hasText: folder });
 }
 
-test("a repository is cloned from its URL and deleted after confirming", async ({ page }) => {
+test("a repository is cloned from its URL and deleted after confirming", async ({
+  page,
+  request,
+}) => {
   const source = `/tmp/source-${randomUUID().slice(0, 8)}`;
   const folder = `cloned-${randomUUID().slice(0, 8)}`;
   makeRepository(source);
+  installFakeClaude("2.1.0-e2e");
   try {
     await page.goto("./");
     await page.getByRole("button", { name: "Clone repository" }).click();
@@ -50,6 +54,7 @@ test("a repository is cloned from its URL and deleted after confirming", async (
     await expect(row).toBeHidden();
   } finally {
     inContainer("rm", "-rf", source, `/projects/${folder}`);
+    await removeFakeClaude(request);
   }
 });
 

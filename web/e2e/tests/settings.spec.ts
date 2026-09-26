@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page, PlaywrightTestOptions, PlaywrightWorkerArgs } from "@playwright/test";
 
-import { PASSWORD } from "./manager.ts";
+import { PASSWORD, installFakeClaude, removeFakeClaude } from "./manager.ts";
 
 function card(page: Page, title: string) {
   return page.locator("section[data-slot=card]", {
@@ -39,84 +39,89 @@ test("only the newest three toasts show", async ({ page }) => {
   await expect(saved.filter({ visible: true })).toHaveCount(3);
 });
 
-test("every Claude setting is named and described", async ({ page }) => {
-  await page.goto("./settings");
-  const claude = card(page, "Claude Code");
-  await expect(
-    claude.getByRole("switch", { name: "Serve to the Claude app" }),
-  ).toHaveAccessibleDescription(
-    "Serves /projects, and the folders you choose, while Claude Code is signed in.",
-  );
-  await expect(
-    claude.getByRole("switch", { name: "Serve new repositories" }),
-  ).toHaveAccessibleDescription("Repositories added to /projects start with their switch on.");
-  await expect(
-    claude.getByRole("combobox", { name: "Permission mode" }),
-  ).toHaveAccessibleDescription("Sessions started from the Claude app keep this mode.");
-  await expect(
-    claude.getByRole("radiogroup", { name: "Release channel" }),
-  ).toHaveAccessibleDescription(
-    "Switching to stable keeps the installed version until stable has a newer one.",
-  );
-  await expect(claude.getByRole("radio", { name: "Stable" })).toHaveAccessibleDescription(
-    "About a week behind, skipping releases with major regressions.",
-  );
-});
+test.describe("with Claude Code installed", () => {
+  test.beforeEach(() => installFakeClaude("2.1.0-e2e"));
+  test.afterEach(({ request }) => removeFakeClaude(request));
 
-test("Remote Control settings are saved and shown on the dashboard", async ({ page }) => {
-  await page.goto("./settings");
-  const claude = card(page, "Claude Code");
-  const serve = claude.getByRole("switch", { name: "Serve to the Claude app" });
-  const mode = page.getByRole("combobox", { name: "Permission mode" });
-  const capacity = claude.getByLabel("Sessions per folder");
-  await expect(capacity).toHaveValue("");
-  await expect(capacity).toHaveAttribute("placeholder", "Claude Code's default");
+  test("every Claude setting is named and described", async ({ page }) => {
+    await page.goto("./settings");
+    const claude = card(page, "Claude Code");
+    await expect(
+      claude.getByRole("switch", { name: "Serve to the Claude app" }),
+    ).toHaveAccessibleDescription(
+      "Serves /projects, and the folders you choose, while Claude Code is signed in.",
+    );
+    await expect(
+      claude.getByRole("switch", { name: "Serve new repositories" }),
+    ).toHaveAccessibleDescription("Repositories added to /projects start with their switch on.");
+    await expect(
+      claude.getByRole("combobox", { name: "Permission mode" }),
+    ).toHaveAccessibleDescription("New sessions from the Claude app start in this mode.");
+    await expect(
+      claude.getByRole("radiogroup", { name: "Release channel" }),
+    ).toHaveAccessibleDescription(
+      "Switching to stable keeps the installed version until stable has a newer one.",
+    );
+    await expect(claude.getByRole("radio", { name: "Stable" })).toHaveAccessibleDescription(
+      "About a week behind, skipping releases with major regressions.",
+    );
+  });
 
-  await serve.setChecked(false);
-  await mode.fill("plan");
-  await mode.press("Enter");
-  await expect(mode).toHaveValue("plan");
-  await mode.fill("acceptEdits");
-  await page.keyboard.press("Escape");
-  await capacity.fill("2");
-  await claude.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
+  test("Remote Control settings are saved and shown on the dashboard", async ({ page }) => {
+    await page.goto("./settings");
+    const claude = card(page, "Claude Code");
+    const serve = claude.getByRole("switch", { name: "Serve to the Claude app" });
+    const mode = page.getByRole("combobox", { name: "Permission mode" });
+    const capacity = claude.getByLabel("Sessions per folder");
+    await expect(capacity).toHaveValue("");
+    await expect(capacity).toHaveAttribute("placeholder", "Claude Code's default");
 
-  await page.reload();
-  await expect(serve).not.toBeChecked();
-  await expect(mode).toHaveValue("acceptEdits");
-  await expect(capacity).toHaveValue("2");
-  await page.getByRole("link", { name: "Agents", exact: true }).click();
-  await expect(page.getByRole("link", { name: "Turned off in Settings." })).toBeVisible();
+    await serve.setChecked(false);
+    await mode.fill("plan");
+    await mode.press("Enter");
+    await expect(mode).toHaveValue("plan");
+    await mode.fill("acceptEdits");
+    await page.keyboard.press("Escape");
+    await capacity.fill("2");
+    await claude.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 
-  await page.getByRole("link", { name: "Settings", exact: true }).click();
-  await serve.setChecked(true);
-  await mode.fill("auto");
-  await page.keyboard.press("Escape");
-  await capacity.fill("");
-  await claude.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
-});
+    await page.reload();
+    await expect(serve).not.toBeChecked();
+    await expect(mode).toHaveValue("acceptEdits");
+    await expect(capacity).toHaveValue("2");
+    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Turned off in Settings." })).toBeVisible();
 
-test("a setting Claude cannot take is refused next to its field", async ({ page }) => {
-  await page.goto("./settings");
-  const claude = card(page, "Claude Code");
-  const capacity = claude.getByRole("spinbutton", { name: "Sessions per folder" });
-  await capacity.fill("0");
-  await expect(
-    claude.getByText("Enter a whole number of 1 or more, or leave it empty."),
-  ).toBeVisible();
-  await expect(capacity).toHaveAccessibleDescription(
-    "Each session is its own Claude Code process, about 150 to 300 MB. Enter a whole number of 1 or more, or leave it empty.",
-  );
-  await expect(capacity).toHaveAttribute("aria-invalid", "true");
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await serve.setChecked(true);
+    await mode.fill("auto");
+    await page.keyboard.press("Escape");
+    await capacity.fill("");
+    await claude.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
+  });
 
-  const mode = claude.getByRole("combobox", { name: "Permission mode" });
-  await mode.fill("two words");
-  await page.keyboard.press("Escape");
-  await expect(mode).toHaveAccessibleDescription(
-    "New sessions from the Claude app start in this mode. Choose one of the listed modes.",
-  );
+  test("a setting Claude cannot take is refused next to its field", async ({ page }) => {
+    await page.goto("./settings");
+    const claude = card(page, "Claude Code");
+    const capacity = claude.getByRole("spinbutton", { name: "Sessions per folder" });
+    await capacity.fill("0");
+    await expect(
+      claude.getByText("Enter a whole number of 1 or more, or leave it empty."),
+    ).toBeVisible();
+    await expect(capacity).toHaveAccessibleDescription(
+      "Each session is its own Claude Code process, about 150 to 300 MB. Enter a whole number of 1 or more, or leave it empty.",
+    );
+    await expect(capacity).toHaveAttribute("aria-invalid", "true");
+
+    const mode = claude.getByRole("combobox", { name: "Permission mode" });
+    await mode.fill("two words");
+    await page.keyboard.press("Escape");
+    await expect(mode).toHaveAccessibleDescription(
+      "New sessions from the Claude app start in this mode. Choose one of the listed modes.",
+    );
+  });
 });
 
 test("git starts signed out of GitHub and keeps the commit identity", async ({ page }) => {

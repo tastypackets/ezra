@@ -1,8 +1,13 @@
 import { execFileSync } from "node:child_process";
 
-import type { Page } from "@playwright/test";
+import { expect } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 
 export const PASSWORD = "correct horse";
+
+const CLAUDE_VERSIONS = "/home/dev/.local/share/claude/versions";
+const CLAUDE_COMMAND = "/home/dev/.local/bin/claude";
+export const CLAUDE_CREDENTIALS = "/config/claude/.credentials.json";
 
 function container(): string {
   const name = process.env["EZRA_E2E_CONTAINER"];
@@ -50,4 +55,41 @@ export function recordApiCalls(page: Page): string[] {
     }
   });
   return calls;
+}
+
+/** Links a `claude` script as `version`, signed in with Remote Control running `server` when given, signed out otherwise. */
+export function installFakeClaude(version: string, server?: string): void {
+  const signIn = server
+    ? `"auth status") echo '{"loggedIn":true,"email":"e2e@example.com","subscriptionType":"max"}' ;;
+  remote-control*) ${server} ;;`
+    : `"auth status") echo '{"loggedIn":false}' ;;`;
+  writeInContainer(
+    `${CLAUDE_VERSIONS}/${version}`,
+    `#!/bin/sh
+case "$1 $2" in
+  ${signIn}
+  "auth login") echo 'Visit https://claude.ai/oauth/authorize?code=true to sign in'; exec sleep 300 ;;
+esac
+`,
+    "755",
+  );
+  inContainer("mkdir", "-p", "/home/dev/.local/bin");
+  inContainer("ln", "-sfn", `${CLAUDE_VERSIONS}/${version}`, CLAUDE_COMMAND);
+}
+
+/** A settings change makes the manager check Claude Code's sign-in and servers at once. */
+export async function nudgeRemoteControl(request: APIRequestContext): Promise<void> {
+  const settings = await (await request.get("api/v1/agents/claude/settings")).json();
+  for (const serve_repositories of [!settings.remote_control.serve_repositories, true]) {
+    const saved = await request.put("api/v1/agents/claude/settings", {
+      data: { ...settings, remote_control: { ...settings.remote_control, serve_repositories } },
+    });
+    expect(saved.ok()).toBe(true);
+  }
+}
+
+export async function removeFakeClaude(request: APIRequestContext): Promise<void> {
+  await request.post("api/v1/agents/claude/logout");
+  inContainer("rm", "-rf", CLAUDE_COMMAND, CLAUDE_VERSIONS, CLAUDE_CREDENTIALS);
+  await nudgeRemoteControl(request);
 }

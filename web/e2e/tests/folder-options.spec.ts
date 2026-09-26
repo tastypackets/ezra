@@ -1,64 +1,69 @@
 import { expect, test } from "@playwright/test";
 
-import { inContainer } from "./manager.ts";
+import { inContainer, installFakeClaude, removeFakeClaude } from "./manager.ts";
 
-test("a repository keeps its own Claude Code options", async ({ page }, testInfo) => {
-  const folder = `options-${testInfo.retry}`;
-  inContainer("git", "init", "--quiet", `/projects/${folder}`);
-  try {
-    await page.goto("./");
-    const row = page.getByRole("listitem").filter({ hasText: folder });
-    await row.getByRole("button", { name: `More ${folder} actions` }).click();
-    await page.getByRole("menuitem", { name: "Claude Code options" }).click();
-    const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
-    await expect(dialog).toContainText("Empty fields follow Settings.");
-    await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
-    const mode = dialog.getByRole("combobox", { name: "Permission mode" });
-    const capacity = dialog.getByRole("spinbutton", { name: "Sessions at once" });
-    await expect(mode).toHaveAttribute("placeholder", "Default: auto");
-    await expect(capacity).toHaveAttribute("placeholder", "Default: Claude Code's");
+test.describe("with Claude Code installed", () => {
+  test.beforeEach(() => installFakeClaude("2.1.0-e2e"));
+  test.afterEach(({ request }) => removeFakeClaude(request));
 
-    await dialog.getByRole("radio", { name: /Their own worktree/ }).click();
-    await mode.fill("plan");
-    await page.keyboard.press("Escape");
-    await capacity.fill("2");
-    await dialog.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByText(`Saved the Claude Code options for ${folder}.`)).toBeVisible();
-    await expect(dialog).toBeHidden();
+  test("a repository keeps its own Claude Code options", async ({ page }, testInfo) => {
+    const folder = `options-${testInfo.retry}`;
+    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    try {
+      await page.goto("./");
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      await row.getByRole("button", { name: `More ${folder} actions` }).click();
+      await page.getByRole("menuitem", { name: "Claude Code options" }).click();
+      const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
+      await expect(dialog).toContainText("Empty fields follow Settings.");
+      await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
+      const mode = dialog.getByRole("combobox", { name: "Permission mode" });
+      const capacity = dialog.getByRole("spinbutton", { name: "Sessions at once" });
+      await expect(mode).toHaveAttribute("placeholder", "Default: auto");
+      await expect(capacity).toHaveAttribute("placeholder", "Default: Claude Code's");
 
-    const folders = await page.request.get("api/v1/folders");
-    expect(await folders.json()).toContainEqual(
-      expect.objectContaining({
-        name: folder,
-        claude: { spawn: "worktree", permission_mode: "plan", capacity: 2 },
-      }),
-    );
-  } finally {
-    inContainer("rm", "-rf", `/projects/${folder}`);
-  }
-});
+      await dialog.getByRole("radio", { name: /Their own worktree/ }).click();
+      await mode.fill("plan");
+      await page.keyboard.press("Escape");
+      await capacity.fill("2");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByText(`Saved the Claude Code options for ${folder}.`)).toBeVisible();
+      await expect(dialog).toBeHidden();
 
-test("a plain folder's sessions work in the folder", async ({ page }, testInfo) => {
-  const folder = `plain-${testInfo.retry}`;
-  inContainer("mkdir", `/projects/${folder}`);
-  try {
-    await page.goto("./");
-    const row = page.getByRole("listitem").filter({ hasText: folder });
-    await row.getByRole("button", { name: `More ${folder} actions` }).click();
-    await page.getByRole("menuitem", { name: "Claude Code options" }).click();
-    const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
-    await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
-    const inWorktree = dialog.getByRole("radio", { name: /Their own worktree/ });
-    await expect(inWorktree).toBeDisabled();
-    await expect(dialog).toContainText("Needs a git repository.");
+      const folders = await page.request.get("api/v1/folders");
+      expect(await folders.json()).toContainEqual(
+        expect.objectContaining({
+          name: folder,
+          claude: { spawn: "worktree", permission_mode: "plan", capacity: 2 },
+        }),
+      );
+    } finally {
+      inContainer("rm", "-rf", `/projects/${folder}`);
+    }
+  });
 
-    const refused = await page.request.put(`api/v1/folders/${folder}/claude-options`, {
-      data: { spawn: "worktree" },
-    });
-    expect(refused.status()).toBe(409);
-  } finally {
-    inContainer("rmdir", `/projects/${folder}`);
-  }
+  test("a plain folder's sessions work in the folder", async ({ page }, testInfo) => {
+    const folder = `plain-${testInfo.retry}`;
+    inContainer("mkdir", `/projects/${folder}`);
+    try {
+      await page.goto("./");
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      await row.getByRole("button", { name: `More ${folder} actions` }).click();
+      await page.getByRole("menuitem", { name: "Claude Code options" }).click();
+      const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
+      await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
+      const inWorktree = dialog.getByRole("radio", { name: /Their own worktree/ });
+      await expect(inWorktree).toBeDisabled();
+      await expect(dialog).toContainText("Needs a git repository.");
+
+      const refused = await page.request.put(`api/v1/folders/${folder}/claude-options`, {
+        data: { spawn: "worktree" },
+      });
+      expect(refused.status()).toBe(409);
+    } finally {
+      inContainer("rmdir", `/projects/${folder}`);
+    }
+  });
 });
 
 test("a repository's worktrees are counted and git ignores them", async ({ page }, testInfo) => {

@@ -1,46 +1,17 @@
 import { expect, test } from "@playwright/test";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
-import { inContainer, writeInContainer } from "./manager.ts";
+import {
+  CLAUDE_CREDENTIALS,
+  inContainer,
+  installFakeClaude,
+  nudgeRemoteControl,
+  removeFakeClaude,
+  writeInContainer,
+} from "./manager.ts";
 
-const VERSIONS = "/home/dev/.local/share/claude/versions";
-const COMMAND = "/home/dev/.local/bin/claude";
-const CREDENTIALS = "/config/claude/.credentials.json";
+const CONNECTED = "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600";
 const DAY_MS = 86_400_000;
-
-/** Links a `claude` script as `version` whose Remote Control runs `server`. */
-function installFakeClaude(version: string, server: string): void {
-  writeInContainer(
-    `${VERSIONS}/${version}`,
-    `#!/bin/sh
-case "$1 $2" in
-  "auth status") echo '{"loggedIn":true,"email":"e2e@example.com","subscriptionType":"max"}' ;;
-  "auth login") echo 'Visit https://claude.ai/oauth/authorize?code=true to sign in'; exec sleep 300 ;;
-  remote-control*) ${server} ;;
-esac
-`,
-    "755",
-  );
-  inContainer("mkdir", "-p", "/home/dev/.local/bin");
-  inContainer("ln", "-sfn", `${VERSIONS}/${version}`, COMMAND);
-}
-
-/** A settings change makes the manager check Claude Code's sign-in and servers at once. */
-async function nudgeRemoteControl(request: APIRequestContext): Promise<void> {
-  const settings = await (await request.get("api/v1/agents/claude/settings")).json();
-  for (const serve_repositories of [!settings.remote_control.serve_repositories, true]) {
-    const saved = await request.put("api/v1/agents/claude/settings", {
-      data: { ...settings, remote_control: { ...settings.remote_control, serve_repositories } },
-    });
-    expect(saved.ok()).toBe(true);
-  }
-}
-
-async function removeFakeClaude(request: APIRequestContext): Promise<void> {
-  await request.post("api/v1/agents/claude/logout");
-  inContainer("rm", "-rf", COMMAND, VERSIONS, CREDENTIALS);
-  await nudgeRemoteControl(request);
-}
 
 function projectsRow(page: Page) {
   return page.getByRole("listitem").filter({ hasText: "All projects" });
@@ -123,7 +94,7 @@ test("a busy server waits for its sessions before restarting on an update", asyn
 function writeCredentials(days: number): void {
   const now = Date.now();
   writeInContainer(
-    CREDENTIALS,
+    CLAUDE_CREDENTIALS,
     JSON.stringify({
       claudeAiOauth: {
         accessToken: "e2e",
@@ -140,10 +111,7 @@ test("the agents card warns days before Claude Code's sign-in ends until it is r
   page,
   request,
 }) => {
-  installFakeClaude(
-    "2.1.0-e2e",
-    "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600",
-  );
+  installFakeClaude("2.1.0-e2e", CONNECTED);
   writeCredentials(2);
   await nudgeRemoteControl(request);
   await page.goto("./");
@@ -157,4 +125,59 @@ test("the agents card warns days before Claude Code's sign-in ends until it is r
   await nudgeRemoteControl(request);
   await expect(claude.getByText("Sign-in ending")).toBeHidden();
   await expect(claude.getByRole("button", { name: "Sign in again" })).toBeHidden();
+});
+
+test("Claude Code's parts are hidden until it is installed", async ({
+  page,
+  request,
+}, testInfo) => {
+  const folder = `parts-${testInfo.retry}`;
+  inContainer("mkdir", `/projects/${folder}`);
+  try {
+    await page.goto("./settings");
+    const settings = page.locator("section[data-slot=card]", {
+      has: page.getByRole("heading", { name: "Claude Code", exact: true, level: 2 }),
+    });
+    const serveAll = settings.getByRole("switch", { name: "Serve to the Claude app" });
+    await expect(settings.getByRole("radiogroup", { name: "Release channel" })).toBeVisible();
+    await expect(serveAll).toBeHidden();
+
+    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    const claude = page.getByRole("row", { name: /Claude Code/ });
+    const row = page.getByRole("listitem").filter({ hasText: folder });
+    const more = row.getByRole("button", { name: `More ${folder} actions` });
+    const clone = page.getByRole("dialog", { name: "Clone repository" });
+    await expect(claude).toContainText("Waiting");
+    await expect(row).toBeVisible();
+    await expect(projectsRow(page)).toBeHidden();
+    await expect(row.getByRole("group", { name: "Claude Code" })).toBeHidden();
+    await more.click();
+    await expect(page.getByRole("menuitem", { name: "Delete" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Claude Code options" })).toBeHidden();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Clone repository" }).click();
+    await expect(clone.getByLabel("Folder")).toBeVisible();
+    await expect(clone.getByRole("switch")).toBeHidden();
+    await page.keyboard.press("Escape");
+
+    installFakeClaude("2.1.0-e2e", CONNECTED);
+    await nudgeRemoteControl(request);
+    await expect(projectsRow(page).getByText("Running", { exact: true })).toBeVisible();
+    await expect(page.getByText(/^In the Claude app, open .+\.$/)).toBeVisible();
+    await expect(claude).toContainText("1 server, 0 sessions");
+    await expect(
+      row.getByRole("switch", { name: `Serve ${folder} in the Claude app` }),
+    ).not.toBeChecked();
+    await more.click();
+    await expect(page.getByRole("menuitem", { name: "Claude Code options" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Clone repository" }).click();
+    await expect(clone.getByRole("switch", { name: "Serve in the Claude app" })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await expect(serveAll).toBeVisible();
+  } finally {
+    inContainer("rmdir", `/projects/${folder}`);
+  }
 });

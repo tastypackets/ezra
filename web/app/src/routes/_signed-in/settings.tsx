@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { agentsQueryOptions } from "@/queries/agent-queries";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
 import { managerQueryOptions } from "@/queries/manager-queries";
 import { getClaudeSettingsOptions } from "@ezra/client/react-query.gen";
@@ -12,6 +13,7 @@ import { ManagerCard } from "./-components/manager-card";
 export const Route = createFileRoute("/_signed-in/settings")({
   loader: async ({ context }) => {
     await Promise.all([
+      context.queryClient.ensureQueryData(agentsQueryOptions),
       context.queryClient.ensureQueryData(getClaudeSettingsOptions()),
       context.queryClient.ensureQueryData(gitStatusQueryOptions),
       context.queryClient.ensureQueryData(managerQueryOptions),

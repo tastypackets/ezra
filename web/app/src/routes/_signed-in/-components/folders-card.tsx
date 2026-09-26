@@ -37,6 +37,7 @@ import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-con
 import { useCloneActions, useFolderActions } from "@/hooks/use-folder-actions";
 import { SERVER_BADGES } from "@/lib/remote-control";
 import { errorMessage } from "@/lib/utils";
+import { agentsQueryOptions, isClaudeInstalled } from "@/queries/agent-queries";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
@@ -51,6 +52,10 @@ export function FoldersCard() {
   const folders = useQuery(foldersQueryOptions);
   const clones = useQuery(clonesQueryOptions);
   const { data: remoteControl } = useSuspenseQuery(remoteControlQueryOptions);
+  const { data: claudeInstalled } = useSuspenseQuery({
+    ...agentsQueryOptions,
+    select: isClaudeInstalled,
+  });
   const listed = folders.data ?? [];
   const cloning = clones.data ?? [];
   const taken = {
@@ -62,7 +67,7 @@ export function FoldersCard() {
     <Card>
       <CardHeader>
         <CardTitle>{FOLDERS_DESCRIPTIONS.title}</CardTitle>
-        {remoteControl.projects.state === "running" ? (
+        {claudeInstalled && remoteControl.projects.state === "running" ? (
           <CardDescription>
             {device
               ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(device)
@@ -70,23 +75,26 @@ export function FoldersCard() {
           </CardDescription>
         ) : null}
         <CardAction>
-          <CloneDialog taken={taken} />
+          <CloneDialog taken={taken} claudeInstalled={claudeInstalled} />
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <ul className="flex flex-col divide-y">
-          <ProjectsRow overview={remoteControl} />
-          {cloning.map((clone) => (
-            <CloneRow key={`clone:${clone.name}`} clone={clone} />
-          ))}
-          {listed.map((folder) => (
-            <FolderRow
-              key={folder.name}
-              folder={folder}
-              server={remoteControl.folders[folder.name]}
-            />
-          ))}
-        </ul>
+        {claudeInstalled || cloning.length > 0 || listed.length > 0 ? (
+          <ul className="flex flex-col divide-y">
+            {claudeInstalled ? <ProjectsRow overview={remoteControl} /> : null}
+            {cloning.map((clone) => (
+              <CloneRow key={`clone:${clone.name}`} clone={clone} />
+            ))}
+            {listed.map((folder) => (
+              <FolderRow
+                key={folder.name}
+                folder={folder}
+                server={claudeInstalled ? remoteControl.folders[folder.name] : undefined}
+                claudeInstalled={claudeInstalled}
+              />
+            ))}
+          </ul>
+        ) : null}
         {folders.isPending ? (
           <div className="flex justify-center text-muted-foreground">
             <Spinner />
@@ -198,7 +206,13 @@ function CloneRow({ clone }: { clone: CloneStatus }) {
   );
 }
 
-function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteControlStatus }) {
+interface FolderRowProps {
+  folder: FolderStatus;
+  server?: RemoteControlStatus;
+  claudeInstalled: boolean;
+}
+
+function FolderRow({ folder, server, claudeInstalled }: FolderRowProps) {
   const { chooseToServe } = useFolderActions();
   const [deleting, setDeleting] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -231,20 +245,22 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
             </p>
           ) : null}
         </div>
-        <ClaudeCodeGroup name={folder.name} server={server}>
-          <Switch
-            checked={chooseToServe.isPending ? chooseToServe.variables.body.serve : folder.serve}
-            disabled={chooseToServe.isPending}
-            onCheckedChange={(serve) =>
-              chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
-            }
-            aria-labelledby={switchLabelId}
-            className="ml-auto sm:ml-0"
-          />
-          <span id={switchLabelId} className="sr-only">
-            {FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
-          </span>
-        </ClaudeCodeGroup>
+        {claudeInstalled ? (
+          <ClaudeCodeGroup name={folder.name} server={server}>
+            <Switch
+              checked={chooseToServe.isPending ? chooseToServe.variables.body.serve : folder.serve}
+              disabled={chooseToServe.isPending}
+              onCheckedChange={(serve) =>
+                chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
+              }
+              aria-labelledby={switchLabelId}
+              className="ml-auto sm:ml-0"
+            />
+            <span id={switchLabelId} className="sr-only">
+              {FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
+            </span>
+          </ClaudeCodeGroup>
+        ) : null}
       </div>
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -259,15 +275,19 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
           <EllipsisIcon />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => setOptionsOpen(true)}>
-            {FOLDERS_DESCRIPTIONS.claude_options}
-          </DropdownMenuItem>
-          {server ? (
-            <DropdownMenuItem onClick={() => setLogOpen(true)}>
-              {REMOTE_CONTROL_DESCRIPTIONS.show_log}
-            </DropdownMenuItem>
+          {claudeInstalled ? (
+            <>
+              <DropdownMenuItem onClick={() => setOptionsOpen(true)}>
+                {FOLDERS_DESCRIPTIONS.claude_options}
+              </DropdownMenuItem>
+              {server ? (
+                <DropdownMenuItem onClick={() => setLogOpen(true)}>
+                  {REMOTE_CONTROL_DESCRIPTIONS.show_log}
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuSeparator />
+            </>
           ) : null}
-          <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
             {FOLDERS_DESCRIPTIONS.delete}
           </DropdownMenuItem>

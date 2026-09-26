@@ -9,7 +9,7 @@ function sessionCount(sessions: number, capacity?: number | null): string {
 
 export const REMOTE_CONTROL_DESCRIPTIONS = {
   off_hint: "Turned off in Settings.",
-  waiting_hint: "Starts once Claude Code is installed and signed in.",
+  waiting_hint: "Starts once Claude Code is signed in.",
   running_hint: (device: string) => `In the Claude app, open ${device}.`,
   running_hint_without_device: "In the Claude app, open this box.",
   last_stop: "Last stop",

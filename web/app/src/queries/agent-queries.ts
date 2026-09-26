@@ -15,3 +15,8 @@ export const agentsQueryOptions = queryOptions({
 export function pollInterval(agents: AgentStatus[] | undefined): number | false {
   return agents?.some((agent) => agent.install_progress) ? INSTALL_POLL_MS : false;
 }
+
+/** Whether Claude Code is installed, as a `select` on the agents. */
+export function isClaudeInstalled(agents: AgentStatus[]): boolean {
+  return Boolean(agents.find((status) => status.agent === "claude")?.installed_version);
+}
