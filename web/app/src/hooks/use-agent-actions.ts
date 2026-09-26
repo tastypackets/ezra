@@ -1,12 +1,17 @@
 import { installAgent, logOutAgent, startAgentLogin, submitAgentLoginCode } from "@ezra/client";
 import type { Agent } from "@ezra/client";
-import { useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import {
+  useIsMutating,
+  useMutation,
+  useMutationState,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { Mutation } from "@tanstack/react-query";
 
 import { errorMessage } from "@/lib/utils";
 import { AGENT_ACTION, AGENTS } from "@/queries/query-keys";
 
-type AgentAction = "install" | "start_sign_in" | "submit_code" | "sign_out";
+export type AgentAction = "install" | "start_sign_in" | "submit_code" | "sign_out";
 
 /** Every action on one agent. Each refreshes the agent list when it settles. */
 export function useAgentActions(agent: Agent) {
@@ -37,6 +42,11 @@ export function useAgentActions(agent: Agent) {
     onSettled: refreshAgents,
   });
   return { install, startSignIn, submitCode, signOut };
+}
+
+/** Whether the action is running for the agent, from any component. */
+export function useAgentActionPending(agent: Agent, action: AgentAction): boolean {
+  return useIsMutating({ mutationKey: [AGENT_ACTION, agent, action] }) > 0;
 }
 
 /** Why the agent's most recent failed action failed, until that action runs again. */

@@ -8,19 +8,23 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { Cell, HeaderCell, Row, Table } from "@/components/ui/table";
 import { Tooltip } from "@/components/ui/tooltip";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
-import { useAgentActionError, useAgentActions } from "@/hooks/use-agent-actions";
+import {
+  useAgentActionError,
+  useAgentActionPending,
+  useAgentActions,
+} from "@/hooks/use-agent-actions";
 import { downloadPercent, formatBytes } from "@/lib/utils";
 
 export interface AgentsCardProps {
   agents: AgentStatus[];
 }
 
-/** Every agent in one table, with its install and sign-in actions. */
+/** Every agent with its install and sign-in actions: a table on wide screens, a list on phones. */
 export function AgentsCard({ agents }: AgentsCardProps) {
   return (
     <Card>
       <CardHeader title={AGENTS_DESCRIPTIONS.title} description={AGENTS_DESCRIPTIONS.description} />
-      <Table>
+      <Table className="hidden lg:block">
         <thead>
           <tr>
             <HeaderCell>{AGENTS_DESCRIPTIONS.column_agent}</HeaderCell>
@@ -29,9 +33,7 @@ export function AgentsCard({ agents }: AgentsCardProps) {
             <HeaderCell>{AGENTS_DESCRIPTIONS.column_account}</HeaderCell>
             <HeaderCell numeric>{AGENTS_DESCRIPTIONS.column_sessions}</HeaderCell>
             <HeaderCell numeric>
-              <Tooltip content={AGENTS_DESCRIPTIONS.saved_data_hint}>
-                {AGENTS_DESCRIPTIONS.column_saved_data}
-              </Tooltip>
+              <SavedDataLabel />
             </HeaderCell>
             <HeaderCell>
               <span className="sr-only">{AGENTS_DESCRIPTIONS.column_actions}</span>
@@ -44,12 +46,17 @@ export function AgentsCard({ agents }: AgentsCardProps) {
           ))}
         </tbody>
       </Table>
+      <ul className="divide-y divide-ez-border lg:hidden">
+        {agents.map((status) => (
+          <AgentListItem key={status.agent} status={status} />
+        ))}
+      </ul>
     </Card>
   );
 }
 
 function AgentRow({ status }: { status: AgentStatus }) {
-  const installed = Boolean(status.installed_version);
+  const facts = agentFacts(status);
   const state = agentState(status);
   return (
     <Row>
@@ -57,30 +64,63 @@ function AgentRow({ status }: { status: AgentStatus }) {
       <Cell>
         <Badge tone={state.tone}>{state.label}</Badge>
       </Cell>
-      <Cell className={cn(installed && "font-mono")}>{status.installed_version ?? "—"}</Cell>
-      <Cell>{status.account ?? (status.logged_in ? AGENTS_DESCRIPTIONS.unavailable : "—")}</Cell>
-      <Cell numeric>{status.session_count ?? AGENTS_DESCRIPTIONS.unavailable}</Cell>
+      <Cell className={cn(status.installed_version && "font-mono")}>{facts.version}</Cell>
+      <Cell>{facts.account}</Cell>
+      <Cell numeric>{facts.sessions}</Cell>
+      <Cell numeric>{facts.savedData}</Cell>
       <Cell numeric>
-        {typeof status.config_disk_bytes === "number"
-          ? formatBytes(status.config_disk_bytes)
-          : AGENTS_DESCRIPTIONS.unavailable}
-      </Cell>
-      <Cell numeric>
-        <AgentActions status={status} />
+        <AgentActions status={status} className="items-end" />
       </Cell>
     </Row>
   );
 }
 
-function AgentActions({ status }: { status: AgentStatus }) {
+function AgentListItem({ status }: { status: AgentStatus }) {
+  const facts = agentFacts(status);
+  const state = agentState(status);
+  return (
+    <li className="flex flex-col gap-3 px-5 py-4">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-medium">{AGENT_NAMES[status.agent]}</span>
+        <Badge tone={state.tone}>{state.label}</Badge>
+      </div>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
+        <dt className="text-ez-muted">{AGENTS_DESCRIPTIONS.column_version}</dt>
+        <dd className={cn(status.installed_version && "font-mono")}>{facts.version}</dd>
+        <dt className="text-ez-muted">{AGENTS_DESCRIPTIONS.column_account}</dt>
+        <dd className="truncate">{facts.account}</dd>
+        <dt className="text-ez-muted">{AGENTS_DESCRIPTIONS.column_sessions}</dt>
+        <dd className="tabular-nums">{facts.sessions}</dd>
+        <dt className="text-ez-muted">
+          <SavedDataLabel />
+        </dt>
+        <dd className="tabular-nums">{facts.savedData}</dd>
+      </dl>
+      <AgentActions status={status} className="items-start" />
+    </li>
+  );
+}
+
+function SavedDataLabel() {
+  return (
+    <Tooltip content={AGENTS_DESCRIPTIONS.saved_data_hint}>
+      {AGENTS_DESCRIPTIONS.column_saved_data}
+    </Tooltip>
+  );
+}
+
+function AgentActions({ status, className }: { status: AgentStatus; className: string }) {
   const { install, startSignIn, signOut } = useAgentActions(status.agent);
+  const installPending = useAgentActionPending(status.agent, "install");
+  const signInPending = useAgentActionPending(status.agent, "start_sign_in");
+  const signOutPending = useAgentActionPending(status.agent, "sign_out");
+  const failure = useAgentActionError(status.agent);
   const installed = Boolean(status.installed_version);
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
-  const installing = install.isPending || Boolean(status.install_progress);
-  const failure = useAgentActionError(status.agent);
+  const installing = installPending || Boolean(status.install_progress);
   return (
-    <div className="inline-flex flex-col items-end gap-1">
-      <div className="inline-flex gap-2">
+    <div className={cn("flex flex-col gap-1", className)}>
+      <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
           variant={installed ? "secondary" : "primary"}
@@ -94,7 +134,7 @@ function AgentActions({ status }: { status: AgentStatus }) {
               : AGENTS_DESCRIPTIONS.install}
         </Button>
         {installed && status.logged_in ? (
-          <Button size="sm" loading={signOut.isPending} onClick={() => signOut.mutate()}>
+          <Button size="sm" loading={signOutPending} onClick={() => signOut.mutate()}>
             {AGENTS_DESCRIPTIONS.sign_out}
           </Button>
         ) : null}
@@ -102,7 +142,7 @@ function AgentActions({ status }: { status: AgentStatus }) {
           <Button
             size="sm"
             variant="primary"
-            loading={startSignIn.isPending}
+            loading={signInPending}
             onClick={() => startSignIn.mutate()}
           >
             {AGENTS_DESCRIPTIONS.sign_in}
@@ -110,12 +150,24 @@ function AgentActions({ status }: { status: AgentStatus }) {
         ) : null}
       </div>
       {failure ? (
-        <p role="alert" className="text-[0.8125rem] whitespace-normal text-ez-danger">
+        <p role="alert" className="max-w-sm text-[0.8125rem] whitespace-normal text-ez-danger">
           {failure}
         </p>
       ) : null}
     </div>
   );
+}
+
+function agentFacts(status: AgentStatus) {
+  return {
+    version: status.installed_version ?? "—",
+    account: status.account ?? (status.logged_in ? AGENTS_DESCRIPTIONS.unavailable : "—"),
+    sessions: status.session_count ?? AGENTS_DESCRIPTIONS.unavailable,
+    savedData:
+      typeof status.config_disk_bytes === "number"
+        ? formatBytes(status.config_disk_bytes)
+        : AGENTS_DESCRIPTIONS.unavailable,
+  };
 }
 
 function agentState(status: AgentStatus): { label: string; tone: BadgeProps["tone"] } {

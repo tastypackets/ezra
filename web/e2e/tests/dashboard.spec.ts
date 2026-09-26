@@ -37,3 +37,17 @@ test("an unknown page links back to the dashboard", async ({ page }) => {
   await page.getByRole("link", { name: "Go to the dashboard" }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
 });
+
+test.describe("on a phone", () => {
+  test.use({ viewport: { width: 360, height: 780 } });
+
+  test("the dashboard fits the screen", async ({ page }) => {
+    await page.goto("./");
+    const claude = page.getByRole("listitem").filter({ hasText: "Claude Code" });
+    await expect(claude.getByRole("button", { name: "Install" })).toBeInViewport();
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBe(0);
+  });
+});

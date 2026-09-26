@@ -7,9 +7,9 @@ interface CellProps {
   className?: string;
 }
 
-export function Table({ children }: { children: React.ReactNode }) {
+export function Table({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className="overflow-x-auto">
+    <div className={cn("overflow-x-auto", className)}>
       <table className="w-full border-collapse tabular-nums">{children}</table>
     </div>
   );
