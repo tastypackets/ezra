@@ -563,9 +563,9 @@ impl ClaudeGlobalConfig {
     }
 }
 
-/// One server's log directory. Claude writes `server.log` and rotates it to `server.log.1` at
-/// 10 MiB, adds a debug log and a transcript per session, and the manager adds the server's
-/// output lines to `server.log`.
+/// One server's log directory. Claude writes `server.log`, rotates it to `server.log.1` at 10 MiB
+/// and adds a debug log and a transcript per session. The manager adds the server's output lines
+/// to `server.log`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerLog(PathBuf);
 
@@ -681,6 +681,8 @@ impl From<String> for Failure {
 #[derive(Debug, PartialEq, Eq)]
 enum Verdict {
     Keep,
+    /// The sign-in could not be checked, so nothing changes.
+    Unsure,
     Stop,
     /// Restart it on this Claude Code version once it has no sessions.
     Update(String),
@@ -915,7 +917,7 @@ impl AppState {
             Wanted::Server(wanted) if wanted.is_update_of(launch) => {
                 Verdict::Update(wanted.claude_version.unwrap_or_default())
             }
-            Wanted::Unknown => Verdict::Keep,
+            Wanted::Unknown => Verdict::Unsure,
             Wanted::Server(_) | Wanted::Off | Wanted::Waiting => Verdict::Stop,
         }
     }
@@ -988,6 +990,7 @@ impl AppState {
                             .update(&launch.directory, |status| status.update = None);
                     }
                 }
+                Verdict::Unsure => {}
                 Verdict::Stop => return self.stop_server(server, launch).await,
                 Verdict::Update(version) => {
                     let usage = server.note_usage(&self.remote_control, launch).await;

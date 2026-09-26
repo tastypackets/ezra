@@ -407,7 +407,7 @@ impl ClaudeCredentials {
             .unwrap_or_default()
     }
 
-    /// When Claude Code can no longer renew its sign-in, absent when the file does not say.
+    /// When Claude Code's sign-in stops working, absent when the file does not say.
     pub fn sign_in_ends_at(&self) -> Option<OffsetDateTime> {
         let oauth = self.oauth.as_ref()?;
         let renewable_until = oauth.refresh_token_expires_at?;
