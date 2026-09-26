@@ -119,7 +119,7 @@ function ProjectsRow({ overview }: { overview: RemoteControlOverview }) {
   return (
     <li className="flex items-start gap-2 py-3 first:pt-0 last:pb-0 sm:items-center">
       <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
           <span className="font-medium">{FOLDERS_DESCRIPTIONS.projects}</span>
           <span className="text-muted-foreground">{name}</span>
           {status.state === "off" ? (
@@ -223,7 +223,7 @@ function FolderRow({ folder, server, claudeInstalled }: FolderRowProps) {
   return (
     <li className="flex items-start gap-2 py-3 first:pt-0 last:pb-0 sm:items-center">
       <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
           <div className="flex flex-wrap items-baseline gap-x-3">
             <span className="min-w-0 font-medium break-all">{folder.name}</span>
             {folder.git?.branch ? (
@@ -321,7 +321,7 @@ function ClaudeCodeGroup({ name, server, children }: ClaudeCodeGroupProps) {
     <div
       role="group"
       aria-labelledby={labelId}
-      className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1"
+      className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1 sm:flex-none sm:flex-nowrap"
     >
       <span id={labelId} className="text-xs font-medium text-muted-foreground">
         {AGENT_NAMES.claude}

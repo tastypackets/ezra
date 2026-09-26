@@ -209,6 +209,57 @@ test("an unknown page links back to the dashboard", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
 });
 
+test.describe("in a narrow window", () => {
+  test.use({ viewport: { width: 800, height: 780 } });
+
+  test("a long repository gives way to the Claude Code group", async ({
+    page,
+    request,
+  }, testInfo) => {
+    const folder = `long-${testInfo.retry}`;
+    const repository =
+      "https://github.com/a-fairly-long-organization-name/some-rather-long-repository-name.git";
+    installFakeClaude(
+      "2.1.0-e2e",
+      "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600",
+    );
+    await nudgeRemoteControl(request);
+    inContainer(
+      "sh",
+      "-c",
+      'git init --quiet --initial-branch=feature/a-long-branch-name-for-testing "$1" && git -C "$1" remote add origin "$2"',
+      "sh",
+      `/projects/${folder}`,
+      repository,
+    );
+    try {
+      await page.goto("./");
+      const row = page.getByRole("listitem").filter({ hasText: folder });
+      const group = row.getByRole("group", { name: "Claude Code" });
+      const state = group.getByText("Running", { exact: true });
+      await expect(group.getByText("0 sessions")).toBeVisible();
+      await expect(state).toBeVisible();
+      await expect(row.getByText(repository)).toBeVisible();
+      const middle = (element: Element) => {
+        const box = element.getBoundingClientRect();
+        return box.top + box.height / 2;
+      };
+      expect(await group.getByRole("switch").evaluate(middle)).toBeCloseTo(
+        await state.evaluate(middle),
+        0,
+      );
+      expect(
+        await row
+          .getByText(repository)
+          .evaluate((element) => element.scrollWidth > element.clientWidth),
+      ).toBe(true);
+    } finally {
+      inContainer("rm", "-rf", `/projects/${folder}`);
+      await removeFakeClaude(request);
+    }
+  });
+});
+
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 360, height: 780 } });
 
