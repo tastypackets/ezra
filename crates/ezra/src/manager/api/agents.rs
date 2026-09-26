@@ -161,6 +161,7 @@ mod tests {
                 installed_version: None,
                 logged_in: false,
                 account: None,
+                sign_in_ends_at: None,
                 login_prompt: None,
                 config_disk_bytes: Some(0),
                 install_progress: None,

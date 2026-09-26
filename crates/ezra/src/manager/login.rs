@@ -1,10 +1,12 @@
+use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, watch};
@@ -381,6 +383,42 @@ impl SignInStatus {
     }
 }
 
+/// The expiry fields of Claude Code's `.credentials.json`, never its tokens. Times are Unix
+/// milliseconds.
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct ClaudeCredentials {
+    #[serde(rename = "claudeAiOauth")]
+    oauth: Option<ClaudeOauthExpiry>,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeOauthExpiry {
+    expires_at: Option<i64>,
+    refresh_token_expires_at: Option<i64>,
+}
+
+impl ClaudeCredentials {
+    /// Empty when the file is missing or unreadable.
+    pub fn read(config_directory: &Path) -> Self {
+        fs::read(config_directory.join(".credentials.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// When Claude Code can no longer renew its sign-in, absent when the file does not say.
+    pub fn sign_in_ends_at(&self) -> Option<OffsetDateTime> {
+        let oauth = self.oauth.as_ref()?;
+        let renewable_until = oauth.refresh_token_expires_at?;
+        let ends_at = oauth.expires_at.map_or(renewable_until, |access_ends| {
+            access_ends.max(renewable_until)
+        });
+        let nanoseconds = i128::from(ends_at).checked_mul(1_000_000)?;
+        OffsetDateTime::from_unix_timestamp_nanos(nanoseconds).ok()
+    }
+}
+
 pub trait StrExt {
     /// Removes colour and other ANSI escape sequences.
     fn without_terminal_codes(&self) -> String;
@@ -571,6 +609,52 @@ mod tests {
         assert_eq!(
             SignInStatus::from_codex_text("Not logged in\n"),
             SignInStatus::default()
+        );
+    }
+
+    fn credentials(json: &str) -> ClaudeCredentials {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        fs::write(directory.path().join(".credentials.json"), json).expect("file is written");
+        ClaudeCredentials::read(directory.path())
+    }
+
+    #[test]
+    fn claude_sign_in_ends_when_neither_token_works() {
+        let ends_at = |json| credentials(json).sign_in_ends_at();
+        let september_26 = OffsetDateTime::from_unix_timestamp(1_790_380_800).expect("valid time");
+        let september_27 = OffsetDateTime::from_unix_timestamp(1_790_467_200).expect("valid time");
+        assert_eq!(
+            ends_at(
+                r#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":1790380800000,"refreshTokenExpiresAt":1790467200000,"scopes":[]}}"#
+            ),
+            Some(september_27)
+        );
+        assert_eq!(
+            ends_at(
+                r#"{"claudeAiOauth":{"expiresAt":1790467200000,"refreshTokenExpiresAt":1790380800000}}"#
+            ),
+            Some(september_27)
+        );
+        assert_eq!(
+            ends_at(r#"{"claudeAiOauth":{"refreshTokenExpiresAt":1790380800000}}"#),
+            Some(september_26)
+        );
+    }
+
+    #[test]
+    fn claude_sign_in_end_is_unknown_without_a_renewal_limit() {
+        for json in [
+            r#"{"claudeAiOauth":{"accessToken":"a","expiresAt":1790380800000}}"#,
+            r#"{"claudeAiOauth":{"refreshTokenExpiresAt":"soon"}}"#,
+            r#"{"other":{}}"#,
+            "not json",
+        ] {
+            assert_eq!(credentials(json).sign_in_ends_at(), None, "{json}");
+        }
+        let empty = tempfile::tempdir().expect("temporary directory");
+        assert_eq!(
+            ClaudeCredentials::read(empty.path()).sign_in_ends_at(),
+            None
         );
     }
 }

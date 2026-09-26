@@ -1412,6 +1412,14 @@
                 "type": "null"
               }
             ]
+          },
+          "sign_in_ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the sign-in stops working unless the agent signs in again, absent when unknown."
           }
         }
       },

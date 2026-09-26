@@ -223,6 +223,7 @@ mod tests {
                 installed_version: Some("1.0.0".to_owned()),
                 logged_in: true,
                 account: Some("</script><script>alert(1)</script><!--".to_owned()),
+                sign_in_ends_at: None,
                 login_prompt: None,
                 config_disk_bytes: None,
                 install_progress: None,

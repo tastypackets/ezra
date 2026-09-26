@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 use super::agents::{Agent, DownloadProgress, VersionExt};
-use super::login::LoginPrompt;
+use super::login::{ClaudeCredentials, LoginPrompt};
 use super::state::AppState;
 
 /// One agent's install and sign-in state.
@@ -16,6 +17,9 @@ pub struct AgentStatus {
     pub logged_in: bool,
     /// The signed-in account as the CLI reports it, absent when unknown.
     pub account: Option<String>,
+    /// When the sign-in stops working unless the agent signs in again, absent when unknown.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub sign_in_ends_at: Option<OffsetDateTime>,
     /// Present while a sign-in is waiting for the person signing in.
     pub login_prompt: Option<LoginPrompt>,
     /// Bytes the agent keeps on /config, absent when they cannot be measured.
@@ -69,12 +73,20 @@ impl AgentStatus {
             _ => None,
         };
         let sign_in = state.agent_checks.sign_in(agent).unwrap_or_default();
+        let config_directory = state.install_paths.config_directory(agent);
+        let sign_in_ends_at = match (agent, config_directory) {
+            (Agent::Claude, Some(directory)) if sign_in.logged_in => {
+                ClaudeCredentials::read(directory).sign_in_ends_at()
+            }
+            _ => None,
+        };
         Self {
             agent,
             configured,
             installed_version,
             logged_in: sign_in.logged_in,
             account: sign_in.account,
+            sign_in_ends_at,
             login_prompt,
             config_disk_bytes: state.agent_checks.config_bytes(agent),
             install_progress,
