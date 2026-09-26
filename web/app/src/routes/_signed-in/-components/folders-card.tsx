@@ -1,17 +1,25 @@
-import type { FolderStatus, RemoteControlStatus } from "@ezra/client";
+import type { FolderStatus, RemoteControlStatus, SpawnMode } from "@ezra/client";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLinkIcon } from "lucide-react";
+import { EllipsisIcon, ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
 import { useId } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Hint } from "@/components/ui/hint";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { FOLDERS_DESCRIPTIONS } from "@/content/folders";
+import { FOLDERS_DESCRIPTIONS, SPAWN_MODES } from "@/content/folders";
 import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-control";
 import { useFolderActions } from "@/hooks/use-folder-actions";
 import { errorMessage } from "@/lib/utils";
@@ -19,6 +27,8 @@ import { foldersQueryOptions } from "@/queries/folder-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { SERVER_BADGES } from "./remote-control-card";
+
+const SPAWN_MODE_ORDER: SpawnMode[] = ["same-dir", "worktree"];
 
 /** The projects agents work in, and which ones the Claude app lists. */
 export function FoldersCard() {
@@ -57,8 +67,9 @@ export function FoldersCard() {
 }
 
 function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteControlStatus }) {
-  const { chooseToServe } = useFolderActions();
+  const { chooseToServe, chooseSpawnMode } = useFolderActions();
   const detail = folder.git ? folder.git.repository : FOLDERS_DESCRIPTIONS.not_git;
+  const failure = chooseToServe.error ?? chooseSpawnMode.error;
   const switchId = useId();
   const switchLabelId = useId();
   return (
@@ -71,11 +82,16 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
               {folder.git.branch}
             </span>
           ) : null}
+          {folder.git?.worktrees ? (
+            <span className="text-xs text-muted-foreground">
+              {FOLDERS_DESCRIPTIONS.worktrees(folder.git.worktrees)}
+            </span>
+          ) : null}
         </div>
         {detail ? <span className="truncate text-muted-foreground">{detail}</span> : null}
-        {chooseToServe.isError ? (
+        {failure ? (
           <p role="alert" className="text-destructive">
-            {errorMessage(chooseToServe.error)}
+            {errorMessage(failure)}
           </p>
         ) : null}
       </div>
@@ -119,6 +135,50 @@ function FolderRow({ folder, server }: { folder: FolderStatus; server?: RemoteCo
             {FOLDERS_DESCRIPTIONS.serve}
           </Label>
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={FOLDERS_DESCRIPTIONS.more_actions(folder.name)}
+              />
+            }
+          >
+            <EllipsisIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-72">
+            <DropdownMenuRadioGroup
+              value={
+                chooseSpawnMode.isPending ? chooseSpawnMode.variables.body.spawn : folder.spawn
+              }
+              onValueChange={(spawn: SpawnMode) =>
+                chooseSpawnMode.mutate({ path: { name: folder.name }, body: { spawn } })
+              }
+            >
+              <DropdownMenuLabel>{FOLDERS_DESCRIPTIONS.spawn}</DropdownMenuLabel>
+              {SPAWN_MODE_ORDER.map((mode) => {
+                const unavailable = mode === "worktree" && !folder.git;
+                return (
+                  <DropdownMenuRadioItem
+                    key={mode}
+                    value={mode}
+                    disabled={unavailable || chooseSpawnMode.isPending}
+                  >
+                    <span className="flex flex-col">
+                      {SPAWN_MODES[mode].title}
+                      <span className="text-xs text-muted-foreground">
+                        {unavailable
+                          ? FOLDERS_DESCRIPTIONS.worktree_needs_repository
+                          : SPAWN_MODES[mode].description}
+                      </span>
+                    </span>
+                  </DropdownMenuRadioItem>
+                );
+              })}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </li>
   );
