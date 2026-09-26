@@ -102,10 +102,12 @@ test("a setting Claude cannot take is refused next to its field", async ({ page 
   await page.goto("./settings");
   const claude = card(page, "Claude Code");
   const capacity = claude.getByRole("spinbutton", { name: "Sessions per folder" });
-  await capacity.fill("40");
-  await expect(claude.getByText("Enter a number from 1 to 32, or leave it empty.")).toBeVisible();
+  await capacity.fill("0");
+  await expect(
+    claude.getByText("Enter a whole number of 1 or more, or leave it empty."),
+  ).toBeVisible();
   await expect(capacity).toHaveAccessibleDescription(
-    "Each session is its own Claude Code process, about 150 to 300 MB. Enter a number from 1 to 32, or leave it empty.",
+    "Each session is its own Claude Code process, about 150 to 300 MB. Enter a whole number of 1 or more, or leave it empty.",
   );
   await expect(capacity).toHaveAttribute("aria-invalid", "true");
 

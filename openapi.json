@@ -2063,9 +2063,8 @@
               "null"
             ],
             "format": "int32",
-            "description": "The most sessions each server runs at once, from 1 to 32. Absent uses Claude Code's\ndefault.",
+            "description": "The most sessions each server runs at once, at least 1. Absent uses Claude Code's\ndefault.",
             "default": null,
-            "maximum": 32,
             "minimum": 1
           },
           "enabled": {

@@ -156,7 +156,6 @@ mod tests {
             r#"{"enabled":true,"permission_mode":"","capacity":4}"#,
             r#"{"enabled":true,"permission_mode":"auto --x","capacity":4}"#,
             r#"{"enabled":true,"permission_mode":"auto","capacity":0}"#,
-            r#"{"enabled":true,"permission_mode":"auto","capacity":33}"#,
         ] {
             let body =
                 format!(r#"{{"release_channel":"latest","remote_control":{remote_control}}}"#);
@@ -167,6 +166,14 @@ mod tests {
                 "{remote_control}"
             );
         }
+        let large = manager
+            .put(
+                PATH,
+                r#"{"release_channel":"latest","remote_control":{"enabled":true,"permission_mode":"auto","capacity":64}}"#,
+                Some(&cookie),
+            )
+            .await;
+        assert_eq!(large.status(), StatusCode::OK);
     }
 
     #[tokio::test]

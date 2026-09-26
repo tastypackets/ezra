@@ -176,7 +176,7 @@ export function ClaudeSettingsCard() {
                   name="remote_control.capacity"
                   validators={{
                     onChange: ({ value }) =>
-                      value == null || (Number.isInteger(value) && value >= 1 && value <= 32)
+                      value == null || (Number.isInteger(value) && value >= 1)
                         ? undefined
                         : SETTINGS_DESCRIPTIONS.capacity_range,
                   }}
@@ -193,7 +193,6 @@ export function ClaudeSettingsCard() {
                           type="number"
                           inputMode="numeric"
                           min={1}
-                          max={32}
                           name={field.name}
                           placeholder={SETTINGS_DESCRIPTIONS.capacity_default}
                           value={field.state.value ?? ""}

@@ -70,9 +70,9 @@ pub struct RemoteControlSettings {
     /// The permission mode for sessions started from the Claude app, such as `auto`.
     #[schema(required = true)]
     pub permission_mode: String,
-    /// The most sessions each server runs at once, from 1 to 32. Absent uses Claude Code's
+    /// The most sessions each server runs at once, at least 1. Absent uses Claude Code's
     /// default.
-    #[schema(required = true, minimum = 1, maximum = 32)]
+    #[schema(required = true, minimum = 1)]
     pub capacity: Option<u32>,
     /// Whether repositories that appear in /projects start with their switch on.
     #[schema(required = true)]
@@ -80,8 +80,6 @@ pub struct RemoteControlSettings {
 }
 
 impl RemoteControlSettings {
-    pub const MOST_SESSIONS: u32 = 32;
-
     /// `None` when the settings can be passed to Claude, or why not.
     pub fn problem(&self) -> Option<&'static str> {
         let mode = self.permission_mode.trim();
@@ -89,9 +87,9 @@ impl RemoteControlSettings {
             Some("the permission mode must be one word")
         } else if self
             .capacity
-            .is_some_and(|capacity| !(1..=Self::MOST_SESSIONS).contains(&capacity))
+            .is_some_and(|capacity| capacity < 1)
         {
-            Some("capacity must be from 1 to 32")
+            Some("capacity must be at least 1")
         } else {
             None
         }
