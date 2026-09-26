@@ -31,7 +31,7 @@ use super::state::AppState;
 use crate::path_ext::PathExt;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
-const STOP_GRACE_PERIOD: Duration = Duration::from_secs(4);
+const STOP_GRACE_PERIOD: Duration = Duration::from_secs(35);
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const GROUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RECHECK_INTERVAL: Duration = Duration::from_secs(60);
