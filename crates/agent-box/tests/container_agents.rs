@@ -52,11 +52,26 @@ fn run_as_agent(container: &DockerResource, command: &[&str]) -> std::process::O
 #[ignore = "needs Docker, network access and a built agent-box image"]
 fn installed_agents_run_and_offer_sign_in() {
     let container = start_logged_in_manager("agents-install", &[]);
-    for agent in ["claude", "codex"] {
-        let (status, body) = post(&container, &format!("/api/v1/agents/{agent}/install"), "");
+    let saw_download_progress = thread::scope(|scope| {
+        let claude_install = scope.spawn(|| post(&container, "/api/v1/agents/claude/install", ""));
+        let mut saw_progress = false;
+        while !claude_install.is_finished() {
+            saw_progress |= get(&container, "/api/v1/agents")
+                .contains(r#""install_progress":{"received_bytes":"#);
+            thread::sleep(Duration::from_millis(200));
+        }
+        let (status, body) = claude_install.join().expect("install thread finishes");
         assert_eq!(status, "200", "{body}");
         assert!(body.contains(r#""configured":true"#), "{body}");
-    }
+        saw_progress
+    });
+    assert!(
+        saw_download_progress,
+        "the Claude download never reported progress"
+    );
+    let (status, body) = post(&container, "/api/v1/agents/codex/install", "");
+    assert_eq!(status, "200", "{body}");
+    assert!(body.contains(r#""install_progress":null"#), "{body}");
 
     let large_files_on_the_volume = stdout_of(&docker(&[
         "exec",

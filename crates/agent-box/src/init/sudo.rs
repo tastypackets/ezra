@@ -1,10 +1,10 @@
-use std::ffi::OsStr;
 use std::fs::{self, Permissions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use nix::sys::prctl;
+use serde::Deserialize;
 
 use super::InitError;
 use crate::path_ext::PathExt;
@@ -13,22 +13,13 @@ pub const SUDO_POLICY_VARIABLE: &str = "AGENT_SUDO";
 const SUDOERS_RULE_PATH: &str = "/etc/sudoers.d/agent-box";
 const SUDOERS_RULE_MODE: u32 = 0o440;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Whether the agent may use sudo, from `AGENT_SUDO`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SudoPolicy {
     Full,
+    #[default]
     Off,
-}
-
-impl SudoPolicy {
-    pub fn from_environment_value(value: Option<&OsStr>) -> Result<Self, InitError> {
-        match value.map(OsStr::as_encoded_bytes) {
-            None | Some(b"" | b"off") => Ok(Self::Off),
-            Some(b"full") => Ok(Self::Full),
-            Some(_) => Err(InitError::InvalidSudoPolicy(
-                value.unwrap_or_default().to_string_lossy().into_owned(),
-            )),
-        }
-    }
 }
 
 impl SudoPolicy {
@@ -39,7 +30,9 @@ impl SudoPolicy {
             Self::Off => Self::remove_sudoers_rule(),
         };
         if let Err(error) = outcome {
-            tracing::warn!("could not update {SUDOERS_RULE_PATH} ({error}); sudo is unavailable");
+            tracing::warn!(
+                "could not update {SUDOERS_RULE_PATH} ({error}), so sudo is unavailable"
+            );
         }
     }
 
@@ -68,29 +61,6 @@ impl SudoPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn policy_for(value: Option<&str>) -> Result<SudoPolicy, InitError> {
-        SudoPolicy::from_environment_value(value.map(OsStr::new))
-    }
-
-    #[test]
-    fn unset_or_empty_means_off() {
-        assert_eq!(policy_for(None).ok(), Some(SudoPolicy::Off));
-        assert_eq!(policy_for(Some("")).ok(), Some(SudoPolicy::Off));
-    }
-
-    #[test]
-    fn full_and_off_are_accepted() {
-        assert_eq!(policy_for(Some("full")).ok(), Some(SudoPolicy::Full));
-        assert_eq!(policy_for(Some("off")).ok(), Some(SudoPolicy::Off));
-    }
-
-    #[test]
-    fn anything_else_is_refused() {
-        for value in ["FULL", "on", "true", "1", " full"] {
-            assert!(policy_for(Some(value)).is_err(), "{value:?} was accepted");
-        }
-    }
 
     #[test]
     fn rule_grants_passwordless_sudo_to_the_agent() {

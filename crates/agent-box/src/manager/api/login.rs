@@ -38,7 +38,7 @@ pub async fn start(
     Ok(Json(prompt))
 }
 
-/// Claude shows a code after signing in on the website; this hands it to `claude auth login`.
+/// Hands the code Claude shows after website sign-in to `claude auth login`.
 pub async fn submit_code(
     _: Session,
     State(state): State<AppState>,
@@ -46,9 +46,7 @@ pub async fn submit_code(
     Json(body): Json<CodeBody>,
 ) -> Result<StatusCode, ApiError> {
     if agent != Agent::Claude {
-        return Err(ApiError::BadRequest(
-            "only Claude asks for a code; Codex finishes on the website",
-        ));
+        return Err(ApiError::BadRequest("only Claude sign-in takes a code"));
     }
     let login = state
         .logins

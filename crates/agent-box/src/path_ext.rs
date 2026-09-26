@@ -1,9 +1,9 @@
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
+use flate2::read::GzDecoder;
 
 pub trait PathExt {
     /// Entries of this directory, or none when it does not exist.
@@ -18,8 +18,8 @@ pub trait PathExt {
     /// Files with this extension in this directory, and in its subdirectories when `recursive`.
     fn count_files_with_extension(&self, extension: &str, recursive: bool) -> io::Result<u64>;
 
-    /// SHA-256 of the file's contents as lowercase hex.
-    fn sha256_hex(&self) -> io::Result<String>;
+    /// Unpacks this `.tar.gz` into `destination`, refusing entries that would land outside it. Blocks.
+    fn unpack_tar_gz_into(&self, destination: &Path) -> io::Result<()>;
 
     /// Points this link at `target`, replacing any existing link in one step.
     fn replace_symlink(&self, target: &Path) -> io::Result<()>;
@@ -80,22 +80,9 @@ impl PathExt for Path {
             })
     }
 
-    fn sha256_hex(&self) -> io::Result<String> {
-        let mut file = File::open(self)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0_u8; 1 << 20];
-        loop {
-            let read = file.read(&mut buffer)?;
-            let Some(chunk) = buffer.get(..read).filter(|chunk| !chunk.is_empty()) else {
-                break;
-            };
-            hasher.update(chunk);
-        }
-        Ok(hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect())
+    fn unpack_tar_gz_into(&self, destination: &Path) -> io::Result<()> {
+        fs::create_dir_all(destination)?;
+        tar::Archive::new(GzDecoder::new(File::open(self)?)).unpack(destination)
     }
 
     fn replace_symlink(&self, target: &Path) -> io::Result<()> {
@@ -162,13 +149,33 @@ mod tests {
     }
 
     #[test]
-    fn sha256_is_lowercase_hex() {
+    fn tar_gz_unpacks_into_the_destination() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("file");
-        write(&path, "abc");
+        let archive_path = directory.path().join("package.tar.gz");
+        let encoder = flate2::write::GzEncoder::new(
+            File::create(&archive_path).expect("archive is created"),
+            flate2::Compression::fast(),
+        );
+        let mut builder = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(5);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "bin/tool", &b"hello"[..])
+            .expect("entry is added");
+        builder
+            .into_inner()
+            .and_then(flate2::write::GzEncoder::finish)
+            .expect("archive is finished");
+
+        let destination = directory.path().join("unpacked");
+        archive_path
+            .unpack_tar_gz_into(&destination)
+            .expect("archive unpacks");
         assert_eq!(
-            path.sha256_hex().expect("hashing works"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            fs::read_to_string(destination.join("bin/tool")).expect("entry is readable"),
+            "hello"
         );
     }
 

@@ -1,3 +1,4 @@
+mod environment_config;
 mod init;
 mod manager;
 mod path_ext;

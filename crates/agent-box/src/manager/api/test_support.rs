@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 use super::router;
 use super::session::SessionStatus;
-use crate::manager::agents::InstallPaths;
+use crate::manager::agents::{InstallPaths, TlsVerification};
 use crate::manager::settings::Settings;
 use crate::manager::state::AppState;
 
@@ -36,6 +36,7 @@ impl TestManager {
             settings_path.clone(),
             Settings::default(),
             install_paths,
+            TlsVerification::default(),
         ));
         Self {
             router,

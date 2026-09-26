@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use super::agents::{Agent, InstallPaths};
+use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
 use super::login::LoginProcess;
 use super::settings::{Settings, SettingsError};
@@ -18,10 +18,17 @@ pub struct AppState {
     pub install_paths: Arc<InstallPaths>,
     pub install_lock: Arc<Mutex<()>>,
     pub logins: Arc<Mutex<HashMap<Agent, LoginProcess>>>,
+    pub download_tls_verification: TlsVerification,
+    pub installs_in_progress: Arc<Mutex<HashMap<Agent, Arc<InstallProgress>>>>,
 }
 
 impl AppState {
-    pub fn new(settings_path: PathBuf, settings: Settings, install_paths: InstallPaths) -> Self {
+    pub fn new(
+        settings_path: PathBuf,
+        settings: Settings,
+        install_paths: InstallPaths,
+        download_tls_verification: TlsVerification,
+    ) -> Self {
         Self {
             settings_path: Arc::new(settings_path),
             settings: Arc::new(Mutex::new(settings)),
@@ -29,10 +36,12 @@ impl AppState {
             install_paths: Arc::new(install_paths),
             install_lock: Arc::default(),
             logins: Arc::default(),
+            download_tls_verification,
+            installs_in_progress: Arc::default(),
         }
     }
 
-    /// Applies a change and saves it; the change becomes visible only once it is on disk.
+    /// Applies and saves a change, which becomes visible only once it is on disk.
     pub async fn update_settings<E: From<SettingsError>>(
         &self,
         change: impl FnOnce(&mut Settings) -> Result<(), E>,

@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 
+use serde::Deserialize;
+
 use crate::process_ext::{CommandStatusExt, OutputExt};
 
 pub const APT_PACKAGES_VARIABLE: &str = "APT_PACKAGES";
@@ -17,25 +19,22 @@ const APT_GET_OPTIONS: [&str; 8] = [
 ];
 
 /// Package arguments for apt-get from `APT_PACKAGES`, separated by whitespace or commas.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(from = "String")]
 pub struct RequestedPackages(Vec<String>);
 
-impl RequestedPackages {
-    pub fn from_environment() -> Self {
-        let environment_value = std::env::var_os(APT_PACKAGES_VARIABLE).unwrap_or_default();
-        Self::from_environment_value(&environment_value.to_string_lossy())
-    }
-
-    pub fn from_environment_value(environment_value: &str) -> Self {
+impl From<String> for RequestedPackages {
+    fn from(list: String) -> Self {
         Self(
-            environment_value
-                .split(|character: char| character.is_whitespace() || character == ',')
+            list.split(|character: char| character.is_whitespace() || character == ',')
                 .filter(|package| !package.is_empty())
                 .map(str::to_owned)
                 .collect(),
         )
     }
+}
 
+impl RequestedPackages {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -64,7 +63,7 @@ impl RequestedPackages {
             Ok(database) => database.missing(&self.0),
             Err(error) => {
                 tracing::warn!(
-                    "could not read the dpkg database ({error}); skipping {APT_PACKAGES_VARIABLE}"
+                    "could not read the dpkg database ({error}), so {APT_PACKAGES_VARIABLE} was skipped"
                 );
                 return;
             }
@@ -86,7 +85,7 @@ impl AptGet {
         );
         if let Err(error) = Self::command().arg("update").run_checked() {
             tracing::warn!(
-                "apt-get update failed ({error}); not installed: {}",
+                "apt-get update failed ({error}). Not installed: {}",
                 missing_names.join(" ")
             );
             return;
@@ -114,7 +113,7 @@ impl AptGet {
             .collect();
         if !failed_names.is_empty() {
             tracing::warn!(
-                "could not install {} from {APT_PACKAGES_VARIABLE}; see the apt-get output above",
+                "could not install {} from {APT_PACKAGES_VARIABLE}, see the apt-get output above",
                 failed_names.join(" ")
             );
         }
@@ -207,15 +206,14 @@ mod tests {
     #[test]
     fn packages_are_separated_by_spaces_or_commas() {
         assert_eq!(
-            RequestedPackages::from_environment_value("hello, jq=1.7  ripgrep,,hello/resolute\n")
-                .names(),
+            RequestedPackages::from("hello, jq=1.7  ripgrep,,hello/resolute\n".to_owned()).names(),
             ["hello", "jq=1.7", "ripgrep", "hello/resolute"]
         );
     }
 
     #[test]
     fn empty_value_requests_nothing() {
-        assert!(RequestedPackages::from_environment_value("  , ").is_empty());
+        assert!(RequestedPackages::from("  , ".to_owned()).is_empty());
     }
 
     #[test]

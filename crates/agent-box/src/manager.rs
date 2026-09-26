@@ -17,17 +17,21 @@ use std::time::Duration;
 
 use axum_server::Handle;
 use axum_server::tls_rustls::RustlsConfig;
+use serde::Deserialize;
 use tokio::signal::unix::{SignalKind, signal};
 
+use crate::environment_config::FromEnvironment;
+use agents::TlsVerification;
+
 const STATE_DIRECTORY: &str = "/config/agent-box";
-const PORT_VARIABLE: &str = "MANAGER_PORT";
+const TLS_VERIFY_VARIABLE: &str = "AGENT_BOX_TLS_VERIFY";
 const DEFAULT_PORT: u16 = 8443;
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManagerError {
-    #[error("{PORT_VARIABLE} must be a port number, not {0:?}")]
-    InvalidPort(String),
+    #[error("invalid environment: {0}")]
+    Configuration(#[from] config::ConfigError),
     #[error(transparent)]
     Settings(#[from] settings::SettingsError),
     #[error("could not prepare the TLS certificate: {0}")]
@@ -48,7 +52,15 @@ pub async fn run() -> ExitCode {
 }
 
 async fn serve() -> Result<(), ManagerError> {
-    let ManagerOptions { port } = ManagerOptions::from_environment()?;
+    let ManagerOptions {
+        port,
+        tls_verification,
+    } = ManagerOptions::from_environment()?;
+    if tls_verification == TlsVerification::Off {
+        tracing::warn!(
+            "{TLS_VERIFY_VARIABLE}=off, so agent downloads skip certificate verification"
+        );
+    }
     let state_directory = Path::new(STATE_DIRECTORY);
     let settings_path = state_directory.join("settings.toml");
     let settings = settings::Settings::load(&settings_path)?;
@@ -69,7 +81,7 @@ async fn serve() -> Result<(), ManagerError> {
     tokio::spawn(handle.clone().shut_down_on_signal());
     tracing::info!("manager listening on https://{hostname}:{port}");
     if !is_claimed {
-        tracing::info!("no password is set yet; the first visitor chooses it");
+        tracing::info!("no password is set, the first visitor chooses it");
     }
     let home = env::var_os("HOME").unwrap_or_else(|| "/home/dev".into());
     let state = state::AppState::new(
@@ -77,6 +89,7 @@ async fn serve() -> Result<(), ManagerError> {
         settings,
         agents::InstallPaths::under_home(Path::new(&home))
             .with_config_directories_from_environment(),
+        tls_verification,
     );
     tokio::spawn(state.clone().reinstall_configured_agents());
     let app = api::router(state.clone()).merge(pages::router(state));
@@ -87,22 +100,26 @@ async fn serve() -> Result<(), ManagerError> {
         .map_err(|source| ManagerError::Serve { port, source })
 }
 
-/// How the manager is started, from its environment.
+/// How the manager is started, read from the environment.
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 struct ManagerOptions {
+    #[serde(rename = "manager_port")]
     port: u16,
+    #[serde(rename = "agent_box_tls_verify")]
+    tls_verification: TlsVerification,
 }
 
-impl ManagerOptions {
-    fn from_environment() -> Result<Self, ManagerError> {
-        let port = match env::var(PORT_VARIABLE) {
-            Ok(value) => value
-                .parse()
-                .map_err(|_| ManagerError::InvalidPort(value))?,
-            Err(_) => DEFAULT_PORT,
-        };
-        Ok(Self { port })
+impl Default for ManagerOptions {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_PORT,
+            tls_verification: TlsVerification::default(),
+        }
     }
 }
+
+impl FromEnvironment for ManagerOptions {}
 
 trait HandleExt {
     /// Stops accepting connections on SIGTERM or Ctrl-C and gives open ones a few seconds.
@@ -119,5 +136,44 @@ impl HandleExt for Handle<SocketAddr> {
             _ = tokio::signal::ctrl_c() => {}
         }
         self.graceful_shutdown(Some(SHUTDOWN_GRACE_PERIOD));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment_config::variables;
+
+    fn options(pairs: &[(&str, &str)]) -> Result<ManagerOptions, config::ConfigError> {
+        ManagerOptions::from_variables(variables(pairs))
+    }
+
+    #[test]
+    fn defaults_are_port_8443_with_certificate_checks() {
+        assert_eq!(
+            options(&[]).expect("defaults load"),
+            ManagerOptions {
+                port: 8443,
+                tls_verification: TlsVerification::On,
+            }
+        );
+    }
+
+    #[test]
+    fn port_and_certificate_checks_are_typed() {
+        let custom = options(&[("MANAGER_PORT", "9443"), ("AGENT_BOX_TLS_VERIFY", "off")])
+            .expect("valid values load");
+        assert_eq!(custom.port, 9443);
+        assert_eq!(custom.tls_verification, TlsVerification::Off);
+        for (name, value) in [
+            ("MANAGER_PORT", "eighty"),
+            ("MANAGER_PORT", "70000"),
+            ("AGENT_BOX_TLS_VERIFY", "maybe"),
+        ] {
+            assert!(
+                options(&[(name, value)]).is_err(),
+                "{name}={value} was accepted"
+            );
+        }
     }
 }

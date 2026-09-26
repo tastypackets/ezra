@@ -4,7 +4,9 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{DockerResource, curl_in, docker, stdout_of, wait_for_manager};
+use common::{
+    DockerResource, curl_in, docker, run_in_image, stderr_of, stdout_of, wait_for_manager,
+};
 
 const UNCLAIMED: &str = r#"{"claimed":false,"authenticated":false}"#;
 
@@ -116,4 +118,35 @@ fn page_walks_from_password_to_dashboard() {
     assert!(dashboard.contains("Claude Code"), "{dashboard}");
     assert!(dashboard.contains("Codex"), "{dashboard}");
     assert!(dashboard.contains("Not installed"), "{dashboard}");
+}
+
+#[test]
+#[ignore = "needs Docker and a built agent-box image"]
+fn turning_off_download_certificate_checks_is_logged() {
+    let container = DockerResource::start_container(
+        "manager-tls-off",
+        &["--env", "AGENT_BOX_TLS_VERIFY=off"],
+        &[],
+    );
+    wait_for_manager(&container, 8443);
+    let logs = stderr_of(&docker(&["logs", &container.name]));
+    assert!(
+        logs.contains("agent downloads skip certificate verification"),
+        "{logs}"
+    );
+}
+
+#[test]
+#[ignore = "needs Docker and a built agent-box image"]
+fn unknown_certificate_check_setting_stops_the_manager() {
+    let output = run_in_image(
+        &["--env", "AGENT_BOX_TLS_VERIFY=maybe"],
+        &["agent-box", "manager"],
+    );
+    assert!(!output.status.success());
+    assert!(
+        stderr_of(&output).contains("for key `agent_box_tls_verify`"),
+        "{}",
+        stderr_of(&output)
+    );
 }

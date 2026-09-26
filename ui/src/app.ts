@@ -1,13 +1,20 @@
 const API_ROOT = "api/v1/";
 const SIGN_IN_POLL_MILLISECONDS = 3000;
+const INSTALL_POLL_MILLISECONDS = 500;
 
 interface ErrorBody {
   error?: string;
 }
 
+interface DownloadProgress {
+  received_bytes: number;
+  total_bytes: number | null;
+}
+
 interface AgentStatus {
   agent: string;
   login_prompt: unknown;
+  install_progress: DownloadProgress | null;
 }
 
 document.addEventListener("submit", (event) => {
@@ -24,15 +31,16 @@ document.addEventListener("submit", (event) => {
 });
 
 async function submitToApi(form: HTMLFormElement, path: string): Promise<void> {
-  const button = form.querySelector("button");
-  const idleLabel = button?.textContent ?? "";
-  const busyLabel = form.dataset["busy"];
+  const label = form.querySelector<HTMLElement>(".button-label");
+  const idleLabel = label?.textContent ?? "";
   const body = JSON.stringify(Object.fromEntries(new FormData(form)));
   setError(form, null);
   setBusy(form, true);
-  if (button !== null && busyLabel !== undefined) {
-    button.textContent = busyLabel;
-  }
+  const progressAgent = form.dataset["progressFor"];
+  const progressTimer =
+    progressAgent !== undefined && label !== null
+      ? window.setInterval(() => void showInstallProgress(progressAgent, label), INSTALL_POLL_MILLISECONDS)
+      : undefined;
 
   try {
     const response = await fetch(API_ROOT + path, {
@@ -49,14 +57,16 @@ async function submitToApi(form: HTMLFormElement, path: string): Promise<void> {
     setError(form, "Could not reach the manager.");
   }
 
+  window.clearInterval(progressTimer);
   setBusy(form, false);
-  if (button !== null) {
-    button.textContent = idleLabel;
+  if (label !== null) {
+    label.textContent = idleLabel;
   }
 }
 
 function setBusy(form: HTMLFormElement, busy: boolean): void {
   form.setAttribute("aria-busy", String(busy));
+  form.querySelector("button")?.setAttribute("aria-busy", String(busy));
   for (const control of form.querySelectorAll("button, input")) {
     if (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) {
       control.disabled = busy;
@@ -86,19 +96,66 @@ async function errorMessageOf(response: Response): Promise<string> {
   return text.trim() !== "" ? text.trim() : `Request failed (${response.status})`;
 }
 
-async function reloadWhenSignInEnds(agent: string): Promise<void> {
+async function fetchAgentStatus(agent: string): Promise<AgentStatus | undefined> {
+  const response = await fetch(API_ROOT + "agents");
+  if (!response.ok) {
+    throw new Error(`agent status request failed with ${response.status}`);
+  }
+  const statuses = (await response.json()) as AgentStatus[];
+  return statuses.find((candidate) => candidate.agent === agent);
+}
+
+function percentOf(progress: DownloadProgress): number | undefined {
+  if (progress.total_bytes === null || progress.total_bytes === 0) {
+    return undefined;
+  }
+  return Math.min(100, Math.floor((progress.received_bytes * 100) / progress.total_bytes));
+}
+
+async function showInstallProgress(agent: string, label: HTMLElement): Promise<void> {
   try {
-    const response = await fetch(API_ROOT + "agents");
-    if (!response.ok) {
+    const progress = (await fetchAgentStatus(agent))?.install_progress;
+    const percent = progress === null || progress === undefined ? undefined : percentOf(progress);
+    if (percent !== undefined) {
+      label.textContent = `${percent}%`;
+    }
+  } catch {
+    // Progress is optional. The install request reports success or failure.
+  }
+}
+
+async function reloadWhenInstallEnds(agent: string, label: HTMLElement): Promise<void> {
+  try {
+    const progress = (await fetchAgentStatus(agent))?.install_progress;
+    if (progress === null || progress === undefined) {
+      window.location.reload();
       return;
     }
-    const statuses = (await response.json()) as AgentStatus[];
-    const status = statuses.find((candidate) => candidate.agent === agent);
+    const percent = percentOf(progress);
+    if (percent !== undefined) {
+      label.textContent = `${percent}%`;
+    }
+  } catch {
+    // The manager may be restarting. The next tick tries again.
+  }
+}
+
+async function reloadWhenSignInEnds(agent: string): Promise<void> {
+  try {
+    const status = await fetchAgentStatus(agent);
     if (status === undefined || status.login_prompt === null) {
       window.location.reload();
     }
   } catch {
-    // The manager may be restarting; try again on the next tick.
+    // The manager may be restarting. The next tick tries again.
+  }
+}
+
+for (const running of document.querySelectorAll<HTMLElement>("[data-install-running]")) {
+  const agent = running.dataset["installRunning"];
+  const label = running.querySelector<HTMLElement>(".button-label");
+  if (agent !== undefined && label !== null) {
+    window.setInterval(() => void reloadWhenInstallEnds(agent, label), INSTALL_POLL_MILLISECONDS);
   }
 }
 
@@ -129,7 +186,7 @@ document.addEventListener("click", (event) => {
       }, COPIED_LABEL_MILLISECONDS);
     },
     () => {
-      // Clipboard access was refused; the code stays on screen to copy by hand.
+      // Clipboard access was refused. The code stays on screen to copy by hand.
     },
   );
 });

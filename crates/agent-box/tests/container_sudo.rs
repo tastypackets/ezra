@@ -84,7 +84,7 @@ fn invalid_value_refuses_to_start() {
     let output = run_in_image(&["--env", "AGENT_SUDO=yes"], &["true"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr_of(&output).contains("AGENT_SUDO must be"),
+        stderr_of(&output).contains("for key `agent_sudo`"),
         "{}",
         stderr_of(&output)
     );

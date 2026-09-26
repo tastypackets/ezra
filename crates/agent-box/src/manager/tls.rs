@@ -36,7 +36,7 @@ impl CertificateFiles {
             fs::write(&files.key, certificate.key_pem)?;
             fs::write(&files.certificate, certificate.certificate_pem)?;
             tracing::info!(
-                "created a self-signed certificate in {}; browsers will ask you to accept it",
+                "created a self-signed certificate in {}, so browsers show a warning until you accept it",
                 directory.display()
             );
         }

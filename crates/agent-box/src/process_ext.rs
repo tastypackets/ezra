@@ -20,7 +20,7 @@ impl OutputExt for Output {
 }
 
 pub trait CommandStatusExt {
-    /// Runs with stdin closed and output inherited; a non-zero exit is an error.
+    /// Runs with stdin closed and output inherited. A non-zero exit is an error.
     fn run_checked(&mut self) -> io::Result<()>;
 }
 

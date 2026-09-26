@@ -4,17 +4,21 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 
 use crate::path_ext::PathExt;
-use crate::process_ext::OutputExt;
 
 const CLAUDE_RELEASES: &str = "https://downloads.claude.ai/claude-code-releases";
 const CLAUDE_PLATFORM: &str = "linux-x64";
 const CODEX_RELEASES: &str = "https://releases.openai.com/codex";
 const CODEX_PACKAGE: &str = "codex-package-x86_64-unknown-linux-musl.tar.gz";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -57,19 +61,21 @@ impl Agent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
-    #[error("could not download {url}: {message}")]
-    Download { url: String, message: String },
+    #[error("could not download {url}: {source}")]
+    Download { url: String, source: reqwest::Error },
     #[error("unexpected release information from {url}: {message}")]
     ReleaseInformation { url: String, message: String },
     #[error("{url} did not match its published SHA-256 checksum")]
     ChecksumMismatch { url: String },
-    #[error("could not unpack {archive}: {message}")]
-    Unpack { archive: String, message: String },
+    #[error("could not unpack {archive}: {source}")]
+    Unpack { archive: String, source: io::Error },
+    #[error("could not start the download client: {0}")]
+    Client(reqwest::Error),
     #[error(transparent)]
     Io(#[from] io::Error),
 }
 
-/// `~/.local/bin` holds the commands; `~/.local/share/<agent>` holds one directory or file per version.
+/// `~/.local/bin` holds the commands. `~/.local/share/<agent>` holds one directory or file per version.
 /// The config directories hold each CLI's sign-in, settings and sessions on the /config volume.
 #[derive(Debug, Clone)]
 pub struct InstallPaths {
@@ -133,10 +139,16 @@ impl InstallPaths {
     }
 
     /// Installs the newest release, or does nothing when it is already installed. Returns the installed version.
-    pub async fn install_latest(&self, agent: Agent) -> Result<String, InstallError> {
-        let release = Release::latest(agent).await?;
+    pub async fn install_latest(
+        &self,
+        agent: Agent,
+        tls_verification: TlsVerification,
+        progress: &InstallProgress,
+    ) -> Result<String, InstallError> {
+        let client = ReleaseClient::new(tls_verification)?;
+        let release = Release::latest(agent, &client).await?;
         if self.installed_version(agent).as_deref() != Some(release.version.as_str()) {
-            self.install(agent, &release).await?;
+            self.install(agent, &release, &client, progress).await?;
         }
         if let Some(config_directory) = self.config_directory(agent) {
             fs::create_dir_all(config_directory)?;
@@ -144,7 +156,13 @@ impl InstallPaths {
         Ok(release.version)
     }
 
-    async fn install(&self, agent: Agent, release: &Release) -> Result<(), InstallError> {
+    async fn install(
+        &self,
+        agent: Agent,
+        release: &Release,
+        client: &ReleaseClient,
+        progress: &InstallProgress,
+    ) -> Result<(), InstallError> {
         let versions_directory = self.versions_directory(agent);
         fs::create_dir_all(&versions_directory)?;
         let download_path = versions_directory.join(format!(".{}.download", release.version));
@@ -153,8 +171,10 @@ impl InstallPaths {
         staging_path.remove_if_present()?;
 
         let outcome = async {
-            Curl::download(&release.url, &download_path).await?;
-            if download_path.sha256_hex()? != release.sha256 {
+            let sha256 = client
+                .download(&release.url, &download_path, progress)
+                .await?;
+            if sha256 != release.sha256 {
                 return Err(InstallError::ChecksumMismatch {
                     url: release.url.clone(),
                 });
@@ -164,7 +184,16 @@ impl InstallPaths {
                     fs::set_permissions(&download_path, fs::Permissions::from_mode(0o755))?;
                     fs::rename(&download_path, &staging_path)?;
                 }
-                Agent::Codex => Tar::extract_gzip(&download_path, &staging_path).await?,
+                Agent::Codex => {
+                    let (archive, destination) = (download_path.clone(), staging_path.clone());
+                    tokio::task::spawn_blocking(move || archive.unpack_tar_gz_into(&destination))
+                        .await
+                        .map_err(io::Error::other)?
+                        .map_err(|source| InstallError::Unpack {
+                            archive: download_path.display().to_string(),
+                            source,
+                        })?;
+                }
             }
             version_path.remove_if_present()?;
             fs::rename(&staging_path, &version_path)?;
@@ -210,15 +239,16 @@ struct Release {
 }
 
 impl Release {
-    async fn latest(agent: Agent) -> Result<Self, InstallError> {
+    async fn latest(agent: Agent, client: &ReleaseClient) -> Result<Self, InstallError> {
         match agent {
             Agent::Claude => {
-                let version = Curl::text(&format!("{CLAUDE_RELEASES}/latest"))
+                let version = client
+                    .text(&format!("{CLAUDE_RELEASES}/latest"))
                     .await?
                     .trim()
                     .to_owned();
                 let manifest_url = format!("{CLAUDE_RELEASES}/{version}/manifest.json");
-                let manifest = Curl::text(&manifest_url).await?;
+                let manifest = client.text(&manifest_url).await?;
                 Self::from_claude_manifest(&version, &manifest).map_err(|message| {
                     InstallError::ReleaseInformation {
                         url: manifest_url,
@@ -228,7 +258,7 @@ impl Release {
             }
             Agent::Codex => {
                 let channel_url = format!("{CODEX_RELEASES}/channels/latest");
-                let channel = Curl::text(&channel_url).await?;
+                let channel = client.text(&channel_url).await?;
                 Self::from_codex_channel(&channel).map_err(|message| {
                     InstallError::ReleaseInformation {
                         url: channel_url,
@@ -297,66 +327,127 @@ impl Release {
     }
 }
 
-/// Downloads with the image's curl.
-struct Curl;
+/// Whether downloads check the server's certificate, from `AGENT_BOX_TLS_VERIFY`.
+///
+/// Off only for networks that intercept TLS without a CA the image trusts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TlsVerification {
+    #[default]
+    On,
+    Off,
+}
 
-impl Curl {
-    async fn text(url: &str) -> Result<String, InstallError> {
-        let output = Self::command().arg(url).output().await?;
-        if !output.status.success() {
-            return Err(InstallError::Download {
-                url: url.to_owned(),
-                message: output.stderr_text(),
-            });
-        }
-        Ok(output.stdout_text())
+/// Talks to the vendors' release servers.
+struct ReleaseClient {
+    http: reqwest::Client,
+}
+
+impl ReleaseClient {
+    fn new(tls_verification: TlsVerification) -> Result<Self, InstallError> {
+        let http = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .tls_danger_accept_invalid_certs(tls_verification == TlsVerification::Off)
+            .build()
+            .map_err(InstallError::Client)?;
+        Ok(Self { http })
     }
 
-    async fn download(url: &str, destination: &Path) -> Result<(), InstallError> {
-        let output = Self::command()
-            .arg("--output")
-            .arg(destination)
-            .arg(url)
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(InstallError::Download {
-                url: url.to_owned(),
-                message: output.stderr_text(),
-            });
-        }
-        Ok(())
+    async fn text(&self, url: &str) -> Result<String, InstallError> {
+        let failed = |source| InstallError::Download {
+            url: url.to_owned(),
+            source,
+        };
+        self.http
+            .get(url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(failed)?
+            .text()
+            .await
+            .map_err(failed)
     }
 
-    fn command() -> Command {
-        let mut command = Command::new("curl");
-        command.args(["--fail", "--silent", "--show-error", "--location"]);
-        command
+    /// Streams the body to `destination` and returns its SHA-256 as lowercase hex.
+    async fn download(
+        &self,
+        url: &str,
+        destination: &Path,
+        progress: &InstallProgress,
+    ) -> Result<String, InstallError> {
+        let failed = |source| InstallError::Download {
+            url: url.to_owned(),
+            source,
+        };
+        let mut response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(failed)?;
+        progress.start(response.content_length());
+        let mut file = tokio::fs::File::create(destination).await?;
+        let mut hasher = Sha256::new();
+        while let Some(chunk) = response.chunk().await.map_err(failed)? {
+            hasher.update(&chunk);
+            file.write_all(&chunk).await?;
+            progress.advance(chunk.len());
+        }
+        file.flush().await?;
+        Ok(hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
     }
 }
 
-/// Unpacks archives with the image's tar.
-struct Tar;
+/// Bytes received so far for one install's download, readable while it runs.
+#[derive(Debug, Default)]
+pub struct InstallProgress {
+    received_bytes: AtomicU64,
+    total_bytes: AtomicU64,
+}
 
-impl Tar {
-    async fn extract_gzip(archive: &Path, destination: &Path) -> Result<(), InstallError> {
-        fs::create_dir_all(destination)?;
-        let output = Command::new("tar")
-            .arg("--extract")
-            .arg("--gzip")
-            .arg("--file")
-            .arg(archive)
-            .arg("--directory")
-            .arg(destination)
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(InstallError::Unpack {
-                archive: archive.display().to_string(),
-                message: output.stderr_text(),
-            });
+impl InstallProgress {
+    pub fn snapshot(&self) -> DownloadProgress {
+        let total_bytes = self.total_bytes.load(Ordering::Relaxed);
+        DownloadProgress {
+            received_bytes: self.received_bytes.load(Ordering::Relaxed),
+            total_bytes: (total_bytes > 0).then_some(total_bytes),
         }
-        Ok(())
+    }
+
+    fn start(&self, total_bytes: Option<u64>) {
+        self.received_bytes.store(0, Ordering::Relaxed);
+        self.total_bytes
+            .store(total_bytes.unwrap_or_default(), Ordering::Relaxed);
+    }
+
+    fn advance(&self, bytes: usize) {
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        self.received_bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
+/// How far a download has got, `total_bytes` absent when the server does not say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadProgress {
+    pub received_bytes: u64,
+    pub total_bytes: Option<u64>,
+}
+
+impl DownloadProgress {
+    /// Whole percent received, capped at 100, when the total is known.
+    pub fn percent(self) -> Option<u64> {
+        let percent = self
+            .received_bytes
+            .checked_mul(100)?
+            .checked_div(self.total_bytes?)?;
+        Some(percent.min(100))
     }
 }
 
@@ -368,6 +459,18 @@ mod tests {
         fs::create_dir_all(path.parent().expect("test paths have a parent"))
             .expect("parent directory is created");
         fs::write(path, "").expect("test file is written");
+    }
+
+    #[test]
+    fn download_percent_needs_a_total() {
+        let progress = |received_bytes, total_bytes| DownloadProgress {
+            received_bytes,
+            total_bytes,
+        };
+        assert_eq!(progress(0, None).percent(), None);
+        assert_eq!(progress(0, Some(0)).percent(), None);
+        assert_eq!(progress(50, Some(200)).percent(), Some(25));
+        assert_eq!(progress(300, Some(200)).percent(), Some(100));
     }
 
     #[test]

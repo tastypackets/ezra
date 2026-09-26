@@ -52,7 +52,7 @@ impl SetupScripts {
             Ok(scripts) => scripts,
             Err(error) => {
                 tracing::warn!(
-                    "could not read {SETUP_SCRIPTS_DIRECTORY} ({error}); no setup scripts ran"
+                    "could not read {SETUP_SCRIPTS_DIRECTORY} ({error}), so no setup scripts ran"
                 );
                 return;
             }
@@ -65,7 +65,7 @@ impl SetupScripts {
         }
     }
 
-    /// A non-root start cannot run the scripts; say so when there are any.
+    /// Warns that a non-root start skips the scripts, when there are any.
     pub fn warn_if_ignored(uid: Uid) {
         let directory = Path::new(SETUP_SCRIPTS_DIRECTORY);
         let has_scripts =

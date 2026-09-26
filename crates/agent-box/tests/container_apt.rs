@@ -76,7 +76,7 @@ fn read_only_root_filesystem_warns_and_continues() {
     let output = run_in_image(&["--read-only", "--env", "APT_PACKAGES=hello"], &["true"]);
     stdout_of(&output);
     let stderr = stderr_of(&output);
-    assert!(stderr.contains("not installed: hello"), "{stderr}");
+    assert!(stderr.contains("Not installed: hello"), "{stderr}");
 }
 
 #[test]

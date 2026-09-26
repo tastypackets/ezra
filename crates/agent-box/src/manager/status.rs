@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::agents::Agent;
+use super::agents::{Agent, DownloadProgress};
 use super::login::{LoginPrompt, SignInStatus};
 use super::state::AppState;
 use crate::path_ext::PathExt;
@@ -20,6 +20,8 @@ pub struct AgentStatus {
     pub login_prompt: Option<LoginPrompt>,
     pub session_count: Option<u64>,
     pub config_disk_bytes: Option<u64>,
+    /// Present while an install or update is downloading.
+    pub install_progress: Option<DownloadProgress>,
 }
 
 impl AgentStatus {
@@ -42,6 +44,12 @@ impl AgentStatus {
             }
             logins.get(&agent).and_then(|login| login.prompt().cloned())
         };
+        let install_progress = state
+            .installs_in_progress
+            .lock()
+            .await
+            .get(&agent)
+            .map(|progress| progress.snapshot());
         let sign_in = SignInStatus::query(agent, &state.install_paths).await;
         let config_directory = state.install_paths.config_directory(agent);
         Self {
@@ -54,12 +62,13 @@ impl AgentStatus {
             session_count: config_directory
                 .and_then(|directory| agent.session_count(directory).ok()),
             config_disk_bytes: config_directory.and_then(|directory| directory.total_bytes().ok()),
+            install_progress,
         }
     }
 }
 
 impl Agent {
-    /// Claude keeps `projects/<project>/<session>.jsonl`; Codex keeps `sessions/<year>/<month>/<day>/rollout-*.jsonl`.
+    /// Claude keeps `projects/<project>/<session>.jsonl`. Codex keeps `sessions/<year>/<month>/<day>/rollout-*.jsonl`.
     fn session_count(self, config_directory: &Path) -> io::Result<u64> {
         match self {
             Self::Claude => config_directory

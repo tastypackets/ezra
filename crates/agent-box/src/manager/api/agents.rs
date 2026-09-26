@@ -2,7 +2,9 @@ use axum::Json;
 use axum::extract::{Path, State};
 
 use super::{ApiError, AppState, Session};
-use crate::manager::agents::Agent;
+use std::sync::Arc;
+
+use crate::manager::agents::{Agent, InstallProgress};
 use crate::manager::status::AgentStatus;
 
 pub async fn list(_: Session, State(state): State<AppState>) -> Json<Vec<AgentStatus>> {
@@ -43,13 +45,19 @@ impl AppState {
 
     async fn install_and_record(&self, agent: Agent) -> Result<(), ApiError> {
         let _one_install_at_a_time = self.install_lock.lock().await;
-        let version = self
-            .install_paths
-            .install_latest(agent)
+        let progress = Arc::new(InstallProgress::default());
+        self.installs_in_progress
+            .lock()
             .await
-            .map_err(|error| {
-                ApiError::AgentFailed(format!("could not install {agent}: {error}"))
-            })?;
+            .insert(agent, Arc::clone(&progress));
+        let outcome = self
+            .install_paths
+            .install_latest(agent, self.download_tls_verification, &progress)
+            .await;
+        self.installs_in_progress.lock().await.remove(&agent);
+        let version = outcome.map_err(|error| {
+            ApiError::AgentFailed(format!("could not install {agent}: {error}"))
+        })?;
         tracing::info!("{agent} {version} is installed");
 
         self.update_settings(|settings| {
@@ -99,6 +107,7 @@ mod tests {
                 login_prompt: None,
                 session_count: Some(0),
                 config_disk_bytes: Some(0),
+                install_progress: None,
             })
         );
     }

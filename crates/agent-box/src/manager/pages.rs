@@ -8,7 +8,7 @@ use axum::routing::get;
 use axum_extra::extract::cookie::CookieJar;
 use maud::{DOCTYPE, Markup, html};
 
-use super::agents::Agent;
+use super::agents::{Agent, DownloadProgress};
 use super::auth::SESSION_COOKIE;
 use super::login::LoginPrompt;
 use super::state::AppState;
@@ -80,7 +80,7 @@ fn page(show_sign_out: bool, content: Markup) -> Markup {
                         }
                         @if show_sign_out {
                             form data-api="logout" {
-                                button.button.secondary type="submit" { "Sign out" }
+                                (ButtonStyle::Secondary.submit("Sign out", ButtonSize::Regular))
                             }
                         }
                     }
@@ -97,7 +97,7 @@ fn choose_password() -> Markup {
         "No password is set yet. Whoever sets it first controls this manager.",
         "setup",
         "new-password",
-        ("Set password", "Saving…"),
+        "Set password",
     )
 }
 
@@ -107,7 +107,7 @@ fn sign_in() -> Markup {
         "Enter the manager password.",
         "login",
         "current-password",
-        ("Sign in", "Signing in…"),
+        "Sign in",
     )
 }
 
@@ -116,18 +116,18 @@ fn password_card(
     description: &str,
     api_path: &str,
     autocomplete: &str,
-    (label, busy_label): (&str, &str),
+    label: &str,
 ) -> Markup {
     html! {
         div.card.narrow {
             h2 { (title) }
             p.muted { (description) }
-            form.form data-api=(api_path) data-busy=(busy_label) {
+            form.form data-api=(api_path) {
                 label.field {
                     span { "Password" }
                     input type="password" name="password" autocomplete=(autocomplete) required autofocus;
                 }
-                button.button.primary type="submit" { (label) }
+                (ButtonStyle::Primary.submit(label, ButtonSize::Regular))
                 p.error data-error hidden {}
             }
         }
@@ -150,7 +150,7 @@ fn dashboard(statuses: &[AgentStatus]) -> Markup {
                             th { "Version" }
                             th { "Account" }
                             th.number { "Sessions" }
-                            th.number title="Sign-in, settings and sessions the CLI keeps on /config. The CLI itself is not counted." { "Saved data" }
+                            th.number title="Sign-in, settings and sessions the CLI keeps on /config, not the CLI itself" { "Saved data" }
                             th.number { span.visually-hidden { "Actions" } }
                         }
                     }
@@ -198,15 +198,17 @@ impl AgentStatus {
                 td.number { (self.config_disk_bytes.map_or("unavailable".to_owned(), |bytes| ByteSize(bytes).to_string())) }
                 td.number {
                     div.row-actions {
-                        @if is_installed {
-                            (agent.action_form("install", "Update", "Updating…", false))
+                        @if let Some(progress) = self.install_progress {
+                            (agent.install_in_progress(progress))
+                        } @else if is_installed {
+                            (agent.action_form("install", "Update", ButtonStyle::Secondary))
                         } @else {
-                            (agent.action_form("install", "Install", "Installing…", true))
+                            (agent.action_form("install", "Install", ButtonStyle::Primary))
                         }
                         @if is_installed && self.logged_in {
-                            (agent.action_form("logout", "Sign out", "Signing out…", false))
+                            (agent.action_form("logout", "Sign out", ButtonStyle::Secondary))
                         } @else if is_installed && self.login_prompt.is_none() {
-                            (agent.action_form("login", "Sign in", "Starting…", true))
+                            (agent.action_form("login", "Sign in", ButtonStyle::Primary))
                         }
                     }
                 }
@@ -216,11 +218,49 @@ impl AgentStatus {
 }
 
 impl Agent {
-    fn action_form(self, action: &str, label: &str, busy_label: &str, primary: bool) -> Markup {
+    fn action_form(self, action: &str, label: &str, style: ButtonStyle) -> Markup {
         html! {
-            form data-api={ "agents/" (self) "/" (action) } data-busy=(busy_label) {
-                button.button.small.primary[primary].secondary[!primary] type="submit" { (label) }
+            form data-api={ "agents/" (self) "/" (action) } data-progress-for=[(action == "install").then_some(self)] {
+                (style.submit(label, ButtonSize::Small))
                 p.error data-error hidden {}
+            }
+        }
+    }
+
+    /// An install running when the page was rendered, for example a reinstall at startup.
+    fn install_in_progress(self, progress: DownloadProgress) -> Markup {
+        let label = progress
+            .percent()
+            .map_or_else(|| "Installing".to_owned(), |percent| format!("{percent}%"));
+        html! {
+            button.button.small.secondary type="button" disabled aria-busy="true" data-install-running=(self) {
+                span.button-spinner aria-hidden="true" {}
+                span.button-label { (label) }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ButtonStyle {
+    Primary,
+    Secondary,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ButtonSize {
+    Regular,
+    Small,
+}
+
+impl ButtonStyle {
+    /// A submit button that shows a spinner while its form is busy.
+    fn submit(self, label: &str, size: ButtonSize) -> Markup {
+        let primary = matches!(self, Self::Primary);
+        html! {
+            button.button.primary[primary].secondary[!primary].small[size == ButtonSize::Small] type="submit" {
+                span.button-spinner aria-hidden="true" {}
+                span.button-label { (label) }
             }
         }
     }
@@ -268,9 +308,9 @@ impl LoginPrompt {
                                 span.step-number { "2" }
                                 div {
                                     p.step-title { "Paste the code shown after you approve" }
-                                    form.inline-form data-api={ "agents/" (agent) "/login/code" } data-busy="Checking…" {
+                                    form.inline-form data-api={ "agents/" (agent) "/login/code" } {
                                         input type="text" name="code" autocomplete="off" spellcheck="false" required aria-label="Code" placeholder="Code";
-                                        button.button.primary.small type="submit" { "Finish sign-in" }
+                                        (ButtonStyle::Primary.submit("Finish sign-in", ButtonSize::Small))
                                         p.error data-error hidden {}
                                     }
                                 }
@@ -282,13 +322,13 @@ impl LoginPrompt {
                     @if agent == Agent::Codex {
                         p.waiting data-waiting-for=(agent) {
                             span.spinner aria-hidden="true" {}
-                            "Waiting for you to finish on the website…"
+                            "Waiting for you to finish on the website"
                         }
                     } @else {
                         span {}
                     }
-                    form data-api={ "agents/" (agent) "/login" } data-busy="Restarting…" {
-                        button.button.secondary.small type="submit" { "Start over" }
+                    form data-api={ "agents/" (agent) "/login" } {
+                        (ButtonStyle::Secondary.submit("Start over", ButtonSize::Small))
                         p.error data-error hidden {}
                     }
                 }
@@ -327,7 +367,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::manager::agents::InstallPaths;
+    use crate::manager::agents::{InstallPaths, TlsVerification};
     use crate::manager::auth::HashedPassword;
     use crate::manager::settings::Settings;
 
@@ -350,6 +390,7 @@ mod tests {
             directory.path().join("settings.toml"),
             settings,
             InstallPaths::under_home(directory.path()),
+            TlsVerification::default(),
         );
         let mut request = Request::get("/");
         if let Some(cookie) = cookie {
@@ -393,6 +434,7 @@ mod tests {
             directory.path().join("settings.toml"),
             Settings::default(),
             InstallPaths::under_home(directory.path()),
+            TlsVerification::default(),
         );
         for (path, content_type) in [
             ("/assets/app.js", "text/javascript; charset=utf-8"),

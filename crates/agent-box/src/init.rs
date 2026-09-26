@@ -1,4 +1,5 @@
 mod apt_packages;
+mod config;
 mod environment;
 mod exec;
 mod groups;
@@ -15,7 +16,9 @@ use std::process::ExitCode;
 use nix::errno::Errno;
 use nix::unistd::{AccessFlags, Uid, User, access};
 
+use crate::environment_config::FromEnvironment;
 use apt_packages::{APT_PACKAGES_VARIABLE, RequestedPackages};
+use config::InitConfig;
 use environment::{AccountDetails, EnvironmentOverride, TemporaryHome};
 use exec::Program;
 use groups::SupplementaryGroups;
@@ -46,8 +49,8 @@ pub enum InitError {
     PrivilegesStillRecoverable,
     #[error("could not clear the inheritable capability set: {0}")]
     ClearCapabilities(#[from] caps::errors::CapsError),
-    #[error("{SUDO_POLICY_VARIABLE} must be \"full\" or \"off\" (unset means off), not {0:?}")]
-    InvalidSudoPolicy(String),
+    #[error("invalid environment: {0}")]
+    Configuration(#[from] ::config::ConfigError),
     #[error("could not set no_new_privs: {0}")]
     NoNewPrivileges(Errno),
     #[error("could not prepare {path} as HOME: {source}")]
@@ -72,9 +75,10 @@ pub fn run(program: &OsStr, arguments: &[OsString]) -> ExitCode {
 }
 
 fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
-    let sudo_policy =
-        SudoPolicy::from_environment_value(env::var_os(SUDO_POLICY_VARIABLE).as_deref())?;
-    let requested_packages = RequestedPackages::from_environment();
+    let InitConfig {
+        sudo_policy,
+        apt_packages: requested_packages,
+    } = InitConfig::from_environment()?;
     let environment_overrides = if Uid::effective().is_root() {
         requested_packages.install_missing();
         SetupScripts::run_all();
@@ -117,7 +121,7 @@ fn adopt_invoking_user(
         None if TemporaryHome::is_needed(env::var_os("HOME").as_deref()) => {
             let home = TemporaryHome::prepare(uid)?;
             tracing::info!(
-                "uid {uid} has no passwd entry; using {} as HOME",
+                "uid {uid} has no passwd entry, so HOME is {}",
                 home.display()
             );
             vec![EnvironmentOverride::new("HOME", home)]
@@ -132,7 +136,7 @@ fn adopt_invoking_user(
     }
     if !requested_packages.is_empty() {
         tracing::warn!(
-            "{APT_PACKAGES_VARIABLE} is ignored when the container starts as uid {uid}; not installed: {}",
+            "{APT_PACKAGES_VARIABLE} is ignored when the container starts as uid {uid}. Not installed: {}",
             requested_packages.names().join(" ")
         );
     }
@@ -145,7 +149,7 @@ fn warn_about_unwritable_directories() {
     for directory in DIRECTORIES_AGENT_MUST_WRITE {
         if let Err(problem) = access(Path::new(directory), AccessFlags::W_OK) {
             tracing::warn!(
-                "{directory} is not writable by uid {} ({problem}); fix the ownership or mount options of the mounted directory on the host",
+                "{directory} is not writable by uid {} ({problem}). Check its ownership and mount options on the host.",
                 Uid::effective()
             );
         }
