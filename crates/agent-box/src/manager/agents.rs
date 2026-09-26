@@ -72,7 +72,7 @@ impl InstallPaths {
         }
     }
 
-    fn command(&self, agent: Agent) -> PathBuf {
+    pub fn command(&self, agent: Agent) -> PathBuf {
         self.bin_directory.join(agent.command_name())
     }
 

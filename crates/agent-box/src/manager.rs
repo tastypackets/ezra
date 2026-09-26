@@ -1,6 +1,7 @@
 mod agents;
 mod api;
 mod auth;
+mod login;
 mod settings;
 mod tls;
 

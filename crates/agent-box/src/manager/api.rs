@@ -1,8 +1,10 @@
 mod agents;
+mod login;
 mod session;
 #[cfg(test)]
 mod test_support;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,8 +18,9 @@ use axum_extra::extract::cookie::CookieJar;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-use super::agents::InstallPaths;
+use super::agents::{Agent, InstallPaths};
 use super::auth::{SESSION_COOKIE, Sessions};
+use super::login::LoginProcess;
 use super::settings::Settings;
 
 pub use agents::reinstall_configured_agents;
@@ -29,6 +32,7 @@ pub struct AppState {
     sessions: Arc<Sessions>,
     install_paths: Arc<InstallPaths>,
     install_lock: Arc<Mutex<()>>,
+    logins: Arc<Mutex<HashMap<Agent, LoginProcess>>>,
 }
 
 impl AppState {
@@ -39,6 +43,7 @@ impl AppState {
             sessions: Arc::default(),
             install_paths: Arc::new(install_paths),
             install_lock: Arc::default(),
+            logins: Arc::default(),
         }
     }
 }
@@ -51,6 +56,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/logout", post(session::log_out))
         .route("/api/v1/agents", get(agents::list))
         .route("/api/v1/agents/{agent}/install", post(agents::install))
+        .route("/api/v1/agents/{agent}/login", post(login::start))
+        .route(
+            "/api/v1/agents/{agent}/login/code",
+            post(login::submit_code),
+        )
+        .route("/api/v1/agents/{agent}/logout", post(login::log_out))
         .with_state(state)
 }
 
@@ -73,8 +84,8 @@ impl FromRequestParts<AppState> for Session {
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized(&'static str),
-    Conflict(&'static str),
-    InstallFailed(String),
+    Conflict(String),
+    AgentFailed(String),
     Internal(String),
 }
 
@@ -83,8 +94,8 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.to_owned()),
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.to_owned()),
-            Self::Conflict(message) => (StatusCode::CONFLICT, message.to_owned()),
-            Self::InstallFailed(message) => {
+            Self::Conflict(message) => (StatusCode::CONFLICT, message),
+            Self::AgentFailed(message) => {
                 tracing::warn!("{message}");
                 (StatusCode::BAD_GATEWAY, message)
             }

@@ -41,7 +41,7 @@ pub async fn set_up_password(
     }
     let mut settings = state.settings.lock().await;
     if settings.manager.password_hash.is_some() {
-        return Err(ApiError::Conflict("a password is already set"));
+        return Err(ApiError::Conflict("a password is already set".to_owned()));
     }
     let mut updated_settings = settings.clone();
     updated_settings.manager.password_hash =
@@ -58,7 +58,7 @@ pub async fn log_in(
 ) -> Result<(CookieJar, StatusCode), ApiError> {
     let password_hash = state.settings.lock().await.manager.password_hash.clone();
     let Some(password_hash) = password_hash else {
-        return Err(ApiError::Conflict("no password is set yet"));
+        return Err(ApiError::Conflict("no password is set yet".to_owned()));
     };
     if !auth::password_matches(&body.password, &password_hash) {
         return Err(ApiError::Unauthorized("wrong password"));

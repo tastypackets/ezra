@@ -3,32 +3,45 @@ use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState, Session, internal};
-use crate::manager::agents::{self, Agent, InstallPaths};
-use crate::manager::settings::{self, Settings};
+use crate::manager::agents::{self, Agent};
+use crate::manager::login;
+use crate::manager::settings;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentStatus {
     agent: Agent,
     configured: bool,
     installed_version: Option<String>,
+    logged_in: bool,
+    login_in_progress: bool,
 }
 
-fn status_of(agent: Agent, settings: &Settings, install_paths: &InstallPaths) -> AgentStatus {
+async fn status_of(agent: Agent, state: &AppState) -> AgentStatus {
+    let login_in_progress = {
+        let mut logins = state.logins.lock().await;
+        if logins
+            .get_mut(&agent)
+            .is_some_and(|login| login.has_finished())
+        {
+            logins.remove(&agent);
+        }
+        logins.contains_key(&agent)
+    };
     AgentStatus {
         agent,
-        configured: settings.agent(agent).configured,
-        installed_version: agents::installed_version(agent, install_paths),
+        configured: state.settings.lock().await.agent(agent).configured,
+        installed_version: agents::installed_version(agent, &state.install_paths),
+        logged_in: login::is_logged_in(agent, &state.install_paths).await,
+        login_in_progress,
     }
 }
 
 pub async fn list(_: Session, State(state): State<AppState>) -> Json<Vec<AgentStatus>> {
-    let settings = state.settings.lock().await;
-    Json(
-        Agent::ALL
-            .into_iter()
-            .map(|agent| status_of(agent, &settings, &state.install_paths))
-            .collect(),
-    )
+    let mut statuses = Vec::new();
+    for agent in Agent::ALL {
+        statuses.push(status_of(agent, &state).await);
+    }
+    Json(statuses)
 }
 
 /// Installs the newest release, or updates to it, and marks the agent configured.
@@ -38,8 +51,7 @@ pub async fn install(
     Path(agent): Path<Agent>,
 ) -> Result<Json<AgentStatus>, ApiError> {
     install_and_record(&state, agent).await?;
-    let settings = state.settings.lock().await;
-    Ok(Json(status_of(agent, &settings, &state.install_paths)))
+    Ok(Json(status_of(agent, &state).await))
 }
 
 /// Runs at manager start: a configured agent is missing after the container was recreated.
@@ -54,7 +66,7 @@ pub async fn reinstall_configured_agents(state: AppState) {
     for agent in configured_agents {
         if agents::installed_version(agent, &state.install_paths).is_none() {
             tracing::info!("reinstalling {agent}, which is configured but not installed");
-            if let Err(ApiError::InstallFailed(message) | ApiError::Internal(message)) =
+            if let Err(ApiError::AgentFailed(message) | ApiError::Internal(message)) =
                 install_and_record(&state, agent).await
             {
                 tracing::warn!("{message}");
@@ -67,7 +79,7 @@ async fn install_and_record(state: &AppState, agent: Agent) -> Result<(), ApiErr
     let _one_install_at_a_time = state.install_lock.lock().await;
     let version = agents::install_latest(agent, &state.install_paths)
         .await
-        .map_err(|error| ApiError::InstallFailed(format!("could not install {agent}: {error}")))?;
+        .map_err(|error| ApiError::AgentFailed(format!("could not install {agent}: {error}")))?;
     tracing::info!("{agent} {version} is installed");
 
     let mut settings = state.settings.lock().await;
@@ -111,12 +123,16 @@ mod tests {
                 AgentStatus {
                     agent: Agent::Claude,
                     configured: false,
-                    installed_version: None
+                    installed_version: None,
+                    logged_in: false,
+                    login_in_progress: false,
                 },
                 AgentStatus {
                     agent: Agent::Codex,
                     configured: false,
-                    installed_version: None
+                    installed_version: None,
+                    logged_in: false,
+                    login_in_progress: false,
                 },
             ]
         );
