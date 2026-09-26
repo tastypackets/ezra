@@ -28,6 +28,17 @@ test("the Claude release channel is saved", async ({ page }) => {
   await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 });
 
+test("only the newest three toasts show", async ({ page }) => {
+  await page.goto("./settings");
+  const save = card(page, "Claude Code").getByRole("button", { name: "Save" });
+  const saved = page.getByText("Claude Code settings saved.");
+  for (const count of [1, 2, 3, 4]) {
+    await save.click();
+    await expect(saved).toHaveCount(count);
+  }
+  await expect(saved.filter({ visible: true })).toHaveCount(3);
+});
+
 test("every Claude setting is named and described", async ({ page }) => {
   await page.goto("./settings");
   const claude = card(page, "Claude Code");

@@ -23,7 +23,7 @@ function ToastList({ closeLabel }: { closeLabel: string }) {
     <Toast.Root
       key={toast.id}
       toast={toast}
-      className="flex items-start gap-3 rounded-lg bg-popover p-3 text-popover-foreground shadow-md ring-1 ring-foreground/10 transition-[opacity,translate] duration-200 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0"
+      className="flex items-start gap-3 rounded-lg bg-popover p-3 text-popover-foreground shadow-md ring-1 ring-foreground/10 transition-[opacity,translate] duration-200 data-ending-style:opacity-0 data-limited:hidden data-starting-style:translate-y-2 data-starting-style:opacity-0"
     >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <Toast.Title className="font-medium" />
