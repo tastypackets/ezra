@@ -39,10 +39,18 @@ export function ClaudeSettingsCard() {
   const ids = {
     enabled: useId(),
     enabledLabel: useId(),
+    enabledHint: useId(),
     serveRepositories: useId(),
     serveRepositoriesLabel: useId(),
+    serveRepositoriesHint: useId(),
     permissionMode: useId(),
+    permissionModeHint: useId(),
+    permissionModeError: useId(),
     capacity: useId(),
+    capacityHint: useId(),
+    capacityError: useId(),
+    releaseChannel: useId(),
+    releaseChannelHint: useId(),
   };
   const { data: settings } = useSuspenseQuery(getClaudeSettingsOptions());
   const save = useMutation({
@@ -88,6 +96,7 @@ export function ClaudeSettingsCard() {
                     <Switch
                       id={ids.enabled}
                       aria-labelledby={ids.enabledLabel}
+                      aria-describedby={ids.enabledHint}
                       checked={field.state.value}
                       onCheckedChange={field.handleChange}
                     />
@@ -95,7 +104,7 @@ export function ClaudeSettingsCard() {
                       <FieldLabel id={ids.enabledLabel} htmlFor={ids.enabled}>
                         {SETTINGS_DESCRIPTIONS.remote_control_enabled}
                       </FieldLabel>
-                      <FieldDescription>
+                      <FieldDescription id={ids.enabledHint}>
                         {SETTINGS_DESCRIPTIONS.remote_control_enabled_hint}
                       </FieldDescription>
                     </FieldContent>
@@ -108,6 +117,7 @@ export function ClaudeSettingsCard() {
                     <Switch
                       id={ids.serveRepositories}
                       aria-labelledby={ids.serveRepositoriesLabel}
+                      aria-describedby={ids.serveRepositoriesHint}
                       checked={field.state.value}
                       onCheckedChange={field.handleChange}
                     />
@@ -115,7 +125,7 @@ export function ClaudeSettingsCard() {
                       <FieldLabel id={ids.serveRepositoriesLabel} htmlFor={ids.serveRepositories}>
                         {SETTINGS_DESCRIPTIONS.serve_repositories}
                       </FieldLabel>
-                      <FieldDescription>
+                      <FieldDescription id={ids.serveRepositoriesHint}>
                         {SETTINGS_DESCRIPTIONS.serve_repositories_hint}
                       </FieldDescription>
                     </FieldContent>
@@ -146,11 +156,18 @@ export function ClaudeSettingsCard() {
                           onValueChange={field.handleChange}
                           showOptionsLabel={SETTINGS_DESCRIPTIONS.show_permission_modes}
                           aria-invalid={Boolean(error)}
+                          aria-describedby={
+                            error
+                              ? `${ids.permissionModeHint} ${ids.permissionModeError}`
+                              : ids.permissionModeHint
+                          }
                         />
-                        <FieldDescription>
+                        <FieldDescription id={ids.permissionModeHint}>
                           {SETTINGS_DESCRIPTIONS.permission_mode_hint}
                         </FieldDescription>
-                        {error ? <FieldError>{error}</FieldError> : null}
+                        {error ? (
+                          <FieldError id={ids.permissionModeError}>{error}</FieldError>
+                        ) : null}
                       </Field>
                     );
                   }}
@@ -182,9 +199,14 @@ export function ClaudeSettingsCard() {
                           onChange={(event) => field.handleChange(event.target.valueAsNumber)}
                           onBlur={field.handleBlur}
                           aria-invalid={Boolean(error)}
+                          aria-describedby={
+                            error ? `${ids.capacityHint} ${ids.capacityError}` : ids.capacityHint
+                          }
                         />
-                        <FieldDescription>{SETTINGS_DESCRIPTIONS.capacity_hint}</FieldDescription>
-                        {error ? <FieldError>{error}</FieldError> : null}
+                        <FieldDescription id={ids.capacityHint}>
+                          {SETTINGS_DESCRIPTIONS.capacity_hint}
+                        </FieldDescription>
+                        {error ? <FieldError id={ids.capacityError}>{error}</FieldError> : null}
                       </Field>
                     );
                   }}
@@ -194,9 +216,15 @@ export function ClaudeSettingsCard() {
             <form.Field name="release_channel">
               {(field) => (
                 <FieldSet>
-                  <FieldLegend>{SETTINGS_DESCRIPTIONS.release_channel}</FieldLegend>
-                  <FieldDescription>{SETTINGS_DESCRIPTIONS.release_channel_hint}</FieldDescription>
+                  <FieldLegend id={ids.releaseChannel}>
+                    {SETTINGS_DESCRIPTIONS.release_channel}
+                  </FieldLegend>
+                  <FieldDescription id={ids.releaseChannelHint}>
+                    {SETTINGS_DESCRIPTIONS.release_channel_hint}
+                  </FieldDescription>
                   <RadioGroup
+                    aria-labelledby={ids.releaseChannel}
+                    aria-describedby={ids.releaseChannelHint}
                     value={field.state.value}
                     onValueChange={(next) => {
                       const channel = CHANNEL_ORDER.find((candidate) => candidate === next);

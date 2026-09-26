@@ -22,6 +22,7 @@ test("signing in and out", async ({ page }) => {
   await page.getByLabel("Password").fill("wrong");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByText("wrong password")).toBeVisible();
+  await expect(page.getByLabel("Password")).toHaveAccessibleDescription(/wrong password/);
 
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();

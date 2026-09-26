@@ -18,6 +18,7 @@ export interface AutocompleteProps {
   /** Names the button that opens the list. */
   showOptionsLabel: string;
   "aria-invalid"?: boolean;
+  "aria-describedby"?: string;
 }
 
 /**
@@ -31,6 +32,7 @@ function Autocomplete({
   onValueChange,
   showOptionsLabel,
   "aria-invalid": invalid,
+  "aria-describedby": describedBy,
 }: AutocompleteProps) {
   const [open, setOpen] = useState(false);
   const query = value.trim().toLowerCase();
@@ -54,6 +56,7 @@ function Autocomplete({
         <AutocompletePrimitive.Input
           id={id}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           spellCheck={false}
           autoComplete="off"
           render={<Input className="pr-8 font-mono" />}

@@ -28,6 +28,30 @@ test("the Claude release channel is saved", async ({ page }) => {
   await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 });
 
+test("every Claude setting is named and described", async ({ page }) => {
+  await page.goto("./settings");
+  const claude = card(page, "Claude Code");
+  await expect(
+    claude.getByRole("switch", { name: "Serve to the Claude app" }),
+  ).toHaveAccessibleDescription(
+    "Serves /projects, and the folders you choose, while Claude Code is signed in.",
+  );
+  await expect(
+    claude.getByRole("switch", { name: "Serve new repositories" }),
+  ).toHaveAccessibleDescription("Repositories added to /projects start with their switch on.");
+  await expect(
+    claude.getByRole("combobox", { name: "Permission mode" }),
+  ).toHaveAccessibleDescription("Sessions started from the Claude app keep this mode.");
+  await expect(
+    claude.getByRole("radiogroup", { name: "Release channel" }),
+  ).toHaveAccessibleDescription(
+    "Switching to stable keeps the installed version until stable has a newer one.",
+  );
+  await expect(claude.getByRole("radio", { name: "Stable" })).toHaveAccessibleDescription(
+    "About a week behind, skipping releases with major regressions.",
+  );
+});
+
 test("Remote Control settings are saved and shown on the dashboard", async ({ page }) => {
   await page.goto("./settings");
   const claude = card(page, "Claude Code");
@@ -61,11 +85,23 @@ test("Remote Control settings are saved and shown on the dashboard", async ({ pa
   await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 });
 
-test("a capacity Claude cannot take is refused", async ({ page }) => {
+test("a setting Claude cannot take is refused next to its field", async ({ page }) => {
   await page.goto("./settings");
   const claude = card(page, "Claude Code");
-  await claude.getByLabel("Sessions at once").fill("40");
+  const capacity = claude.getByRole("spinbutton", { name: "Sessions at once" });
+  await capacity.fill("40");
   await expect(claude.getByText("Enter a number from 1 to 32.")).toBeVisible();
+  await expect(capacity).toHaveAccessibleDescription(
+    "Each session is its own Claude Code process, about 150 to 300 MB. Enter a number from 1 to 32.",
+  );
+  await expect(capacity).toHaveAttribute("aria-invalid", "true");
+
+  const mode = claude.getByRole("combobox", { name: "Permission mode" });
+  await mode.fill("two words");
+  await page.keyboard.press("Escape");
+  await expect(mode).toHaveAccessibleDescription(
+    "Sessions started from the Claude app keep this mode. Enter one word, such as auto.",
+  );
 });
 
 test("git starts signed out of GitHub and keeps the commit identity", async ({ page }) => {

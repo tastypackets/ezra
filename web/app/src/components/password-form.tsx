@@ -31,6 +31,7 @@ export function PasswordForm({
   onSuccess,
 }: PasswordFormProps) {
   const passwordId = useId();
+  const errorId = useId();
   const form = useForm({
     defaultValues: { password: "" },
     onSubmit: async ({ value }) => {
@@ -72,10 +73,11 @@ export function PasswordForm({
                   onBlur={field.handleBlur}
                   autoComplete={autoComplete}
                   aria-invalid={Boolean(failure)}
+                  aria-describedby={failure ? errorId : undefined}
                   required
                   autoFocus
                 />
-                {failure ? <FieldError>{failure}</FieldError> : null}
+                {failure ? <FieldError id={errorId}>{failure}</FieldError> : null}
               </Field>
             )}
           </form.Field>
