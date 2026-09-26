@@ -24,7 +24,6 @@ use super::agents::Agent;
 use super::login::{AgentCli, StrExt};
 use super::state::AppState;
 
-pub const SERVED_DIRECTORY: &str = "/projects";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const SIGN_IN_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -385,7 +384,7 @@ impl AppState {
                 .install_paths
                 .config_directory(Agent::Claude)
                 .map(Path::to_path_buf),
-            directory: self.remote_control_directory.clone(),
+            directory: self.projects.0.clone(),
             settings,
         })
     }
@@ -617,6 +616,7 @@ impl RemoteControlLineExt for str {
 mod tests {
     use super::*;
     use crate::manager::api::test_support::TestManager;
+    use crate::manager::folders::ProjectsDirectory;
     use crate::path_ext::PathExt;
 
     const SIGNED_IN: &str = r#"{"loggedIn":true}"#;
@@ -642,7 +642,7 @@ mod tests {
         let served = directory.join("projects");
         fs::create_dir_all(&served).expect("served directory is created");
         let mut state = manager.state.clone();
-        state.remote_control_directory = served;
+        state.projects = ProjectsDirectory(served);
         state
     }
 

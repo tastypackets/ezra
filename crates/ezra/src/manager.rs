@@ -1,6 +1,7 @@
 mod agents;
 mod api;
 mod auth;
+mod folders;
 mod git;
 mod login;
 mod remote_control;
@@ -103,6 +104,7 @@ async fn serve() -> Result<(), ManagerError> {
     tokio::spawn(state.clone().check_for_updates_regularly());
     tokio::spawn(state.clone().lend_github_sign_in_at_start());
     tokio::spawn(state.clone().supervise_remote_control());
+    tokio::spawn(state.clone().describe_folders_regularly());
     tokio::spawn(
         handle
             .clone()

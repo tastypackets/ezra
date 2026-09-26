@@ -8,3 +8,5 @@ export const AGENT_ACTION = "agent_action";
 export const CLAUDE_SETTINGS = "claude_settings";
 /** The GitHub sign-in and commit identity git uses. */
 export const GIT = "git";
+/** The folders in /projects. */
+export const FOLDERS = "folders";

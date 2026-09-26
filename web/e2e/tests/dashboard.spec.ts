@@ -10,6 +10,9 @@ test("the dashboard arrives with its data", async ({ page }) => {
     await expect(row).toContainText("Not installed");
     await expect(row.getByRole("button", { name: "Install" })).toBeVisible();
   }
+  await expect(
+    page.getByText("No projects yet. Ask an agent to clone a repository into /projects."),
+  ).toBeVisible();
   expect(apiCalls).toEqual([]);
 });
 

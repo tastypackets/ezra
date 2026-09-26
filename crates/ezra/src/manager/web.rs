@@ -13,6 +13,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use super::api::session::SessionStatus;
+use super::folders::Folder;
 use super::state::AppState;
 use super::status::AgentStatus;
 
@@ -25,17 +26,25 @@ struct InitialData {
     session: SessionStatus,
     /// Present only when the request is signed in.
     agents: Option<Vec<AgentStatus>>,
+    /// Present only when the request is signed in and /projects can be read.
+    folders: Option<Vec<Folder>>,
 }
 
 impl InitialData {
     async fn gather(app: &AppState, cookies: &CookieJar) -> Self {
         let session = SessionStatus::of(app, cookies).await;
-        let agents = if session.authenticated {
-            Some(AgentStatus::gather_all(app).await)
-        } else {
-            None
-        };
-        Self { session, agents }
+        if !session.authenticated {
+            return Self {
+                session,
+                agents: None,
+                folders: None,
+            };
+        }
+        Self {
+            session,
+            agents: Some(AgentStatus::gather_all(app).await),
+            folders: app.folders().await.ok(),
+        }
     }
 
     /// `<` is escaped so the data can never close its script tag.
@@ -175,11 +184,13 @@ mod tests {
         let made_up = InitialData::gather(&manager.state, &session_cookie("made-up")).await;
         assert!(!made_up.session.authenticated);
         assert!(made_up.agents.is_none());
+        assert!(made_up.folders.is_none());
 
         let (_, token) = cookie.split_once('=').expect("cookie is name=value");
         let signed_in = InitialData::gather(&manager.state, &session_cookie(token)).await;
         assert!(signed_in.session.authenticated);
         assert_eq!(signed_in.agents.map(|agents| agents.len()), Some(2));
+        assert_eq!(signed_in.folders, Some(Vec::new()));
     }
 
     #[test]
@@ -203,6 +214,7 @@ mod tests {
                 available_update: None,
                 remote_control: None,
             }]),
+            folders: None,
         };
         let page = data
             .insert_into("<!doctype html><html><head></head><body></body></html>")

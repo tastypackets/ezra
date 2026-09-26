@@ -12,6 +12,7 @@ use tower::ServiceExt;
 
 use super::session::SessionStatus;
 use crate::manager::agents::{InstallPaths, TlsVerification};
+use crate::manager::folders::ProjectsDirectory;
 use crate::manager::git::GitTools;
 use crate::manager::settings::Settings;
 use crate::manager::state::AppState;
@@ -47,13 +48,14 @@ impl TestManager {
                 directory.path().join("config/claude"),
                 directory.path().join("config/codex"),
             );
-        let state = AppState::new(
+        let mut state = AppState::new(
             settings_path.clone(),
             Settings::default(),
             install_paths,
             TlsVerification::default(),
             GitTools::under(directory.path()),
         );
+        state.projects = ProjectsDirectory(directory.path().join("projects"));
         Self {
             router: state.clone().into_router(directory.path().join("web")),
             state,

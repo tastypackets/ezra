@@ -374,6 +374,40 @@
         }
       }
     },
+    "/api/v1/folders": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "List the folders in /projects",
+        "operationId": "listFolders",
+        "responses": {
+          "200": {
+            "description": "Folders sorted by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Folder"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/git": {
       "get": {
         "tags": [
@@ -862,6 +896,50 @@
         "properties": {
           "error": {
             "type": "string"
+          }
+        }
+      },
+      "Folder": {
+        "type": "object",
+        "description": "One top-level folder in /projects.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "git": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GitDetails",
+                "description": "Present when the folder is a git repository."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "The folder's name in /projects."
+          }
+        }
+      },
+      "GitDetails": {
+        "type": "object",
+        "description": "Where a repository comes from and what it has checked out.",
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The checked-out branch, absent when not on a branch."
+          },
+          "repository": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where `origin` points, without credentials."
           }
         }
       },

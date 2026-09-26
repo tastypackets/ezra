@@ -6,9 +6,10 @@ use tokio::sync::Mutex;
 
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
+use super::folders::{PROJECTS_DIRECTORY, ProjectsDirectory};
 use super::git::GitTools;
 use super::login::LoginProcess;
-use super::remote_control::{RemoteControl, SERVED_DIRECTORY};
+use super::remote_control::RemoteControl;
 use super::settings::{Settings, SettingsError};
 use super::updates::LatestRelease;
 
@@ -27,7 +28,7 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
-    pub remote_control_directory: PathBuf,
+    pub projects: ProjectsDirectory,
 }
 
 impl AppState {
@@ -51,7 +52,7 @@ impl AppState {
             git_tools: Arc::new(git_tools),
             github_login: Arc::default(),
             remote_control: Arc::default(),
-            remote_control_directory: PathBuf::from(SERVED_DIRECTORY),
+            projects: ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY)),
         }
     }
 

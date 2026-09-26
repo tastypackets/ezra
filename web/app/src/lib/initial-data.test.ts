@@ -5,8 +5,8 @@ import { isInitialData } from "./initial-data";
 describe("isInitialData", () => {
   it("accepts what the manager writes", () => {
     const session = { claimed: true, authenticated: false };
-    expect(isInitialData({ session, agents: null })).toBe(true);
-    expect(isInitialData({ session, agents: [] })).toBe(true);
+    expect(isInitialData({ session, agents: null, folders: null })).toBe(true);
+    expect(isInitialData({ session, agents: [], folders: [] })).toBe(true);
   });
 
   it("rejects anything else", () => {

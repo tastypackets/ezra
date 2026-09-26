@@ -1,0 +1,508 @@
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use tokio::time::{MissedTickBehavior, interval};
+use utoipa::ToSchema;
+
+use super::state::AppState;
+
+pub const PROJECTS_DIRECTORY: &str = "/projects";
+const RESCAN_INTERVAL: Duration = Duration::from_secs(30);
+const BLOCK_START: &str = "<!-- ezra:folders:start -->";
+const BLOCK_END: &str = "<!-- ezra:folders:end -->";
+const UNBORN_REFTABLE_BRANCH: &str = ".invalid";
+
+/// One top-level folder in /projects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Folder {
+    /// The folder's name in /projects.
+    pub name: String,
+    /// Present when the folder is a git repository.
+    pub git: Option<GitDetails>,
+}
+
+/// Where a repository comes from and what it has checked out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct GitDetails {
+    /// The checked-out branch, absent when not on a branch.
+    pub branch: Option<String>,
+    /// Where `origin` points, without credentials.
+    pub repository: Option<String>,
+}
+
+/// The directory whose folders agents work in, usually /projects.
+#[derive(Debug, Clone)]
+pub struct ProjectsDirectory(pub PathBuf);
+
+impl ProjectsDirectory {
+    /// Top-level folders sorted by name. Hidden folders, and ones that vanish or cannot be read
+    /// while listing, are left out.
+    pub fn folders(&self) -> io::Result<Vec<Folder>> {
+        let mut folders: Vec<Folder> = fs::read_dir(&self.0)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                (!name.starts_with('.')).then(|| Folder {
+                    git: GitCheckout::in_folder(&entry.path()).details(),
+                    name,
+                })
+            })
+            .collect();
+        folders.sort_by(|first, second| first.name.cmp(&second.name));
+        Ok(folders)
+    }
+
+    /// Rewrites the managed block in `AGENTS.md` when the folders changed, keeping everything else.
+    pub fn describe_folders_for_agents(&self, folders: &[Folder]) -> io::Result<()> {
+        let path = self.0.join("AGENTS.md");
+        let existing = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error),
+        };
+        let updated = existing.with_folders_block(&FoldersBlock(folders).to_markdown());
+        if updated == existing {
+            return Ok(());
+        }
+        fs::write(path, updated)
+    }
+}
+
+/// The part of `/projects/AGENTS.md` the manager owns.
+struct FoldersBlock<'folders>(&'folders [Folder]);
+
+impl FoldersBlock<'_> {
+    fn to_markdown(&self) -> String {
+        let mut markdown = format!(
+            "{BLOCK_START}\n\
+             ## Projects in this box\n\n\
+             Each folder in this directory is its own project. Clone new repositories here. \
+             This list updates itself.\n\n"
+        );
+        if self.0.is_empty() {
+            markdown.push_str("No projects yet.\n");
+        } else {
+            markdown.push_str("| Folder | Repository | Branch |\n| --- | --- | --- |\n");
+            for folder in self.0 {
+                let git = folder.git.clone().unwrap_or_default();
+                markdown.push_str(&format!(
+                    "| {} | {} | {} |\n",
+                    folder.name.table_cell(),
+                    git.repository.as_deref().unwrap_or("").table_cell(),
+                    git.branch.as_deref().unwrap_or("").table_cell(),
+                ));
+            }
+        }
+        markdown.push_str(BLOCK_END);
+        markdown
+    }
+}
+
+trait MarkdownExt {
+    /// Text that can neither end the table cell nor start HTML, such as a block marker.
+    fn table_cell(&self) -> String;
+    /// Replaces the managed block, or adds it at the end when there is none. Markers only count
+    /// as whole lines, and the last start line pairs with the next end line.
+    fn with_folders_block(&self, block: &str) -> String;
+}
+
+impl MarkdownExt for str {
+    fn table_cell(&self) -> String {
+        self.chars()
+            .map(|character| match character {
+                '\\' => "\\\\".to_owned(),
+                '|' => "\\|".to_owned(),
+                '<' => "&lt;".to_owned(),
+                control if control.is_control() => " ".to_owned(),
+                other => other.to_string(),
+            })
+            .collect()
+    }
+
+    fn with_folders_block(&self, block: &str) -> String {
+        let lines: Vec<&str> = self.lines().collect();
+        let block_lines = lines
+            .iter()
+            .rposition(|line| line.trim() == BLOCK_START)
+            .and_then(|start| {
+                let (before, from_start) = lines.split_at(start);
+                let (end, _) = from_start
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .find(|(_, line)| line.trim() == BLOCK_END)?;
+                let (_, from_end) = from_start.split_at(end);
+                Some((before, from_end.get(1..).unwrap_or_default()))
+            });
+        match block_lines {
+            Some((before, after)) => {
+                let mut updated = before.to_vec();
+                updated.push(block);
+                updated.extend_from_slice(after);
+                let mut text = updated.join("\n");
+                if self.ends_with('\n') {
+                    text.push('\n');
+                }
+                text
+            }
+            None if self.trim().is_empty() => format!("{block}\n"),
+            None => format!("{}\n\n{block}\n", self.trim_end()),
+        }
+    }
+}
+
+/// A folder's git metadata.
+struct GitCheckout {
+    git_directory: Option<PathBuf>,
+}
+
+impl GitCheckout {
+    fn in_folder(folder: &Path) -> Self {
+        let dot_git = folder.join(".git");
+        let git_directory = if dot_git.is_dir() {
+            Some(dot_git)
+        } else {
+            fs::read_to_string(&dot_git).ok().and_then(|pointer| {
+                pointer
+                    .trim()
+                    .strip_prefix("gitdir:")
+                    .map(|path| folder.join(path.trim()))
+            })
+        };
+        Self { git_directory }
+    }
+
+    fn details(&self) -> Option<GitDetails> {
+        let git_directory = self.git_directory.as_ref()?;
+        let branch = fs::read_to_string(git_directory.join("HEAD"))
+            .ok()
+            .and_then(|head| {
+                head.trim()
+                    .strip_prefix("ref:")
+                    .map(str::trim_start)
+                    .and_then(|reference| reference.strip_prefix("refs/heads/"))
+                    .filter(|branch| *branch != UNBORN_REFTABLE_BRANCH)
+                    .map(str::to_owned)
+            });
+        let common_directory = fs::read_to_string(git_directory.join("commondir")).map_or_else(
+            |_| git_directory.clone(),
+            |common| git_directory.join(common.trim()),
+        );
+        let repository = fs::read_to_string(common_directory.join("config"))
+            .ok()
+            .and_then(|config| config.origin_url())
+            .map(|url| url.without_credentials());
+        Some(GitDetails { branch, repository })
+    }
+}
+
+trait GitConfigExt {
+    /// `url` under `[remote "origin"]`, unquoted and without a trailing comment.
+    fn origin_url(&self) -> Option<String>;
+    /// Drops `user:token@` from http and https URLs.
+    fn without_credentials(&self) -> String;
+}
+
+impl GitConfigExt for str {
+    fn origin_url(&self) -> Option<String> {
+        let mut in_origin = false;
+        for line in self.lines().map(str::trim) {
+            let entry = if let Some(section) = line.strip_prefix('[') {
+                let (header, rest) = section.split_once(']').unwrap_or((section, ""));
+                let (kind, name) = header
+                    .split_once(char::is_whitespace)
+                    .unwrap_or((header, ""));
+                in_origin = kind.eq_ignore_ascii_case("remote") && name.trim() == "\"origin\"";
+                rest.trim()
+            } else {
+                line
+            };
+            if in_origin
+                && let Some((key, value)) = entry.split_once('=')
+                && key.trim().eq_ignore_ascii_case("url")
+            {
+                return Some(value.trim().config_value());
+            }
+        }
+        None
+    }
+
+    fn without_credentials(&self) -> String {
+        let Some((scheme, rest)) = self.split_once("://") else {
+            return self.to_owned();
+        };
+        if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+            return self.to_owned();
+        }
+        let (authority, path) = rest
+            .split_once('/')
+            .map_or((rest, None), |(authority, path)| (authority, Some(path)));
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        match path {
+            Some(path) => format!("{scheme}://{host}/{path}"),
+            None => format!("{scheme}://{host}"),
+        }
+    }
+}
+
+trait ConfigValueExt {
+    /// A git config value without quotes, escapes or a trailing `#` or `;` comment.
+    fn config_value(&self) -> String;
+}
+
+impl ConfigValueExt for str {
+    fn config_value(&self) -> String {
+        let mut value = String::new();
+        let mut quoted = false;
+        let mut characters = self.chars();
+        while let Some(character) = characters.next() {
+            match character {
+                '"' => quoted = !quoted,
+                '\\' => value.extend(characters.next()),
+                '#' | ';' if !quoted => break,
+                other => value.push(other),
+            }
+        }
+        value.trim().to_owned()
+    }
+}
+
+impl AppState {
+    /// The folders in /projects, none when it does not exist.
+    pub async fn folders(&self) -> io::Result<Vec<Folder>> {
+        let projects = self.projects.clone();
+        match tokio::task::spawn_blocking(move || projects.folders()).await {
+            Ok(Ok(folders)) => Ok(folders),
+            Ok(Err(error)) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Ok(Err(error)) => Err(error),
+            Err(error) => Err(io::Error::other(error)),
+        }
+    }
+
+    /// Keeps the folder list in `/projects/AGENTS.md` current.
+    pub async fn describe_folders_regularly(self) {
+        let mut rescan = interval(RESCAN_INTERVAL);
+        rescan.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            rescan.tick().await;
+            let projects = self.projects.clone();
+            let described = tokio::task::spawn_blocking(move || {
+                projects
+                    .folders()
+                    .and_then(|folders| projects.describe_folders_for_agents(&folders))
+            })
+            .await;
+            match described {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!("could not describe the folders in /projects: {error}");
+                }
+                Err(error) => tracing::warn!("folder scan stopped: {error}"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folder(name: &str, git: Option<(&str, &str)>) -> Folder {
+        Folder {
+            name: name.to_owned(),
+            git: git.map(|(repository, branch)| GitDetails {
+                branch: Some(branch.to_owned()),
+                repository: Some(repository.to_owned()),
+            }),
+        }
+    }
+
+    #[test]
+    fn folders_are_listed_with_their_git_details() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path();
+        fs::create_dir_all(root.join("app/.git")).expect("repository is created");
+        fs::write(root.join("app/.git/HEAD"), "ref:  refs/heads/main\n").expect("HEAD is written");
+        fs::write(
+            root.join("app/.git/config"),
+            "[core]\n\tbare = false\n[remote \"upstream\"]\n\turl = https://example.com/other\n\
+             [Remote \"origin\"]\n\tURL = \"https://zeke:ghp_secret@github.com/zeke/app.git\" # mine\n",
+        )
+        .expect("config is written");
+        fs::create_dir_all(root.join("notes")).expect("folder is created");
+        fs::create_dir_all(root.join(".cache")).expect("hidden folder is created");
+        fs::write(root.join("AGENTS.md"), "").expect("file is written");
+
+        assert_eq!(
+            ProjectsDirectory(root.to_path_buf())
+                .folders()
+                .expect("folders are listed"),
+            [
+                folder("app", Some(("https://github.com/zeke/app.git", "main"))),
+                folder("notes", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn linked_worktrees_read_the_shared_config() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path();
+        fs::create_dir_all(root.join("main/.git/worktrees/feature"))
+            .expect("worktree directory is created");
+        fs::write(
+            root.join("main/.git/config"),
+            "[remote \"origin\"]\n\turl = https://github.com/zeke/app.git\n",
+        )
+        .expect("config is written");
+        fs::write(root.join("main/.git/HEAD"), "ref: refs/heads/main\n").expect("HEAD is written");
+        let worktree_git = root.join("main/.git/worktrees/feature");
+        fs::write(worktree_git.join("HEAD"), "ref: refs/heads/feature\n").expect("HEAD is written");
+        fs::write(worktree_git.join("commondir"), "../..\n").expect("commondir is written");
+        fs::create_dir_all(root.join("feature")).expect("worktree is created");
+        fs::write(
+            root.join("feature/.git"),
+            format!("gitdir: {}\n", worktree_git.display()),
+        )
+        .expect("pointer is written");
+
+        let folders = ProjectsDirectory(root.to_path_buf())
+            .folders()
+            .expect("folders are listed");
+        assert_eq!(
+            folders.first(),
+            Some(&folder(
+                "feature",
+                Some(("https://github.com/zeke/app.git", "feature"))
+            ))
+        );
+    }
+
+    #[test]
+    fn unborn_reftable_branch_is_no_branch() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        fs::create_dir_all(directory.path().join("app/.git")).expect("repository is created");
+        fs::write(
+            directory.path().join("app/.git/HEAD"),
+            "ref: refs/heads/.invalid\n",
+        )
+        .expect("HEAD is written");
+        let folders = ProjectsDirectory(directory.path().to_path_buf())
+            .folders()
+            .expect("folders are listed");
+        assert_eq!(
+            folders.first().and_then(|folder| folder.git.clone()),
+            Some(GitDetails::default())
+        );
+    }
+
+    #[test]
+    fn credentials_are_removed_from_web_urls() {
+        for (url, expected) in [
+            (
+                "https://user:token@github.com/a/b.git",
+                "https://github.com/a/b.git",
+            ),
+            (
+                "https://ghp_token@github.com/a/b.git",
+                "https://github.com/a/b.git",
+            ),
+            ("https://github.com/a/b.git", "https://github.com/a/b.git"),
+            ("HTTP://u:p@example.com:8080", "HTTP://example.com:8080"),
+            (
+                "ssh://git@github.com/a/b.git",
+                "ssh://git@github.com/a/b.git",
+            ),
+            ("git@github.com:a/b.git", "git@github.com:a/b.git"),
+        ] {
+            assert_eq!(url.without_credentials(), expected, "{url}");
+        }
+    }
+
+    #[test]
+    fn config_values_lose_quotes_escapes_and_comments() {
+        assert_eq!("\"a b\" ; note".config_value(), "a b");
+        assert_eq!("\"has # hash\"".config_value(), "has # hash");
+        assert_eq!("plain # note".config_value(), "plain");
+        assert_eq!(r#"es\"caped"#.config_value(), "es\"caped");
+    }
+
+    #[test]
+    fn the_managed_block_is_replaced_and_the_rest_kept() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let projects = ProjectsDirectory(directory.path().to_path_buf());
+        let agents = directory.path().join("AGENTS.md");
+        fs::write(&agents, "# My notes\n\nKeep this.\n").expect("file is written");
+
+        let folders = [folder(
+            "app",
+            Some(("https://github.com/zeke/app.git", "main")),
+        )];
+        projects
+            .describe_folders_for_agents(&folders)
+            .expect("block is written");
+        let first = fs::read_to_string(&agents).expect("file is read");
+        assert!(
+            first.starts_with("# My notes\n\nKeep this.\n\n<!-- ezra:folders:start -->"),
+            "{first}"
+        );
+        assert!(
+            first.contains("| app | https://github.com/zeke/app.git | main |"),
+            "{first}"
+        );
+
+        fs::write(&agents, format!("{first}\nAfter the block.\n")).expect("file is written");
+        projects
+            .describe_folders_for_agents(&[])
+            .expect("block is written");
+        let second = fs::read_to_string(&agents).expect("file is read");
+        assert!(second.contains("No projects yet."), "{second}");
+        assert!(!second.contains("| app |"), "{second}");
+        assert!(
+            second.ends_with("<!-- ezra:folders:end -->\n\nAfter the block.\n"),
+            "{second}"
+        );
+        assert_eq!(second.matches(BLOCK_START).count(), 1);
+    }
+
+    #[test]
+    fn an_unfinished_block_does_not_swallow_text() {
+        let text = format!("# notes\n{BLOCK_START}\nold rows\nMy important text\n");
+        let once = text.with_folders_block(&format!("{BLOCK_START}\nnew\n{BLOCK_END}"));
+        assert!(once.contains("My important text"), "{once}");
+        let twice = once.with_folders_block(&format!("{BLOCK_START}\nnewer\n{BLOCK_END}"));
+        assert!(twice.contains("My important text"), "{twice}");
+        assert_eq!(twice.matches("newer").count(), 1, "{twice}");
+        assert!(!twice.contains("\nnew\n"), "{twice}");
+    }
+
+    #[test]
+    fn markers_inside_names_cannot_grow_the_file() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let projects = ProjectsDirectory(directory.path().to_path_buf());
+        let folders = [Folder {
+            name: format!("x{BLOCK_END}"),
+            git: None,
+        }];
+        projects
+            .describe_folders_for_agents(&folders)
+            .expect("block is written");
+        let first = fs::read_to_string(directory.path().join("AGENTS.md")).expect("file is read");
+        projects
+            .describe_folders_for_agents(&folders)
+            .expect("block is written");
+        let second = fs::read_to_string(directory.path().join("AGENTS.md")).expect("file is read");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn table_cells_cannot_break_the_table() {
+        assert_eq!("a|b\nc\\<d".table_cell(), "a\\|b c\\\\&lt;d");
+    }
+}

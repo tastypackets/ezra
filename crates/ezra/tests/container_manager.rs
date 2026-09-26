@@ -124,3 +124,33 @@ fn unknown_certificate_check_setting_stops_the_manager() {
         stderr_of(&output)
     );
 }
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn agents_find_the_project_list_in_projects() {
+    let container = DockerResource::start_container("manager-folders", &[], &[]);
+    wait_for_manager(&container, 8443);
+    docker(&["exec", &container.name, "mkdir", "/projects/app"]);
+
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let agents_file = stdout_of(&docker(&[
+            "exec",
+            &container.name,
+            "cat",
+            "/projects/AGENTS.md",
+        ]));
+        if agents_file.contains("| app |  |  |") {
+            assert!(
+                agents_file.contains("<!-- ezra:folders:start -->"),
+                "{agents_file}"
+            );
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no project list in:\n{agents_file}"
+        );
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
