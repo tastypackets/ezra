@@ -14,7 +14,8 @@ use nix::unistd::{Pid, gethostname};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
+use time::format_description::BorrowedFormatItem;
+use time::macros::format_description;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::watch;
@@ -44,6 +45,8 @@ const OUTPUT_LINES_KEPT: usize = 20;
 const OUTPUT_LINES_REPORTED: usize = 5;
 const UPDATE_RESTART_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
 const LOG_FILE: &str = "server.log";
+const LOG_TIME: &[BorrowedFormatItem<'_>] =
+    format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
 const ROTATED_LOG_FILE: &str = "server.log.1";
 const LATEST_LOG_LINK: &str = "latest";
 const LOG_TAIL_LINES: usize = 200;
@@ -652,11 +655,8 @@ impl ServerLog {
 
     /// Adds a line the server printed, stamped like Claude's own lines.
     async fn append_output(&self, line: &str) -> io::Result<()> {
-        let now = OffsetDateTime::now_utc();
-        let stamp = now
-            .replace_millisecond(now.millisecond())
-            .map_err(io::Error::other)?
-            .format(&Rfc3339)
+        let stamp = OffsetDateTime::now_utc()
+            .format(LOG_TIME)
             .map_err(io::Error::other)?;
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -1530,6 +1530,12 @@ mod tests {
         assert!(
             log.iter()
                 .any(|line| line.ends_with("[OUTPUT]   hasOAuthAccessToken=false")),
+            "{log:?}"
+        );
+        assert!(
+            log.iter().all(|line| line
+                .split_once(" [OUTPUT] ")
+                .is_some_and(|(stamp, _)| time::PrimitiveDateTime::parse(stamp, LOG_TIME).is_ok())),
             "{log:?}"
         );
 
