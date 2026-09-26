@@ -1,6 +1,7 @@
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
 import { cn } from "cn";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { useState } from "react";
 
 import { Input } from "@/components/ui/input";
 
@@ -20,8 +21,8 @@ export interface AutocompleteProps {
 }
 
 /**
- * A text input that suggests known values and takes any other, for settings a CLI may learn
- * before the manager does.
+ * A text input that suggests known values and takes any other, such as settings a CLI may learn
+ * before the manager does. The list stays closed while nothing matches.
  */
 function Autocomplete({
   id,
@@ -31,6 +32,7 @@ function Autocomplete({
   showOptionsLabel,
   "aria-invalid": invalid,
 }: AutocompleteProps) {
+  const [open, setOpen] = useState(false);
   const query = value.trim().toLowerCase();
   const exact = options.filter((option) => option.value.toLowerCase() === query);
   const matches =
@@ -39,6 +41,8 @@ function Autocomplete({
       : options.filter((option) => option.value.toLowerCase().includes(query));
   return (
     <AutocompletePrimitive.Root
+      open={open && matches.length > 0}
+      onOpenChange={setOpen}
       filteredItems={matches}
       value={value}
       onValueChange={onValueChange}

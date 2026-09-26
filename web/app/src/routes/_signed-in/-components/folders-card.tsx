@@ -1,4 +1,4 @@
-import type { FolderStatus, RemoteControlStatus, SpawnMode } from "@ezra/client";
+import type { CloneStatus, FolderStatus, RemoteControlStatus, SpawnMode } from "@ezra/client";
 import { useQuery } from "@tanstack/react-query";
 import { EllipsisIcon, ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
@@ -6,7 +6,7 @@ import { useId } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,27 +17,38 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Hint } from "@/components/ui/hint";
 import { Label } from "@/components/ui/label";
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { FOLDERS_DESCRIPTIONS, SPAWN_MODES } from "@/content/folders";
 import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-control";
-import { useFolderActions } from "@/hooks/use-folder-actions";
+import { useCloneActions, useFolderActions } from "@/hooks/use-folder-actions";
 import { errorMessage } from "@/lib/utils";
-import { foldersQueryOptions } from "@/queries/folder-queries";
+import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
+import { CloneDialog } from "./clone-dialog";
 import { SERVER_BADGES } from "./remote-control-card";
 
 const SPAWN_MODE_ORDER: SpawnMode[] = ["same-dir", "worktree"];
 
-/** The projects agents work in, and which ones the Claude app lists. */
+/** The projects agents work in, the clones on their way, and which ones the Claude app lists. */
 export function FoldersCard() {
   const folders = useQuery(foldersQueryOptions);
+  const clones = useQuery(clonesQueryOptions);
   const remoteControl = useQuery(remoteControlQueryOptions);
+  const cloning = clones.data ?? [];
+  const taken = [
+    ...(folders.data ?? []).map((folder) => folder.name),
+    ...cloning.map((clone) => clone.name),
+  ];
   return (
     <Card>
       <CardHeader>
         <CardTitle>{FOLDERS_DESCRIPTIONS.title}</CardTitle>
+        <CardAction>
+          <CloneDialog taken={taken} />
+        </CardAction>
       </CardHeader>
       <CardContent>
         {folders.isPending ? (
@@ -48,10 +59,13 @@ export function FoldersCard() {
           <p role="alert" className="text-destructive">
             {errorMessage(folders.error)}
           </p>
-        ) : folders.data.length === 0 ? (
+        ) : folders.data.length === 0 && cloning.length === 0 ? (
           <p className="text-muted-foreground">{FOLDERS_DESCRIPTIONS.empty}</p>
         ) : (
           <ul className="flex flex-col divide-y">
+            {cloning.map((clone) => (
+              <CloneRow key={`clone:${clone.name}`} clone={clone} />
+            ))}
             {folders.data.map((folder) => (
               <FolderRow
                 key={folder.name}
@@ -63,6 +77,53 @@ export function FoldersCard() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function CloneRow({ clone }: { clone: CloneStatus }) {
+  const { stopClone } = useCloneActions();
+  const failed = Boolean(clone.error);
+  return (
+    <li className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <span className="min-w-0 font-medium break-all">{clone.name}</span>
+          <span className="min-w-0 truncate text-muted-foreground">{clone.repository}</span>
+        </div>
+        {clone.error ? (
+          <p className="text-destructive">
+            {FOLDERS_DESCRIPTIONS.clone_failed}:{" "}
+            <span className="font-mono text-xs break-words whitespace-pre-wrap">{clone.error}</span>
+          </p>
+        ) : (
+          <Progress value={clone.percent} className="max-w-sm gap-1">
+            <ProgressLabel className="font-normal text-muted-foreground">
+              {FOLDERS_DESCRIPTIONS.cloning}
+            </ProgressLabel>
+            <ProgressValue />
+          </Progress>
+        )}
+        {stopClone.isError ? (
+          <p role="alert" className="text-destructive">
+            {errorMessage(stopClone.error)}
+          </p>
+        ) : null}
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        className="self-start sm:self-center"
+        loading={stopClone.isPending}
+        aria-label={
+          failed
+            ? FOLDERS_DESCRIPTIONS.dismiss_label(clone.name)
+            : FOLDERS_DESCRIPTIONS.stop_clone_label(clone.name)
+        }
+        onClick={() => stopClone.mutate({ path: { name: clone.name } })}
+      >
+        {failed ? FOLDERS_DESCRIPTIONS.dismiss : FOLDERS_DESCRIPTIONS.stop_clone}
+      </Button>
+    </li>
   );
 }
 
