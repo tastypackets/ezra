@@ -3,6 +3,9 @@ rust = { version = "1.98.1", components = "clippy,rustfmt", targets = "x86_64-un
 node = "26"
 pnpm = "12.6.0"
 
+[env]
+TANSTACK_CLI_TELEMETRY_DISABLED = "1"
+
 [tasks.generate-schema]
 description = "Regenerate the committed openapi.json from the Rust API"
 run = "cargo run --locked --quiet -- openapi openapi.json"
@@ -11,6 +14,19 @@ run = "cargo run --locked --quiet -- openapi openapi.json"
 description = "Install the web workspace dependencies"
 dir = "web"
 run = "pnpm install --frozen-lockfile"
+
+[tasks."web:skills"]
+description = "Copy the TanStack agent skills from the installed packages into .agents/skills"
+dir = "web"
+run = """
+router=$(realpath app/node_modules/@tanstack/react-router)/../router-core/skills/router-core
+plugin=$(realpath app/node_modules/@tanstack/router-plugin)/skills/router-plugin
+docs=$(realpath node_modules/@tanstack/cli)/skills/query-docs-library-metadata
+for skill in "$router" "$plugin" "$docs"; do
+  rm -rf "../.agents/skills/$(basename "$skill")"
+  cp -r "$skill" ../.agents/skills/
+done
+"""
 
 [tasks."web:generate"]
 description = "Generate the TypeScript API client from openapi.json"
