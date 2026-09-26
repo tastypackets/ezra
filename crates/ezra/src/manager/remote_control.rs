@@ -39,6 +39,7 @@ const FIRST_RETRY_DELAY: Duration = Duration::from_secs(5);
 const LONGEST_RETRY_DELAY: Duration = Duration::from_secs(300);
 const HEALTHY_RUN: Duration = Duration::from_secs(600);
 const USAGE_INTERVAL: Duration = Duration::from_secs(15);
+const STARTING_USAGE_INTERVAL: Duration = Duration::from_secs(1);
 const OUTPUT_LINES_KEPT: usize = 20;
 const OUTPUT_LINES_REPORTED: usize = 5;
 const UPDATE_RESTART_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
@@ -273,6 +274,8 @@ pub struct RemoteControlOverview {
 pub struct RemoteControl {
     device: Option<String>,
     servers: SyncMutex<BTreeMap<PathBuf, RemoteControlStatus>>,
+    /// The last link each directory's server printed, kept across restarts.
+    links: SyncMutex<HashMap<PathBuf, String>>,
     logs: PathBuf,
     events: Events,
     changes: watch::Sender<u64>,
@@ -289,6 +292,7 @@ impl RemoteControl {
                 .ok()
                 .and_then(|hostname| hostname.into_string().ok()),
             servers: SyncMutex::default(),
+            links: SyncMutex::default(),
             logs,
             events,
             changes: watch::Sender::new(0),
@@ -296,6 +300,21 @@ impl RemoteControl {
             shutdown: watch::Sender::new(false),
             stopped: watch::Sender::new(false),
         }
+    }
+
+    fn remember_link(&self, directory: &Path, link: &str) {
+        self.links
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(directory.to_path_buf(), link.to_owned());
+    }
+
+    fn link_of(&self, directory: &Path) -> Option<String> {
+        self.links
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(directory)
+            .cloned()
     }
 
     /// The server for `directory`, absent when it has none.
@@ -960,6 +979,8 @@ impl AppState {
         recheck.reset();
         let mut usage = interval(USAGE_INTERVAL);
         usage.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut starting_usage = interval(STARTING_USAGE_INTERVAL);
+        starting_usage.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut update: Option<UpdateWait> = None;
         loop {
             let connected = self
@@ -989,6 +1010,10 @@ impl AppState {
                         server.note_usage(&self.remote_control, launch).await;
                         continue;
                     }
+                }
+                _ = starting_usage.tick(), if !connected => {
+                    server.note_usage(&self.remote_control, launch).await;
+                    continue;
                 }
                 () = signals.shutdown.until_set() => {
                     server.stop().await;
@@ -1118,7 +1143,26 @@ impl ServerRun {
         let usage = tokio::task::spawn_blocking(move || ProcessGroup(group).usage(capacity))
             .await
             .ok();
-        remote_control.update(&launch.directory, |status| status.usage = usage);
+        let link = remote_control.link_of(&launch.directory);
+        let mut resumed = false;
+        remote_control.update(&launch.directory, |status| {
+            status.usage = usage;
+            if status.state == ServerState::Starting
+                && usage.is_some_and(|usage| usage.sessions > 0)
+            {
+                resumed = true;
+                match link {
+                    Some(link) => status.connect(link),
+                    None => status.state = ServerState::Running,
+                }
+            }
+        });
+        if resumed {
+            tracing::info!(
+                "Claude Remote Control in {} is connected with its sessions resumed",
+                launch.directory.display()
+            );
+        }
         usage
     }
 
@@ -1234,6 +1278,7 @@ impl ServerOutput {
                         || status.url.as_deref() != Some(url.as_str());
                     status.connect(url.clone());
                 });
+                remote_control.remember_link(&launch.directory, &url);
                 if newly_connected {
                     tracing::info!(
                         "Claude Remote Control in {} is connected: {url}",
@@ -2028,6 +2073,31 @@ mod tests {
 
         group.terminate(&mut leader).await;
         assert_eq!(group.usage(4).memory_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_resumes_sessions_without_a_link_counts_as_connected() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            "if [ -e ../resumed ]; then sleep 60 & wait; else touch ../resumed; echo 'https://claude.ai/code?environment=env_first'; sleep 60 & wait; fi",
+        );
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Running).await;
+
+        state.remote_control.restart();
+        wait_for(&state, ServerState::Starting).await;
+        let resumed = wait_for(&state, ServerState::Running).await;
+        assert_eq!(
+            resumed.url.as_deref(),
+            Some("https://claude.ai/code?environment=env_first")
+        );
+        assert_eq!(resumed.usage.map(|usage| usage.sessions), Some(1));
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
     }
 
     #[tokio::test]
