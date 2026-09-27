@@ -9,8 +9,22 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { toml } from "@codemirror/legacy-modes/mode/toml";
-import { type Diagnostic, diagnosticCount, linter, lintGutter, lintKeymap } from "@codemirror/lint";
-import { EditorState, type Extension } from "@codemirror/state";
+import {
+  type Diagnostic,
+  diagnosticCount,
+  linter,
+  lintGutter,
+  lintKeymap,
+  setDiagnostics,
+} from "@codemirror/lint";
+import {
+  EditorState,
+  type Extension,
+  Facet,
+  StateEffect,
+  StateField,
+  type Transaction,
+} from "@codemirror/state";
 import {
   drawSelection,
   EditorView,
@@ -25,12 +39,14 @@ import { tags } from "@lezer/highlight";
 
 import { CODE_EDITOR_PHRASES } from "@/content/settings-file";
 import {
-  capitalized,
+  BOM,
   FIND_PROBLEM,
   lineBreakOf,
+  offsetOf,
   parseProblemAt,
   type TextProblem,
 } from "@/lib/settings-text";
+import { capitalized } from "@/lib/utils";
 
 /** How long typing pauses before the text is checked, in milliseconds. */
 const CHECK_DELAY_MS = 300;
@@ -102,6 +118,34 @@ const LANGUAGES: Record<SettingsFileFormat, Extension> = {
   toml: StreamLanguage.define(toml),
 };
 
+/** The file's leading BOM, which the text in the editor leaves out. */
+const KEPT_PREFIX = Facet.define<string, string>({ combine: (prefixes) => prefixes[0] ?? "" });
+
+const setServerProblem = StateEffect.define<TextProblem>();
+
+/** Where the server said the text in the editor stops parsing, until the text changes. */
+const SERVER_PROBLEM = StateField.define<TextProblem | undefined>({
+  create: () => undefined,
+  update: (problem, transaction) => {
+    for (const effect of transaction.effects) {
+      if (effect.is(setServerProblem)) {
+        return effect.value;
+      }
+    }
+    return transaction.docChanged ? undefined : problem;
+  },
+});
+
+/** The whole file the editor holds, with the BOM it keeps out of the editor. */
+export function fileOf(state: EditorState): string {
+  return state.facet(KEPT_PREFIX) + state.sliceDoc();
+}
+
+/** `problem`, found in the whole file, as an offset into the editor. */
+function inEditor(state: EditorState, problem: TextProblem): TextProblem {
+  return { ...problem, at: Math.max(problem.at - state.facet(KEPT_PREFIX).length, 0) };
+}
+
 /** An error mark at `problem`, none when there is no problem. */
 export function diagnosticsFor(problem: TextProblem | undefined): Diagnostic[] {
   return problem
@@ -109,8 +153,34 @@ export function diagnosticsFor(problem: TextProblem | undefined): Diagnostic[] {
     : [];
 }
 
-/** Everything the editor does with `text` in `format`, reporting edits and parse checks. */
-export function editorExtensions({
+/** Checks the file as `format`, keeping the server's mark instead while the text is as sent. */
+export function checkFile(
+  format: SettingsFileFormat,
+  onProblem: (problem: ParseProblem | undefined) => void,
+) {
+  return ({ state }: { state: EditorState }): Diagnostic[] => {
+    const file = state.toText(fileOf(state));
+    const problem = FIND_PROBLEM[format](file);
+    onProblem(problem && parseProblemAt(file, problem));
+    return diagnosticsFor(state.field(SERVER_PROBLEM) ?? (problem && inEditor(state, problem)));
+  };
+}
+
+/** Marks where the server said the text stops parsing and moves the cursor there. */
+export function markServerProblem(state: EditorState, problem: ParseProblem): Transaction {
+  const marked = inEditor(state, {
+    at: offsetOf(state.toText(fileOf(state)), problem),
+    error: problem.error,
+  });
+  return state.update(setDiagnostics(state, diagnosticsFor(marked)), {
+    effects: setServerProblem.of(marked),
+    selection: { anchor: marked.at },
+    scrollIntoView: true,
+  });
+}
+
+/** An editor for the file `text` as `format`, reporting each edit as the whole file. */
+export function editorState({
   format,
   text,
   attributes,
@@ -122,31 +192,30 @@ export function editorExtensions({
   attributes: Record<string, string>;
   onChange: (text: string) => void;
   onProblem: (problem: ParseProblem | undefined) => void;
-}): Extension {
-  return [
-    SETUP,
-    LANGUAGES[format],
-    EditorState.lineSeparator.of(lineBreakOf(text)),
-    indentUnit.of(/^\t/m.test(text) ? "\t" : "  "),
-    EditorView.clipboardInputFilter.of((input, state) =>
-      input.replace(/\r\n?|\n/g, state.lineBreak),
-    ),
-    linter(
-      ({ state }) => {
-        const problem = FIND_PROBLEM[format](state.doc);
-        onProblem(problem && parseProblemAt(state.doc, problem));
-        return diagnosticsFor(problem);
-      },
-      { delay: CHECK_DELAY_MS },
-    ),
-    EditorView.contentAttributes.of(attributes),
-    EditorView.contentAttributes.of(({ state }) =>
-      diagnosticCount(state) ? { "aria-invalid": "true" } : null,
-    ),
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged) {
-        onChange(update.state.sliceDoc());
-      }
-    }),
-  ];
+}): EditorState {
+  const prefix = text.startsWith(BOM) ? BOM : "";
+  return EditorState.create({
+    doc: text.slice(prefix.length),
+    extensions: [
+      SETUP,
+      LANGUAGES[format],
+      KEPT_PREFIX.of(prefix),
+      SERVER_PROBLEM,
+      EditorState.lineSeparator.of(lineBreakOf(text)),
+      indentUnit.of(/^\t/m.test(text) ? "\t" : "  "),
+      EditorView.clipboardInputFilter.of((input, state) =>
+        input.replace(/\r\n?|\n/g, state.lineBreak),
+      ),
+      linter(checkFile(format, onProblem), { delay: CHECK_DELAY_MS }),
+      EditorView.contentAttributes.of(attributes),
+      EditorView.contentAttributes.of(({ state }) =>
+        diagnosticCount(state) ? { "aria-invalid": "true" } : null,
+      ),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          onChange(fileOf(update.state));
+        }
+      }),
+    ],
+  });
 }

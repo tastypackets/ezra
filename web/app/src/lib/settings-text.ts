@@ -11,7 +11,8 @@ export interface TextProblem {
   error: string;
 }
 
-const BOM = "\uFEFF";
+/** The byte order mark, U+FEFF. */
+export const BOM = "\uFEFF";
 
 /** The line break to keep for `text`: `\r\n` only when every line break in it is one. */
 export function lineBreakOf(text: string): "\n" | "\r\n" {
@@ -144,9 +145,4 @@ export function offsetOf(doc: Text, { line, column }: Pick<ParseProblem, "line" 
       .slice(0, Math.max(column - 1, 0))
       .join("").length
   );
-}
-
-/** `error` starting with a capital letter, whichever parser wrote it. */
-export function capitalized(error: string) {
-  return error.charAt(0).toUpperCase() + error.slice(1);
 }

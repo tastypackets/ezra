@@ -1,17 +1,14 @@
-import { setDiagnostics } from "@codemirror/lint";
-import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { ParseProblem, SettingsFileFormat } from "@ezra/client";
 import { useEffect, useEffectEvent, useRef } from "react";
 
-import { diagnosticsFor, editorExtensions } from "@/lib/code-editor";
-import { offsetOf } from "@/lib/settings-text";
+import { editorState, markServerProblem } from "@/lib/code-editor";
 
 interface CodeEditorProps {
   format: SettingsFileFormat;
   /** Read once, remount with a new `key` to load other text. */
   initialText: string;
-  /** Where the server said the text stops parsing, marked until the next check. */
+  /** Where the server said the text stops parsing, marked until the text changes, with the cursor moved to it. */
   serverProblem?: ParseProblem;
   onChange: (text: string) => void;
   /** Called once typing pauses, with where the text stops parsing or `undefined`. */
@@ -43,16 +40,7 @@ export default function CodeEditor({
     const { text, attributes } = initial();
     const created = new EditorView({
       parent: element,
-      state: EditorState.create({
-        doc: text,
-        extensions: editorExtensions({
-          format,
-          text,
-          attributes,
-          onChange: changed,
-          onProblem: checked,
-        }),
-      }),
+      state: editorState({ format, text, attributes, onChange: changed, onProblem: checked }),
     });
     view.current = created;
     return () => {
@@ -63,13 +51,9 @@ export default function CodeEditor({
 
   useEffect(() => {
     const current = view.current;
-    if (!current || !serverProblem) {
-      return;
+    if (current && serverProblem) {
+      current.dispatch(markServerProblem(current.state, serverProblem));
     }
-    const at = offsetOf(current.state.doc, serverProblem);
-    current.dispatch(
-      setDiagnostics(current.state, diagnosticsFor({ at, error: serverProblem.error })),
-    );
   }, [serverProblem]);
 
   return (

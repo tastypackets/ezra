@@ -2,14 +2,7 @@ import { Text } from "@codemirror/state";
 import type { SettingsFileFormat } from "@ezra/client";
 import { describe, expect, it } from "vitest";
 
-import {
-  capitalized,
-  FIND_PROBLEM,
-  jsonErrorIn,
-  lineBreakOf,
-  offsetOf,
-  parseProblemAt,
-} from "./settings-text";
+import { FIND_PROBLEM, jsonErrorIn, lineBreakOf, offsetOf, parseProblemAt } from "./settings-text";
 
 function docOf(text: string) {
   return Text.of(text.split(lineBreakOf(text)));
@@ -206,14 +199,6 @@ describe("TOML 1.1, the way Codex reads config.toml", () => {
     expect(
       problem("toml", '[projects."/p"]\ntrust_level = "a"\n[projects."/p"]\ntrust_level = "b"\n'),
     ).toEqual(at(3, 2));
-  });
-});
-
-describe("capitalized", () => {
-  it("starts every parser's message with a capital letter", () => {
-    expect(capitalized("trailing comma")).toBe("Trailing comma");
-    expect(capitalized("Unexpected token 'N'")).toBe("Unexpected token 'N'");
-    expect(capitalized("")).toBe("");
   });
 });
 

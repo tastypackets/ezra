@@ -35,3 +35,8 @@ const DATE_AND_TIME = new Intl.DateTimeFormat(undefined, {
 export function formatDateTime(timestamp: string | Date): string {
   return DATE_AND_TIME.format(new Date(timestamp));
 }
+
+/** `text` starting with a capital letter. */
+export function capitalized(text: string) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}

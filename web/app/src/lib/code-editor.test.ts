@@ -1,21 +1,18 @@
 import { insertNewlineAndIndent, undo } from "@codemirror/commands";
 import { EditorSelection, EditorState, type StateCommand } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import type { SettingsFileFormat } from "@ezra/client";
+import type { ParseProblem, SettingsFileFormat } from "@ezra/client";
 import { describe, expect, it } from "vitest";
 
-import { diagnosticsFor, editorExtensions } from "./code-editor";
+import { checkFile, diagnosticsFor, editorState, fileOf, markServerProblem } from "./code-editor";
 
 function stateOf(text: string, format: SettingsFileFormat = "json") {
-  return EditorState.create({
-    doc: text,
-    extensions: editorExtensions({
-      format,
-      text,
-      attributes: { "aria-labelledby": "title", "aria-describedby": "problem" },
-      onChange: () => {},
-      onProblem: () => {},
-    }),
+  return editorState({
+    format,
+    text,
+    attributes: { "aria-labelledby": "title", "aria-describedby": "problem" },
+    onChange: () => {},
+    onProblem: () => {},
   });
 }
 
@@ -44,22 +41,36 @@ function pasted(state: EditorState, text: string) {
     .reduce((input, filter) => filter(input, state), text);
 }
 
-describe("editorExtensions", () => {
+describe("editorState", () => {
   it("keeps a BOM and CRLF through edits", () => {
     const text = '\uFEFF{\r\n  "a": 1\r\n}\r\n';
     const opened = stateOf(text);
     let state = cursorAt(opened, opened.doc.toString().indexOf("1") + 1);
     state = run(typed(state, ","), insertNewlineAndIndent);
     state = typed(state, '"b": 2');
-    expect(state.sliceDoc()).toMatch(/^\uFEFF\{\r\n {2}"a": 1,\r\n +"b": 2\r\n\}\r\n$/);
-    expect(state.update({ changes: { from: 0, to: 1 } }).state.sliceDoc()).toMatch(
-      /^\{\r\n {2}"a": 1,\r\n +"b": 2\r\n\}\r\n$/,
+    expect(fileOf(state)).toBe('\uFEFF{\r\n  "a": 1,\r\n  "b": 2\r\n}\r\n');
+    expect(fileOf(run(cursorAt(opened, 0), insertNewlineAndIndent))).toBe(
+      '\uFEFF\r\n{\r\n  "a": 1\r\n}\r\n',
     );
     const toml = '\uFEFF# mine\r\nmodel = "gpt"\t# odd  spacing\r\n';
     const end = stateOf(toml, "toml").doc.length;
     const added = typed(run(cursorAt(stateOf(toml, "toml"), end), insertNewlineAndIndent), "x = 1");
-    expect(added.sliceDoc()).toBe(`${toml}\r\nx = 1`);
-    expect(added.sliceDoc().startsWith("\uFEFF")).toBe(true);
+    expect(fileOf(added)).toBe(`${toml}\r\nx = 1`);
+  });
+
+  it("indents after a BOM as if it were not there", () => {
+    const tabs = stateOf('\uFEFF{\n\t"a": 1,\n}\n');
+    const afterComma = run(
+      cursorAt(tabs, tabs.doc.toString().indexOf(",") + 1),
+      insertNewlineAndIndent,
+    );
+    expect(fileOf(afterComma)).toBe('\uFEFF{\n\t"a": 1,\n\t\n}\n');
+    expect(fileOf(run(cursorAt(stateOf("\uFEFF{}"), 1), insertNewlineAndIndent))).toBe(
+      "\uFEFF{\n  \n}",
+    );
+    const toml = '\uFEFF# mine\r\nmodel = "o3"\r\n';
+    const firstLine = run(cursorAt(stateOf(toml, "toml"), "# mine".length), insertNewlineAndIndent);
+    expect(fileOf(typed(firstLine, "x = 1"))).toBe('\uFEFF# mine\r\nx = 1\r\nmodel = "o3"\r\n');
   });
 
   it.each([
@@ -73,10 +84,10 @@ describe("editorExtensions", () => {
     ["toml", "a = 1"],
   ] as const)("gives back %s %j byte for byte after an edit and undo", (format, text) => {
     const opened = stateOf(text, format);
-    expect(opened.sliceDoc()).toBe(text);
+    expect(fileOf(opened)).toBe(text);
     const edited = run(typed(cursorAt(opened, opened.doc.length), "x"), insertNewlineAndIndent);
-    expect(edited.sliceDoc().startsWith(`${text}x`)).toBe(true);
-    expect(run(run(edited, undo), undo).sliceDoc()).toBe(text);
+    expect(fileOf(edited).startsWith(`${text}x`)).toBe(true);
+    expect(fileOf(run(run(edited, undo), undo))).toBe(text);
   });
 
   it("indents new lines with tabs in a file indented with tabs", () => {
@@ -123,6 +134,32 @@ describe("editorExtensions", () => {
     expect(state.phrase("No diagnostics")).toBe("No errors");
     expect(state.phrase("close")).toBe("Close");
     expect(state.phrase("Control character")).toBe("Hidden character");
+  });
+
+  it("checks the whole file and reports where it stops the way the server does", () => {
+    const reported: (ParseProblem | undefined)[] = [];
+    const check = checkFile("json", (problem) => reported.push(problem));
+    expect(check({ state: stateOf('\uFEFF{"a":1,}') })).toEqual([
+      expect.objectContaining({ from: 7, message: "Trailing comma" }),
+    ]);
+    expect(check({ state: stateOf("\uFEFF \n") })).toEqual([]);
+    expect(reported).toEqual([{ line: 1, column: 9, error: "trailing comma" }, undefined]);
+  });
+
+  it("keeps the server's mark until the text changes", () => {
+    const check = checkFile("toml", () => {});
+    const opened = stateOf("\uFEFFd = 1979-02-30", "toml");
+    expect(check({ state: opened })).toEqual([]);
+    const marked = markServerProblem(opened, {
+      line: 1,
+      column: 6,
+      error: "invalid date",
+    }).state;
+    expect(marked.selection.main.head).toBe(4);
+    expect(check({ state: marked })).toEqual([
+      expect.objectContaining({ from: 4, message: "Invalid date" }),
+    ]);
+    expect(check({ state: typed(marked, " ") })).toEqual([]);
   });
 
   it("starts error messages with a capital letter", () => {

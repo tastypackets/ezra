@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { APP_DESCRIPTIONS } from "@/content/app";
 
-import { downloadPercent, errorMessage } from "./utils";
+import { capitalized, downloadPercent, errorMessage } from "./utils";
 
 describe("downloadPercent", () => {
   it("needs a total", () => {
@@ -27,5 +27,13 @@ describe("errorMessage", () => {
     expect(errorMessage(new Error("boom"))).toBe("boom");
     expect(errorMessage("<html>")).toBe(APP_DESCRIPTIONS.request_failed);
     expect(errorMessage({})).toBe(APP_DESCRIPTIONS.request_failed);
+  });
+});
+
+describe("capitalized", () => {
+  it("starts the text with a capital letter", () => {
+    expect(capitalized("trailing comma")).toBe("Trailing comma");
+    expect(capitalized("Unexpected token 'N'")).toBe("Unexpected token 'N'");
+    expect(capitalized("")).toBe("");
   });
 });
