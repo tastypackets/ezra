@@ -4,27 +4,22 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{
-    DockerResource, curl_in, docker, run_in_image, stderr_of, stdout_of, wait_for_manager,
-};
+use common::{DockerResource, docker, run_in_image, stderr_of, stdout_of};
 
 const UNCLAIMED: &str = r#"{"claimed":false,"authenticated":false}"#;
 
 fn set_password(container: &DockerResource) -> String {
-    let response = curl_in(
-        container,
-        &[
-            "--write-out",
-            "%{http_code}",
-            "--output",
-            "/dev/null",
-            "--header",
-            "Content-Type: application/json",
-            "--data",
-            r#"{"password":"correct horse"}"#,
-            "https://localhost:8443/api/v1/setup",
-        ],
-    );
+    let response = container.curl(&[
+        "--write-out",
+        "%{http_code}",
+        "--output",
+        "/dev/null",
+        "--header",
+        "Content-Type: application/json",
+        "--data",
+        r#"{"password":"correct horse"}"#,
+        "https://localhost:8443/api/v1/setup",
+    ]);
     stdout_of(&response)
 }
 
@@ -32,7 +27,7 @@ fn set_password(container: &DockerResource) -> String {
 #[ignore = "needs Docker and a built ezra image"]
 fn default_command_serves_the_manager_over_https() {
     let container = DockerResource::start_container("manager", &[], &[]);
-    assert_eq!(wait_for_manager(&container, 8443), UNCLAIMED);
+    assert_eq!(container.wait_for_manager(8443), UNCLAIMED);
 }
 
 #[test]
@@ -43,7 +38,7 @@ fn the_manager_raises_its_open_file_limit_to_the_hard_limit() {
         &["--ulimit", "nofile=1024:524288"],
         &[],
     );
-    wait_for_manager(&container, 8443);
+    container.wait_for_manager(8443);
     let limits = stdout_of(&docker(&[
         "exec",
         "-u",
@@ -61,7 +56,7 @@ fn the_manager_raises_its_open_file_limit_to_the_hard_limit() {
 fn port_can_be_changed() {
     let container =
         DockerResource::start_container("manager-port", &["--env", "EZRA_PORT=9443"], &[]);
-    assert_eq!(wait_for_manager(&container, 9443), UNCLAIMED);
+    assert_eq!(container.wait_for_manager(9443), UNCLAIMED);
 }
 
 #[test]
@@ -79,7 +74,7 @@ fn password_and_certificate_survive_a_recreate() {
     };
 
     let first = DockerResource::start_container("manager-first", &["--volume", &config_mount], &[]);
-    wait_for_manager(&first, 8443);
+    first.wait_for_manager(8443);
     assert_eq!(set_password(&first), "204");
     let owner = stdout_of(&docker(&[
         "exec",
@@ -96,7 +91,7 @@ fn password_and_certificate_survive_a_recreate() {
     let second =
         DockerResource::start_container("manager-second", &["--volume", &config_mount], &[]);
     assert_eq!(
-        wait_for_manager(&second, 8443),
+        second.wait_for_manager(8443),
         r#"{"claimed":true,"authenticated":false}"#
     );
     assert_eq!(certificate_checksum(&second), first_checksum);
@@ -107,7 +102,7 @@ fn password_and_certificate_survive_a_recreate() {
 #[ignore = "needs Docker and a built ezra image"]
 fn docker_stop_shuts_the_manager_down_cleanly() {
     let container = DockerResource::start_container("manager-stop", &[], &[]);
-    wait_for_manager(&container, 8443);
+    container.wait_for_manager(8443);
 
     let started = Instant::now();
     assert!(docker(&["stop", &container.name]).status.success());
@@ -126,7 +121,7 @@ fn docker_stop_shuts_the_manager_down_cleanly() {
 fn turning_off_download_certificate_checks_is_logged() {
     let container =
         DockerResource::start_container("manager-tls-off", &["--env", "EZRA_TLS_VERIFY=off"], &[]);
-    wait_for_manager(&container, 8443);
+    container.wait_for_manager(8443);
     let logs = stderr_of(&docker(&["logs", &container.name]));
     assert!(
         logs.contains("agent downloads skip certificate verification"),
@@ -150,7 +145,7 @@ fn unknown_certificate_check_setting_stops_the_manager() {
 #[ignore = "needs Docker and a built ezra image"]
 fn repositories_ignore_claude_worktrees() {
     let container = DockerResource::start_container("manager-worktrees", &[], &[]);
-    wait_for_manager(&container, 8443);
+    container.wait_for_manager(8443);
     let excludes_file_is_set = || {
         docker(&[
             "exec",
@@ -191,7 +186,7 @@ fn repositories_ignore_claude_worktrees() {
 #[ignore = "needs Docker and a built ezra image"]
 fn agents_find_the_project_list_in_projects() {
     let container = DockerResource::start_container("manager-folders", &[], &[]);
-    wait_for_manager(&container, 8443);
+    container.wait_for_manager(8443);
     docker(&["exec", &container.name, "mkdir", "/projects/app"]);
 
     let deadline = Instant::now() + Duration::from_secs(45);
