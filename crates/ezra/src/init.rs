@@ -5,6 +5,7 @@ mod exec;
 mod git;
 mod groups;
 mod privileges;
+mod root_command;
 pub mod setup_scripts;
 mod stdio;
 pub mod sudo;
@@ -25,6 +26,7 @@ use exec::Program;
 use git::GlobalGitConfig;
 use groups::SupplementaryGroups;
 use privileges::{Capabilities, UserExt};
+use root_command::RootTemporaryDirectory;
 use setup_scripts::SetupScripts;
 use stdio::StandardStreams;
 use sudo::{SUDO_POLICY_VARIABLE, SudoPolicy};
@@ -82,6 +84,7 @@ fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
         apt_packages: requested_packages,
     } = InitConfig::from_environment()?;
     let environment_overrides = if Uid::effective().is_root() {
+        RootTemporaryDirectory::create();
         requested_packages.install_missing();
         SetupScripts::run_all();
         become_agent_user(sudo_policy)?

@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
+use super::root_command::RootCommandExt;
 use crate::process_ext::{CommandStatusExt, OutputExt};
 
 pub const APT_PACKAGES_VARIABLE: &str = "EZRA_APT_PACKAGES";
@@ -52,6 +53,7 @@ impl RequestedPackages {
         if database.as_ref().is_ok_and(|database| database.interrupted) {
             tracing::info!("finishing an interrupted package installation");
             if let Err(error) = Command::new("dpkg")
+                .apart_from_agent()
                 .args(["--configure", "-a"])
                 .run_checked()
             {
@@ -122,6 +124,7 @@ impl AptGet {
     fn command() -> Command {
         let mut command = Command::new("apt-get");
         command
+            .apart_from_agent()
             .env("DEBIAN_FRONTEND", "noninteractive")
             .args(APT_GET_OPTIONS)
             .arg("--yes");
@@ -139,6 +142,7 @@ struct DpkgDatabase {
 impl DpkgDatabase {
     fn query() -> io::Result<Self> {
         let output = Command::new("dpkg-query")
+            .apart_from_agent()
             .args([
                 "--show",
                 "--showformat=${db:Status-Status}\t${Package}\t${Provides}\n",

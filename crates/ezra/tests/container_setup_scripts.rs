@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{SetupDirectory, run_in_image, stderr_of, stdout_of};
+use common::{DockerResource, SetupDirectory, docker, run_in_image, stderr_of, stdout_of};
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
@@ -108,4 +108,45 @@ fn non_root_start_ignores_the_scripts() {
         stderr.contains("/etc/ezra/setup.d is ignored when the container starts as uid 1000"),
         "{stderr}"
     );
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn root_never_runs_what_the_agent_puts_on_its_path() {
+    let directory = SetupDirectory::with_scripts(&[(
+        "10-tools",
+        0o755,
+        "#!/bin/sh\ndpkg-query --version >/dev/null\njq --version >/dev/null && echo \"jq works in $PWD\"\nstat -c 'temporary files in %n, %U %a' \"$TMPDIR\"\n",
+    )]);
+    let plant = "for directory in /home/dev/.local/bin /config/mise/shims; do \
+        mkdir -p $directory \
+        && printf '#!/bin/sh\\ntouch /tmp/planted-ran\\n' > $directory/dpkg-query \
+        && chmod +x $directory/dpkg-query; done; \
+        if [ -e /tmp/planted-ran ]; then echo planted ran; fi; \
+        command -v dpkg-query";
+    let container = DockerResource::start_container(
+        "root-path",
+        &[
+            "--volume",
+            &directory.volume_option(),
+            "--env",
+            "EZRA_APT_PACKAGES=bash",
+            "--workdir",
+            "/projects",
+        ],
+        &["sh", "-c", plant],
+    );
+    assert_eq!(stdout_of(&docker(&["wait", &container.name])), "0");
+
+    let restart = docker(&["start", "--attach", &container.name]);
+    let stdout = stdout_of(&restart);
+    assert!(!stdout.contains("planted ran"), "{stdout}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    for expected in [
+        "/home/dev/.local/bin/dpkg-query",
+        "jq works in /",
+        "temporary files in /root/tmp, root 700",
+    ] {
+        assert!(lines.contains(&expected), "{stdout}");
+    }
 }

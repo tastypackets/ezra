@@ -6,11 +6,10 @@ use std::process::{Command, Stdio};
 
 use nix::unistd::Uid;
 
+use super::root_command::RootCommandExt;
 use crate::path_ext::PathExt;
 
 pub const SETUP_SCRIPTS_DIRECTORY: &str = "/etc/ezra/setup.d";
-const AGENT_MISE_DIRECTORY_VARIABLES: [&str; 3] =
-    ["MISE_DATA_DIR", "MISE_CONFIG_DIR", "MISE_STATE_DIR"];
 const EXECUTE_BITS: u32 = 0o111;
 
 /// The operator's scripts in a setup directory, in name order.
@@ -78,14 +77,13 @@ impl SetupScripts {
         }
     }
 
-    /// Without the agent's mise variables, so root never writes into the agent's /config/mise.
     fn run(path: &Path) {
         tracing::info!("running {}", path.display());
-        let mut script = Command::new(path);
-        for variable in AGENT_MISE_DIRECTORY_VARIABLES {
-            script.env_remove(variable);
-        }
-        match script.stdin(Stdio::null()).status() {
+        match Command::new(path)
+            .apart_from_agent()
+            .stdin(Stdio::null())
+            .status()
+        {
             Ok(status) if status.success() => {}
             Ok(status) => tracing::warn!("{} failed with {status}", path.display()),
             Err(error) => tracing::warn!("could not run {} ({error})", path.display()),
