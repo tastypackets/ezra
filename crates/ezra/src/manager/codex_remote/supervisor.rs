@@ -15,6 +15,7 @@ use super::control::{
 };
 use super::foreign::ForeignServer;
 use super::launch::CodexLaunch;
+use super::leftovers::DaemonLeftovers;
 use super::problem::{CodexProblem, ProblemLine};
 use super::run::CodexServerRun;
 use super::{CodexRemote, CodexRemoteStatus, CodexUsage, Control, RelayState, ServerBudget};
@@ -42,6 +43,9 @@ impl AppState {
             .signals(self.agent_checks.watch_sign_in(Agent::Codex));
         let mut failures = Failures::default();
         let mut look_for_foreign = true;
+        if let Some(codex_home) = self.install_paths.config_directory(Agent::Codex) {
+            DaemonLeftovers::of(codex_home).remove_when_unused().await;
+        }
         while !signals.is_shutting_down() {
             if !codex_remote.is_held() && !self.check_sign_in(Agent::Codex, &mut signals).await {
                 break;
@@ -70,7 +74,10 @@ impl AppState {
                     let stopping =
                         ForeignServer::stop_all_in(&launch.codex_home, &codex_remote.budget);
                     tokio::select! {
-                        () = stopping => RunEnd::Reconsidered,
+                        () = stopping => {
+                            DaemonLeftovers::of(&launch.codex_home).remove_when_unused().await;
+                            RunEnd::Reconsidered
+                        }
                         () = signals.shutdown.until_set() => RunEnd::ShutDown,
                     }
                 }
@@ -79,6 +86,11 @@ impl AppState {
                     let end = self.run_codex_server(&launch, &mut signals).await;
                     codex_remote.with_control(|control| *control = Control::default());
                     failures.forget_after_healthy_run(started);
+                    if !matches!(end, RunEnd::ShutDown) {
+                        DaemonLeftovers::of(&launch.codex_home)
+                            .remove_when_unused()
+                            .await;
+                    }
                     end
                 }
             };
@@ -958,6 +970,7 @@ mod tests {
         ForeignListener, SLEEPS, Started, daemon_updater,
     };
     use crate::manager::codex_remote::launch::LaunchFlags;
+    use crate::manager::codex_remote::leftovers::tests::{daemon_files_left, leave_daemon_files};
     use crate::manager::codex_remote::picker::FolderPicker;
     use crate::manager::codex_remote::picker::tests::NO_NAMESPACES;
     use crate::manager::codex_remote::problem::tests::{
@@ -3622,6 +3635,52 @@ mod tests {
         )
         .await;
         assert_eq!(manager.state.codex_remote.status().folder_picker, None);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codexs_own_daemon_copy_is_removed_once_its_daemon_is_stopped() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let home = manager.codex_home();
+        leave_daemon_files(&home);
+        let mut updater = daemon_updater(&home, SLEEPS).await;
+
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+
+        assert!(updater.has_exited());
+        assert_eq!(daemon_files_left(&home), Vec::<PathBuf>::new());
+        assert!(CodexLaunch::of_fake(&manager).saved_threads().exists());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codexs_own_daemon_copy_is_removed_at_start_and_after_each_run() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let home = manager.codex_home();
+        leave_daemon_files(&home);
+
+        let supervisor = supervise(&manager);
+        wait_until(WAIT, || daemon_files_left(&home), |left| left.is_empty()).await;
+        status_until(&manager, |status| status.state == ServerState::Waiting).await;
+
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in_now(&manager, CHATGPT).await;
+        let _fake = serve_control(&manager, "connected").await;
+        status_until(&manager, connected).await;
+        leave_daemon_files(&home);
+        let off = CodexRemoteSettings {
+            enabled: false,
+            ..CodexRemoteSettings::default()
+        };
+        save(&manager, &cookie, off).await;
+        wait_until(WAIT, || daemon_files_left(&home), |left| left.is_empty()).await;
+        assert!(CodexLaunch::of_fake(&manager).saved_threads().exists());
 
         shut_down(&manager, supervisor).await;
     }

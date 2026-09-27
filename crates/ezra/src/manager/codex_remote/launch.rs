@@ -8,6 +8,7 @@ use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use super::foreign::DAEMON_STATE;
 use super::{CodexApprovals, CodexSandbox, ServerBudget};
 use crate::manager::agents::Agent;
 use crate::manager::login::SignInMethod;
@@ -91,7 +92,7 @@ impl CodexLaunch {
     /// Where a server started with `--managed-daemon` saves its loaded threads when it stops.
     pub fn saved_threads(&self) -> PathBuf {
         self.codex_home
-            .join("app-server-daemon")
+            .join(DAEMON_STATE)
             .join("loaded-threads.json")
     }
 

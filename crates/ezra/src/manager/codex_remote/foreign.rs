@@ -7,8 +7,12 @@ use super::ServerBudget;
 use super::control::ControlSocket;
 use crate::manager::processes::{Process, ProcessFamily};
 
+/// The folder in a Codex home that Codex's own daemon copies Codex to.
+pub const DAEMON_PACKAGE: &str = "packages/app-server-daemon";
 /// The folders in a Codex home that Codex's own daemon runs its copy of Codex from.
-const DAEMON_PACKAGES: [&str; 2] = ["packages/app-server-daemon", "packages/standalone"];
+pub const DAEMON_PACKAGES: [&str; 2] = [DAEMON_PACKAGE, "packages/standalone"];
+/// The folder in a Codex home where Codex's own daemon keeps its files.
+pub const DAEMON_STATE: &str = "app-server-daemon";
 const UPDATE_LOOP: &str = "pid-update-loop";
 
 /// A Codex server ezra did not start, holding ezra's control socket.
@@ -82,22 +86,33 @@ impl ForeignServer {
     }
 }
 
+/// The copies of Codex that Codex's own daemon runs.
+pub struct DaemonCopies;
+
+impl DaemonCopies {
+    /// The processes running from them in `codex_home`. Blocks.
+    pub fn running_in(codex_home: &Path) -> impl Iterator<Item = Process> + use<'_> {
+        DAEMON_PACKAGES
+            .iter()
+            .flat_map(|package| Process::running_inside(&codex_home.join(package)))
+            .map(|(process, _)| process)
+    }
+}
+
 /// The updater Codex's own daemon runs.
 struct DaemonUpdater;
 
 impl DaemonUpdater {
     /// The updaters running from the daemon's copies of Codex in `codex_home`. Blocks.
     fn running_in(codex_home: &Path) -> Vec<Pid> {
-        DAEMON_PACKAGES
-            .iter()
-            .flat_map(|package| Process::running_inside(&codex_home.join(package)))
-            .filter(|(process, _)| {
+        DaemonCopies::running_in(codex_home)
+            .filter(|process| {
                 process
                     .arguments()
                     .iter()
                     .any(|argument| argument == UPDATE_LOOP)
             })
-            .filter_map(|(process, _)| process.id())
+            .filter_map(|process| process.id())
             .collect()
     }
 }
@@ -133,7 +148,7 @@ pub(super) mod tests {
         pairing_poll: Duration::ZERO,
         folder_picker: Duration::ZERO,
     };
-    const RELEASE: &str = "releases/0.157.1-x86_64-unknown-linux-musl/bin";
+    pub const RELEASE: &str = "releases/0.157.1-x86_64-unknown-linux-musl/bin";
     const UPDATER: [&str; 3] = ["app-server", "daemon", UPDATE_LOOP];
     /// Waits on a child and dies at the first SIGTERM.
     pub const SLEEPS: &str = "sleep 600; :";
@@ -206,7 +221,7 @@ time.sleep(600)"#;
 
     /// Runs `script` with a copy of sh in `folder`, `arguments` on its command line and
     /// `CODEX_HOME` set to `codex_home`. Returns once it started a child.
-    async fn copy_of_sh(
+    pub async fn copy_of_sh(
         codex_home: &Path,
         folder: &Path,
         script: &str,
