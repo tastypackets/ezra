@@ -173,6 +173,9 @@ impl AppState {
         if let Err(error) = launch.log.prepare().await {
             tracing::warn!("could not prepare {}: {error}", launch.log.0.display());
         }
+        if !codex_remote.start_unless_held(&launch.version) {
+            return RunEnd::Reconsidered;
+        }
         let mut server = match CodexServerRun::start(launch).await {
             Ok(server) => server,
             Err(error) => return RunEnd::Failed(format!("could not start: {error}").into()),
@@ -180,9 +183,6 @@ impl AppState {
         let leader = server
             .leader()
             .expect("a server that just started has a pid");
-        codex_remote
-            .status
-            .update(|status| status.start(&launch.version));
         tracing::info!(
             "Codex remote control is starting on Codex {}",
             launch.version
@@ -967,6 +967,7 @@ mod tests {
         CodexApprovals, CodexRemoteSettings, CodexSandbox, ExpectedPeer, RelayState,
     };
     use crate::manager::events::Topic;
+    use crate::manager::login::LoginPrompt;
     use crate::manager::remote_control::RemoteControlOverview;
     use crate::manager::supervision::{
         FIRST_RETRY_DELAY, PendingUpdate, ServerLog, UPDATE_RESTART_DEADLINE,
@@ -1018,16 +1019,16 @@ mod tests {
             .to_path_buf()
     }
 
-    /// Installs a `codex` as `version` that answers its flag probes with `probes`, is signed in as
-    /// `$CODEX_HOME/sign-in` says, and whose `app-server` adds its pid to `$CODEX_HOME/servers`
-    /// before it runs `server`.
-    fn install_codex(manager: &TestManager, version: &str, probes: &str, server: &str) {
+    /// Installs a `codex` as `version` that runs the `case` branches in `first` before its own,
+    /// takes every other flag probe, is signed in as `$CODEX_HOME/sign-in` says, and whose
+    /// `app-server` adds its pid to `$CODEX_HOME/servers` before it runs `server`.
+    fn install_codex(manager: &TestManager, version: &str, first: &str, server: &str) {
         manager.install_fake_version(
             Agent::Codex,
             version,
             &format!(
                 "case \"$*\" in\n  \
-                   {probes}\n  \
+                   {first}\n  \
                    *--help) exit 0 ;;\n  \
                    'login status')\n    \
                      cat \"$CODEX_HOME/sign-in\" >&2\n    \
@@ -3128,6 +3129,324 @@ mod tests {
         assert_eq!(servers(&manager), [first]);
 
         shut_down(&manager, supervisor).await;
+    }
+
+    const LOGIN: &str = "/api/v1/agents/codex/login";
+    const LOGOUT: &str = "/api/v1/agents/codex/logout";
+
+    /// `login --device-auth` records itself in `$CODEX_HOME/order` and signs out like Codex. It
+    /// then waits while `$CODEX_HOME/link-waits` exists, fails while `$CODEX_HOME/no-link`
+    /// exists, and otherwise shows its link and code and exits with the code written to
+    /// `$CODEX_HOME/login-ends`. `logout` records itself and signs out. While
+    /// `$CODEX_HOME/checking` exists, `login status` records itself and waits until it is gone.
+    const SIGNS_IN_AND_OUT: &str = "'login --device-auth')\n    \
+           echo login >> \"$CODEX_HOME/order\"\n    \
+           echo 'Not logged in' > \"$CODEX_HOME/sign-in\"\n    \
+           while [ -e \"$CODEX_HOME/link-waits\" ]; do sleep 0.05; done\n    \
+           [ -e \"$CODEX_HOME/no-link\" ] && exit 1\n    \
+           printf '%s\\n' 'Open https://auth.openai.com/codex/device' \
+             'Enter this one-time code' 'ABCD-12345'\n    \
+           while [ ! -e \"$CODEX_HOME/login-ends\" ]; do sleep 0.05; done\n    \
+           code=$(cat \"$CODEX_HOME/login-ends\")\n    \
+           rm \"$CODEX_HOME/login-ends\"\n    \
+           exit \"$code\" ;;\n  \
+         logout)\n    \
+           echo logout >> \"$CODEX_HOME/order\"\n    \
+           echo 'Not logged in' > \"$CODEX_HOME/sign-in\" ;;\n  \
+         'login status')\n    \
+           if [ -e \"$CODEX_HOME/checking\" ]; then\n      \
+             echo check >> \"$CODEX_HOME/order\"\n      \
+             while [ -e \"$CODEX_HOME/checking\" ]; do sleep 0.05; done\n    \
+           fi\n    \
+           cat \"$CODEX_HOME/sign-in\" >&2\n    \
+           grep -q '^Logged in' \"$CODEX_HOME/sign-in\" ;;";
+
+    /// A server that records its start and its stop in `$CODEX_HOME/order`.
+    const RECORDS_ITS_STOP: &str = "trap 'echo stop >> \"$CODEX_HOME/order\"; kill $!; exit 0' TERM\n\
+         echo start >> \"$CODEX_HOME/order\"\n\
+         sleep 60 > /dev/null 2>&1 &\n\
+         while :; do wait $!; done";
+
+    /// What the fake Codex recorded in `$CODEX_HOME/order`, in order.
+    fn order(manager: &TestManager) -> Vec<String> {
+        fs::read_to_string(codex_home(manager).join("order"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Waits until the fake Codex recorded `count` steps, and returns them.
+    async fn order_until(manager: &TestManager, count: usize) -> Vec<String> {
+        wait_until(WAIT, || order(manager), |order| order.len() >= count).await
+    }
+
+    /// Ends the waiting `login --device-auth` with `code`.
+    fn end_login(manager: &TestManager, code: u8) {
+        fs::write(codex_home(manager).join("login-ends"), code.to_string())
+            .expect("the sign-in is told to end");
+    }
+
+    /// Starts a supervisor whose Codex signs in and out like `SIGNS_IN_AND_OUT` and is signed in
+    /// with ChatGPT, and waits until Codex is connected.
+    async fn ready_to_sign_in(manager: &TestManager) -> (JoinHandle<()>, FakeControlServer) {
+        install_codex(manager, "0.157.1", SIGNS_IN_AND_OUT, RECORDS_ITS_STOP);
+        sign_in(manager, CHATGPT);
+        let supervisor = supervise(manager);
+        let fake = serve_control(manager, "connected").await;
+        status_until(manager, connected).await;
+        order_until(manager, 1).await;
+        (supervisor, fake)
+    }
+
+    async fn start_sign_in(manager: &TestManager, cookie: &str) -> LoginPrompt {
+        let response = manager.post(LOGIN, "", Some(cookie)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        response.json().await
+    }
+
+    #[tokio::test]
+    async fn signing_in_to_codex_stops_its_server_until_the_sign_in_ends() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake) = ready_to_sign_in(&manager).await;
+
+        let prompt = start_sign_in(&manager, &cookie).await;
+
+        assert_eq!(prompt.code.as_deref(), Some("ABCD-12345"));
+        assert_eq!(order(&manager), ["start", "stop", "login"]);
+        let waiting = manager.state.codex_remote.status();
+        assert_eq!(
+            (
+                waiting.state,
+                waiting.relay,
+                waiting.problem,
+                waiting.restarts
+            ),
+            (ServerState::Waiting, None, None, 0)
+        );
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(servers(&manager).len(), 1);
+
+        sign_in(&manager, CHATGPT);
+        end_login(&manager, 0);
+        let running = status_until(&manager, connected).await;
+        assert_eq!(running.restarts, 0);
+        assert_eq!(
+            order_until(&manager, 4).await,
+            ["start", "stop", "login", "start"]
+        );
+        assert_eq!(servers(&manager).len(), 2);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_second_sign_in_keeps_codex_stopped_until_it_ends() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake) = ready_to_sign_in(&manager).await;
+        start_sign_in(&manager, &cookie).await;
+
+        start_sign_in(&manager, &cookie).await;
+
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(order(&manager), ["start", "stop", "login", "login"]);
+        assert_eq!(
+            manager.state.codex_remote.status().state,
+            ServerState::Waiting
+        );
+
+        sign_in(&manager, CHATGPT);
+        end_login(&manager, 0);
+        status_until(&manager, connected).await;
+        assert_eq!(
+            order_until(&manager, 5).await,
+            ["start", "stop", "login", "login", "start"]
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codex_starts_after_a_sign_in_only_with_the_sign_in_it_ended_with() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        install_codex(&manager, "0.157.1", SIGNS_IN_AND_OUT, RECORDS_ITS_STOP);
+        sign_in(&manager, API_KEY);
+        let supervisor = supervise(&manager);
+        let with_api_key = status_until(&manager, |status| status.problem.is_some()).await;
+        assert_eq!(
+            (with_api_key.state, with_api_key.problem),
+            (ServerState::Waiting, Some(CodexProblem::NotChatGpt))
+        );
+        let checking = codex_home(&manager).join("checking");
+
+        start_sign_in(&manager, &cookie).await;
+        sign_in(&manager, CHATGPT);
+        fs::write(&checking, "").expect("the sign-in check is held");
+        end_login(&manager, 0);
+
+        assert_eq!(order_until(&manager, 2).await, ["login", "check"]);
+        assert!(manager.state.codex_remote.is_held());
+        assert!(servers(&manager).is_empty());
+        fs::remove_file(&checking).expect("the sign-in check goes on");
+        let _fake = serve_control(&manager, "connected").await;
+        let running = status_until(&manager, connected).await;
+        assert_eq!(running.problem, None);
+        assert_eq!(order_until(&manager, 3).await, ["login", "check", "start"]);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_sign_in_starts_codex_again_only_while_it_is_still_signed_in() {
+        for (signed_in_after, starts_again) in [(CHATGPT, true), (SIGNED_OUT, false)] {
+            let manager = manager(BUDGET);
+            let cookie = manager.logged_in().await;
+            let (supervisor, _fake) = ready_to_sign_in(&manager).await;
+            start_sign_in(&manager, &cookie).await;
+
+            sign_in(&manager, signed_in_after);
+            end_login(&manager, 1);
+
+            wait_until(WAIT, || manager.state.codex_remote.is_held(), |held| !held).await;
+            if starts_again {
+                status_until(&manager, connected).await;
+                assert_eq!(
+                    order_until(&manager, 4).await,
+                    ["start", "stop", "login", "start"]
+                );
+            } else {
+                sleep(Duration::from_millis(300)).await;
+                let waiting = manager.state.codex_remote.status();
+                assert_eq!(
+                    (waiting.state, waiting.problem, waiting.restarts),
+                    (ServerState::Waiting, None, 0)
+                );
+                assert_eq!(order(&manager), ["start", "stop", "login"]);
+            }
+            assert!(
+                manager
+                    .agent_status(Agent::Codex, &cookie)
+                    .await
+                    .login_prompt
+                    .is_none()
+            );
+
+            shut_down(&manager, supervisor).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_that_shows_no_link_checks_the_sign_in_before_codex_starts_again() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake) = ready_to_sign_in(&manager).await;
+        fs::write(codex_home(&manager).join("no-link"), "").expect("the sign-in is told to fail");
+
+        let response = manager.post(LOGIN, "", Some(&cookie)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        sleep(Duration::from_millis(300)).await;
+        let waiting = manager.state.codex_remote.status();
+        assert_eq!(
+            (waiting.state, waiting.problem, waiting.restarts),
+            (ServerState::Waiting, None, 0)
+        );
+        assert_eq!(order(&manager), ["start", "stop", "login"]);
+        assert!(!manager.agent_status(Agent::Codex, &cookie).await.logged_in);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn signing_codex_out_stops_its_server_before_the_sign_out() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake) = ready_to_sign_in(&manager).await;
+        let checking = codex_home(&manager).join("checking");
+        fs::write(&checking, "").expect("the sign-in check is held");
+
+        let (response, ()) = tokio::join!(manager.post(LOGOUT, "", Some(&cookie)), async {
+            assert_eq!(
+                order_until(&manager, 4).await,
+                ["start", "stop", "logout", "check"]
+            );
+            assert!(manager.state.codex_remote.is_held());
+            assert_eq!(servers(&manager).len(), 1);
+            fs::remove_file(&checking).expect("the sign-in check goes on");
+        });
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let waiting = status_until(&manager, |status| status.state == ServerState::Waiting).await;
+        assert_eq!((waiting.problem, waiting.restarts), (None, 0));
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(servers(&manager).len(), 1);
+        assert!(!manager.agent_status(Agent::Codex, &cookie).await.logged_in);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_whose_request_is_dropped_checks_the_sign_in_before_codex_starts_again() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake) = ready_to_sign_in(&manager).await;
+        let link_waits = codex_home(&manager).join("link-waits");
+        fs::write(&link_waits, "").expect("the sign-in is told to wait");
+
+        tokio::select! {
+            _ = manager.post(LOGIN, "", Some(&cookie)) => panic!("the sign-in answered before its link"),
+            order = order_until(&manager, 3) => assert_eq!(order, ["start", "stop", "login"]),
+        }
+        fs::write(codex_home(&manager).join("no-link"), "").expect("the sign-in is told to fail");
+        fs::remove_file(&link_waits).expect("the sign-in goes on");
+
+        wait_until(WAIT, || manager.state.codex_remote.is_held(), |held| !held).await;
+        sleep(Duration::from_millis(300)).await;
+        let waiting = manager.state.codex_remote.status();
+        assert_eq!(
+            (waiting.state, waiting.problem, waiting.restarts),
+            (ServerState::Waiting, None, 0)
+        );
+        assert_eq!(order(&manager), ["start", "stop", "login"]);
+        assert!(!manager.agent_status(Agent::Codex, &cookie).await.logged_in);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_server_about_to_start_stays_stopped_while_a_sign_in_holds_it() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        let launch = CodexLaunch::of_fake(&manager);
+        let codex_remote = &manager.state.codex_remote;
+        let mut signals = codex_remote
+            .supervision
+            .signals(manager.state.agent_checks.watch_sign_in(Agent::Codex));
+        let hold = codex_remote.hold_for_sign_in().await;
+
+        let end = manager.state.run_codex_server(&launch, &mut signals).await;
+
+        assert!(matches!(end, RunEnd::Reconsidered));
+        assert!(servers(&manager).is_empty());
+        assert_eq!(codex_remote.status(), CodexRemoteStatus::default());
+
+        drop(hold);
+        let (end, ()) = tokio::join!(
+            manager.state.run_codex_server(&launch, &mut signals),
+            async {
+                servers_started(&manager, 1).await;
+                let starting = codex_remote.status();
+                assert_eq!(
+                    (starting.state, starting.server_version.as_deref()),
+                    (ServerState::Starting, Some("0.157.1"))
+                );
+                codex_remote.supervision.begin_shut_down();
+            }
+        );
+        assert!(matches!(end, RunEnd::ShutDown));
     }
 
     #[tokio::test]

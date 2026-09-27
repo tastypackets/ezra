@@ -9,6 +9,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
 use crate::manager::agents::Agent;
+use crate::manager::codex_remote::SignInHold;
 use crate::manager::events::Topic;
 use crate::manager::login::{AgentCli, LoginEnd, LoginError, LoginProcess, LoginPrompt};
 
@@ -49,15 +50,29 @@ pub async fn start(
     State(state): State<AppState>,
     Path(agent): Path<Agent>,
 ) -> Result<Json<LoginPrompt>, ApiError> {
+    let hold = state.hold_remote_for_sign_in(agent).await;
     state.logins.lock().await.remove(&agent);
     state.events.publish(Topic::Agents);
-    let (login, prompt) = AgentCli::installed(agent, &state.install_paths)?
-        .start_login()
-        .await?;
-    let end = login.end();
-    state.logins.lock().await.insert(agent, login);
-    tokio::spawn(state.clone().finish_login(agent, end));
-    state.events.publish(Topic::Agents);
+    let cli = AgentCli::installed(agent, &state.install_paths)?;
+    let starting = state.clone();
+    let prompt = tokio::spawn(async move {
+        let (login, prompt) = match cli.start_login().await {
+            Ok(started) => started,
+            Err(error) => {
+                if hold.is_some() {
+                    starting.agent_checks.refresh(agent).await;
+                }
+                return Err(error);
+            }
+        };
+        let end = login.end();
+        starting.logins.lock().await.insert(agent, login);
+        starting.events.publish(Topic::Agents);
+        tokio::spawn(starting.finish_login(agent, end, hold));
+        Ok(prompt)
+    })
+    .await
+    .map_err(internal)??;
     Ok(Json(prompt))
 }
 
@@ -130,6 +145,7 @@ pub async fn log_out(
     State(state): State<AppState>,
     Path(agent): Path<Agent>,
 ) -> Result<StatusCode, ApiError> {
+    let hold = state.hold_remote_for_sign_in(agent).await;
     state.logins.lock().await.remove(&agent);
     state.events.publish(Topic::Agents);
     let cli = AgentCli::installed(agent, &state.install_paths)?;
@@ -137,6 +153,7 @@ pub async fn log_out(
     tokio::spawn(async move {
         let logged_out = cli.log_out().await;
         signing_out.agent_checks.refresh(agent).await;
+        drop(hold);
         logged_out
     })
     .await
@@ -145,9 +162,17 @@ pub async fn log_out(
 }
 
 impl AppState {
+    /// Stops Codex's remote control until the hold is dropped. None for Claude.
+    async fn hold_remote_for_sign_in(&self, agent: Agent) -> Option<SignInHold> {
+        match agent {
+            Agent::Claude => None,
+            Agent::Codex => Some(self.codex_remote.hold_for_sign_in().await),
+        }
+    }
+
     /// Once the sign-in's process ends by itself, refreshes the agent's sign-in, then drops the
-    /// prompt.
-    async fn finish_login(self, agent: Agent, mut end: LoginEnd) {
+    /// prompt and `hold`.
+    async fn finish_login(self, agent: Agent, mut end: LoginEnd, hold: Option<SignInHold>) {
         if end.wait().await.is_none() {
             return;
         }
@@ -166,6 +191,7 @@ impl AppState {
             drop(logins);
             self.events.publish(Topic::Agents);
         }
+        drop(hold);
     }
 }
 

@@ -3,10 +3,12 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::pin::pin;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex as SyncMutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::BorrowedFormatItem;
@@ -287,6 +289,20 @@ impl<T: Clone + PartialEq> Published<T> {
             self.events.publish(self.topic);
         }
         result
+    }
+
+    /// Waits until `done` holds for the value, for at most `longest`. False when it did not.
+    pub async fn wait_until(&self, done: impl Fn(&T) -> bool, longest: Duration) -> bool {
+        let mut changes = pin!(self.events.stream());
+        let settled = async {
+            while !self.read(&done) {
+                if changes.next().await.is_none() {
+                    return false;
+                }
+            }
+            true
+        };
+        timeout(longest, settled).await.unwrap_or(false)
     }
 }
 
@@ -694,6 +710,34 @@ mod tests {
         assert_eq!(status.update(|value| mem::replace(value, 2)), 1);
         assert_eq!(status.read(|value| *value), 2);
         assert_eq!(events.revision(), revision.wrapping_add(1));
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_status_ends_once_a_change_brings_it_or_in_time() {
+        let status = Arc::new(Published::new(1, Events::default(), Topic::RemoteControl));
+        assert!(status.wait_until(|value| *value == 1, Duration::ZERO).await);
+
+        let changing = Arc::clone(&status);
+        let change = tokio::spawn(async move {
+            sleep(Duration::from_millis(100)).await;
+            changing.update(|value| *value = 2);
+            sleep(Duration::from_millis(100)).await;
+            changing.update(|value| *value = 3);
+        });
+        assert!(
+            status
+                .wait_until(|value| *value == 3, Duration::from_secs(10))
+                .await
+        );
+        change.await.expect("the change is made");
+
+        let started = Instant::now();
+        assert!(
+            !status
+                .wait_until(|value| *value == 4, Duration::from_millis(100))
+                .await
+        );
+        assert!(started.elapsed() >= Duration::from_millis(100));
     }
 
     #[test]

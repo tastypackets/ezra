@@ -28,6 +28,8 @@ use control::{ControlClient, Enable, RelayStatusWire, RelayWire};
 use launch::LaunchFlagCache;
 use problem::{CodexProblem, ProblemLine};
 
+const HOLD_SLACK: Duration = Duration::from_secs(1);
+
 /// How Codex serves this box to the ChatGPT app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(default)]
@@ -186,6 +188,32 @@ impl CodexRemote {
         *self.holds.borrow() > 0
     }
 
+    /// Stops the server until the hold is dropped, and waits until it has stopped.
+    pub async fn hold_for_sign_in(self: &Arc<Self>) -> SignInHold {
+        let hold = SignInHold::take(Arc::clone(self));
+        let longest = self.budget.longest_stop().saturating_add(HOLD_SLACK);
+        if !self
+            .status
+            .wait_until(|status| !status.has_server(), longest)
+            .await
+        {
+            tracing::warn!("Codex remote control did not stop within {longest:?} for a sign-in");
+        }
+        hold
+    }
+
+    /// Shows the server starting on `version`. False, with nothing shown, while a sign-in holds
+    /// it stopped.
+    fn start_unless_held(&self, version: &str) -> bool {
+        self.status.update(|status| {
+            let held = self.is_held();
+            if !held {
+                status.start(version);
+            }
+            !held
+        })
+    }
+
     /// Clears the problem shown, and asks Codex to turn the relay on again when ezra turned it
     /// off. Shows the problem again when Codex does not.
     pub async fn retry(&self) -> Result<(), ControlError> {
@@ -216,6 +244,29 @@ impl CodexRemote {
 
     fn client(&self) -> Option<Arc<ControlClient>> {
         self.with_control(|control| control.client.clone())
+    }
+}
+
+/// Keeps Codex's remote control server stopped while Codex signs in or out, until dropped.
+#[derive(Debug)]
+pub struct SignInHold(Arc<CodexRemote>);
+
+impl SignInHold {
+    fn take(codex_remote: Arc<CodexRemote>) -> Self {
+        codex_remote
+            .holds
+            .send_modify(|holds| *holds = holds.saturating_add(1));
+        codex_remote.supervision.reconsider();
+        Self(codex_remote)
+    }
+}
+
+impl Drop for SignInHold {
+    fn drop(&mut self) {
+        self.0
+            .holds
+            .send_modify(|holds| *holds = holds.saturating_sub(1));
+        self.0.supervision.reconsider();
     }
 }
 
@@ -269,12 +320,17 @@ impl CodexRemoteStatus {
         self.problem = problem;
     }
 
-    /// Whether to start or stop is not known yet, so a running server shows as waiting.
-    fn unsure(&mut self) {
-        if matches!(
+    /// Whether a server may be running.
+    fn has_server(&self) -> bool {
+        matches!(
             self.state,
             ServerState::Starting | ServerState::Running | ServerState::Stopping
-        ) {
+        )
+    }
+
+    /// Whether to start or stop is not known yet, so a running server shows as waiting.
+    fn unsure(&mut self) {
+        if self.has_server() {
             self.enter(ServerState::Waiting);
         }
     }
@@ -424,9 +480,12 @@ pub enum CodexApprovals {
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
+    use std::path::PathBuf;
+    use std::time::Instant;
 
     use serde::de::DeserializeOwned;
     use time::macros::datetime;
+    use tokio::time::{sleep, timeout};
 
     use super::*;
     use crate::manager::codex_remote::fake::FakeControlServer;
@@ -751,6 +810,96 @@ mod tests {
             };
             assert_eq!(status, expected, "{state:?}");
         }
+    }
+
+    fn codex_remote(budget: ServerBudget) -> Arc<CodexRemote> {
+        Arc::new(CodexRemote::new(
+            Events::default(),
+            ServerLog(PathBuf::from("/nonexistent")),
+            budget,
+            ExpectedPeer::Child,
+        ))
+    }
+
+    #[tokio::test]
+    async fn codex_cannot_start_until_every_sign_in_hold_is_dropped() {
+        let codex_remote = codex_remote(ServerBudget::default());
+        let (_sign_in, sign_in) = watch::channel(None);
+        let mut signals = codex_remote.supervision.signals(sign_in);
+        let mut reconsidered = || {
+            let changed = signals.changes.has_changed().expect("the sender is alive");
+            signals.changes.mark_unchanged();
+            changed
+        };
+
+        let first = codex_remote.hold_for_sign_in().await;
+        assert!(reconsidered());
+        let second = codex_remote.hold_for_sign_in().await;
+        assert!(reconsidered());
+        assert!(!codex_remote.start_unless_held("0.157.1"));
+        assert_eq!(codex_remote.status(), CodexRemoteStatus::default());
+
+        drop(first);
+        assert!(reconsidered());
+        assert!(!codex_remote.start_unless_held("0.157.1"));
+
+        drop(second);
+        assert!(reconsidered());
+        assert!(codex_remote.start_unless_held("0.157.1"));
+        let starting = codex_remote.status();
+        assert_eq!(
+            (starting.state, starting.server_version.as_deref()),
+            (ServerState::Starting, Some("0.157.1"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_hold_waits_until_the_server_has_stopped() {
+        let codex_remote = codex_remote(ServerBudget::default());
+        codex_remote.status.update(|status| status.start("0.157.1"));
+        let holding = tokio::spawn({
+            let codex_remote = Arc::clone(&codex_remote);
+            async move { codex_remote.hold_for_sign_in().await }
+        });
+
+        for state in [
+            ServerState::Starting,
+            ServerState::Running,
+            ServerState::Stopping,
+        ] {
+            codex_remote.status.update(|status| status.state = state);
+            sleep(Duration::from_millis(100)).await;
+            assert!(!holding.is_finished(), "{state:?}");
+        }
+        codex_remote
+            .status
+            .update(|status| status.idle(ServerState::Waiting, None));
+        let hold = timeout(Duration::from_secs(10), holding)
+            .await
+            .expect("the hold is taken once the server stopped")
+            .expect("the hold is taken");
+        assert!(codex_remote.is_held());
+        drop(hold);
+        assert!(!codex_remote.is_held());
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_hold_waits_for_a_server_that_does_not_stop_only_as_long_as_a_stop_takes() {
+        let budget = ServerBudget {
+            drain: Duration::ZERO,
+            force: Duration::ZERO,
+            ..ServerBudget::default()
+        };
+        let codex_remote = codex_remote(budget);
+        codex_remote.status.update(|status| status.start("0.157.1"));
+        let started = Instant::now();
+
+        let _hold = timeout(Duration::from_secs(10), codex_remote.hold_for_sign_in())
+            .await
+            .expect("the hold is taken in time");
+
+        assert!(started.elapsed() >= budget.longest_stop().saturating_add(HOLD_SLACK));
+        assert!(codex_remote.is_held());
     }
 
     #[test]
