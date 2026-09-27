@@ -94,6 +94,7 @@ impl AppState {
                         .run_codex_server(&launch, &mut signals, &mut older)
                         .await;
                     codex_remote.with_control(|control| *control = Control::default());
+                    codex_remote.end_pairing();
                     failures.forget_after_healthy_run(started);
                     if !matches!(end, RunEnd::ShutDown) {
                         DaemonLeftovers::of(&launch.codex_home)
@@ -999,12 +1000,13 @@ mod tests {
     use crate::manager::api::test_support::{
         EventStreamExt, PidExt, ProgramExt, ResponseExt, TestManager, wait_until,
     };
-    use crate::manager::codex_remote::fake::{FakeControlServer, Reply};
+    use crate::manager::codex_remote::fake::{ENVIRONMENT, FakeControlServer, Reply};
     use crate::manager::codex_remote::foreign::tests::{
         ForeignListener, SLEEPS, Started, daemon_updater,
     };
     use crate::manager::codex_remote::launch::LaunchFlags;
     use crate::manager::codex_remote::leftovers::tests::{daemon_files_left, leave_daemon_files};
+    use crate::manager::codex_remote::pairing::PairingState;
     use crate::manager::codex_remote::picker::FolderPicker;
     use crate::manager::codex_remote::picker::tests::NO_NAMESPACES;
     use crate::manager::codex_remote::problem::tests::{
@@ -1045,6 +1047,7 @@ mod tests {
         ..BUDGET
     };
     const SETTINGS: &str = "/api/v1/agents/codex/settings";
+    const PAIRING_STATUS: &str = "remoteControl/pairing/status";
     const TAKES_EVERY_FLAG: &str = "*--help) exit 0 ;;";
     const REMOTE_CONTROL_PROBE: &str = "app-server --remote-control --help";
     const REMOTE_CONTROL_HANGS: &str = "'app-server --remote-control --help') exec sleep 30 ;;";
@@ -2437,6 +2440,62 @@ mod tests {
         save(&manager, &cookie, off).await;
         server.wait_until_gone().await;
         helper.wait_until_gone().await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_pairing_code_fails_once_codex_stops() {
+        let manager = manager(ServerBudget {
+            pairing_poll: Duration::from_millis(50),
+            ..BUDGET
+        });
+        let cookie = manager.logged_in().await;
+        let (supervisor, fake, _server) = running(&manager, "0.157.1").await;
+        let expires_at = OffsetDateTime::now_utc()
+            .unix_timestamp()
+            .saturating_add(600);
+        fake.reply(
+            "remoteControl/pairing/start",
+            [Reply::Result(json!({
+                "pairingCode": "pairing-1",
+                "manualPairingCode": "ABCD-EFGH",
+                "environmentId": ENVIRONMENT,
+                "expiresAt": expires_at,
+            }))],
+        );
+        fake.reply(PAIRING_STATUS, [Reply::Result(json!({ "claimed": false }))]);
+        let pairing = manager
+            .state
+            .codex_remote
+            .start_pairing()
+            .await
+            .expect("Codex gives a code");
+        assert_eq!(pairing.state, PairingState::Open);
+        fake.until_requested(PAIRING_STATUS, 1).await;
+
+        let off = CodexRemoteSettings {
+            enabled: false,
+            ..CodexRemoteSettings::default()
+        };
+        save(&manager, &cookie, off).await;
+        status_until(&manager, |status| status.state == ServerState::Off).await;
+
+        let ended = manager
+            .state
+            .codex_remote
+            .pairing()
+            .expect("the code is shown");
+        assert_eq!(
+            (ended.state, ended.error.as_deref()),
+            (
+                PairingState::Failed,
+                Some("Codex closed the control connection")
+            )
+        );
+        let checks = fake.requests_of(PAIRING_STATUS).len();
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(fake.requests_of(PAIRING_STATUS).len(), checks);
 
         shut_down(&manager, supervisor).await;
     }

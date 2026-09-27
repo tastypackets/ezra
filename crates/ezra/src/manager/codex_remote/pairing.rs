@@ -1,4 +1,4 @@
-use std::sync::{Arc, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, SystemTime};
 
 use qrcode::QrCode;
@@ -115,11 +115,11 @@ pub struct Pairing {
 }
 
 impl Pairing {
-    /// Starts checking `started` every `every` through `client`, and publishes the phones once a
-    /// phone used it.
+    /// Starts checking `started` every `every` on `codex_remote`'s control connection, and
+    /// publishes the phones once a phone used it.
     fn new(
         started: PairingWire,
-        client: Arc<ControlClient>,
+        codex_remote: Weak<CodexRemote>,
         every: Duration,
         events: Events,
     ) -> Self {
@@ -130,7 +130,7 @@ impl Pairing {
         let end = Arc::new(OnceLock::new());
         let checking = tokio::spawn(
             PairingCheck {
-                client,
+                codex_remote,
                 code: started.pairing_code.clone(),
                 expires,
                 every,
@@ -146,6 +146,16 @@ impl Pairing {
             expires,
             end,
             checking,
+        }
+    }
+
+    /// Stops checking the code, which fails unless it ended or expired.
+    fn stop_checking(&self) {
+        self.checking.abort();
+        if Instant::now() < self.expires {
+            let _already_ended = self
+                .end
+                .set(Ended::Failed(ControlError::Closed.to_string()));
         }
     }
 
@@ -203,7 +213,7 @@ enum Ended {
 
 /// Asks Codex whether a phone used a pairing code.
 struct PairingCheck {
-    client: Arc<ControlClient>,
+    codex_remote: Weak<CodexRemote>,
     code: String,
     expires: Instant,
     every: Duration,
@@ -212,7 +222,8 @@ struct PairingCheck {
 }
 
 impl PairingCheck {
-    /// Asks every `every` until a phone used the code, it expires, or Codex fails to answer.
+    /// Asks every `every` until a phone used the code, it expires, or Codex fails to answer. Skips
+    /// a check while the control connection opens again.
     async fn run(self) {
         loop {
             let next = Instant::now()
@@ -222,11 +233,18 @@ impl PairingCheck {
             if Instant::now() >= self.expires {
                 return;
             }
+            let Some(client) = self
+                .codex_remote
+                .upgrade()
+                .and_then(|codex_remote| codex_remote.client())
+            else {
+                continue;
+            };
             let asked = PairingStatus {
                 pairing_code: self.code.clone(),
             };
-            match self.client.request(asked).await {
-                Ok(PairingStatusWire { claimed: false }) => {}
+            match client.request(asked).await {
+                Ok(PairingStatusWire { claimed: false }) | Err(ControlError::Closed) => {}
                 Ok(PairingStatusWire { claimed: true }) => {
                     let _already_ended = self.end.set(Ended::Claimed);
                     self.events.publish(Topic::CodexPhones);
@@ -244,7 +262,7 @@ impl PairingCheck {
 
 impl CodexRemote {
     /// Asks Codex for a code a phone pairs with, in place of the earlier one.
-    pub async fn start_pairing(&self) -> Result<CodexPairing, PairingError> {
+    pub async fn start_pairing(self: &Arc<Self>) -> Result<CodexPairing, PairingError> {
         let client = self.client().ok_or(ControlError::Closed)?;
         if client.request(StatusRead).await?.status != RelayStatusWire::Connected {
             return Err(PairingError::NotConnected);
@@ -252,13 +270,20 @@ impl CodexRemote {
         let started = client.request(PairingStart { manual_code: true }).await?;
         let pairing = Pairing::new(
             started,
-            client,
+            Arc::downgrade(self),
             self.budget.pairing_poll,
             self.events.clone(),
         );
         let shown = pairing.view();
         *self.lock_pairing() = Some(pairing);
         Ok(shown)
+    }
+
+    /// Stops checking the code asked for last, since the server it came from stopped.
+    pub fn end_pairing(&self) {
+        if let Some(pairing) = self.lock_pairing().as_ref() {
+            pairing.stop_checking();
+        }
     }
 
     /// The code asked for last, absent before the first.
@@ -382,19 +407,13 @@ mod tests {
         fs::create_dir_all(&home).expect("the Codex home is created");
         let fake = FakeControlServer::bind(&home);
         fake.reply(RELAY, [Reply::Result(FakeControlServer::relay(relay))]);
-        let (client, _events) =
-            ControlClient::connect(&ControlSocket::of(&home), Pid::this(), &home, &BUDGET)
-                .await
-                .expect("the fake answers");
-        manager
-            .state
-            .codex_remote
-            .with_control(|control| control.client = Some(Arc::new(client)));
-        Answering {
+        let answering = Answering {
             manager,
             cookie,
             fake,
-        }
+        };
+        answering.connect().await;
+        answering
     }
 
     /// Unix seconds `seconds` from now, as Codex gives an expiry.
@@ -435,6 +454,19 @@ mod tests {
     }
 
     impl Answering {
+        /// Opens a control connection to the fake, as the supervisor does.
+        async fn connect(&self) {
+            let home = self.manager.codex_home();
+            let (client, _events) =
+                ControlClient::connect(&ControlSocket::of(&home), Pid::this(), &home, &BUDGET)
+                    .await
+                    .expect("the fake answers");
+            self.manager
+                .state
+                .codex_remote
+                .with_control(|control| control.client = Some(Arc::new(client)));
+        }
+
         async fn start(&self) -> Response {
             self.manager.post(PAIRING, "", Some(&self.cookie)).await
         }
@@ -677,7 +709,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_lost_control_connection_fails_the_code() {
+    async fn a_code_is_checked_on_the_control_connection_opened_after_a_lost_one() {
         let answering = answering("connected").await;
         answering
             .fake
@@ -687,12 +719,59 @@ mod tests {
         answering.fake.until_requested(STATUS, 1).await;
 
         answering.fake.disconnect();
+        sleep(BUDGET.pairing_poll.saturating_mul(4)).await;
+        let waiting = answering.shown().await.expect("a pairing is shown");
+        assert_eq!((waiting.state, waiting.error), (PairingState::Open, None));
+        answering.fake.reply(STATUS, [claimed(true)]);
+        answering.connect().await;
 
-        let failed = answering.until_shown(PairingState::Failed).await;
+        let pairing = answering.until_shown(PairingState::Claimed).await;
+        assert_eq!(pairing.error, None);
+    }
+
+    #[tokio::test]
+    async fn a_code_fails_once_its_server_stops_and_is_no_longer_checked() {
+        let answering = answering("connected").await;
+        answering
+            .fake
+            .reply(START, [started("pairing-1", "ABCD-EFGH", in_seconds(600))]);
+        answering.fake.reply(STATUS, [claimed(false)]);
+        answering.started().await;
+        answering.fake.until_requested(STATUS, 1).await;
+
+        answering.manager.state.codex_remote.end_pairing();
+
+        let failed = answering.shown().await.expect("a pairing is shown");
         assert_eq!(
-            failed.error.as_deref(),
-            Some("Codex closed the control connection")
+            (failed.state, failed.error.as_deref()),
+            (
+                PairingState::Failed,
+                Some("Codex closed the control connection")
+            )
         );
+        let checks = answering.fake.requests_of(STATUS).len();
+        assert_eq!(answering.checked_after_a_while().await.len(), checks);
+    }
+
+    #[tokio::test]
+    async fn an_expired_or_used_code_stays_so_once_its_server_stops() {
+        for (expires_at, last, state) in [
+            (in_seconds(2), claimed(false), PairingState::Expired),
+            (in_seconds(600), claimed(true), PairingState::Claimed),
+        ] {
+            let answering = answering("connected").await;
+            answering
+                .fake
+                .reply(START, [started("pairing-1", "ABCD-EFGH", expires_at)]);
+            answering.fake.reply(STATUS, [last]);
+            answering.started().await;
+            answering.until_shown(state).await;
+
+            answering.manager.state.codex_remote.end_pairing();
+
+            let shown = answering.shown().await.expect("a pairing is shown");
+            assert_eq!((shown.state, shown.error), (state, None));
+        }
     }
 
     #[tokio::test]
