@@ -129,6 +129,8 @@ impl Events {
 
 #[cfg(test)]
 mod tests {
+    use utoipa::PartialSchema;
+
     use super::*;
 
     #[tokio::test]
@@ -173,6 +175,14 @@ mod tests {
         assert_eq!(
             changed,
             Topic::ALL.map(|topic| Some(ManagerEvent::Changed { topic, revision }))
+        );
+    }
+
+    #[test]
+    fn all_lists_every_topic() {
+        assert_eq!(
+            serde_json::to_value(Topic::schema()).expect("the schema serializes")["enum"],
+            serde_json::to_value(Topic::ALL).expect("topics serialize")
         );
     }
 
