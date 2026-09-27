@@ -36,7 +36,7 @@ test("only the newest three toasts show", async ({ page }) => {
     await save.click();
     await expect(saved).toHaveCount(count);
   }
-  await expect(saved.filter({ visible: true })).toHaveCount(3);
+  await expect(page.locator("[data-slot=toast]:not([data-limited])")).toHaveCount(3);
 });
 
 test.describe("with Claude Code installed", () => {

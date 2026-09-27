@@ -13,7 +13,7 @@ import {
 } from "@tanstack/react-query";
 import type { Mutation } from "@tanstack/react-query";
 
-import { toastManager } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
 import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions } from "@/queries/agent-queries";
@@ -40,7 +40,7 @@ export function useAgentActions(agent: Agent) {
       if (typeof versionBefore !== "string" || !status.installed_version) {
         return;
       }
-      toastManager.add({
+      toast.add({
         title:
           status.installed_version === versionBefore
             ? AGENTS_DESCRIPTIONS.up_to_date(name)

@@ -23,7 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
-import { toastManager } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast";
 import { AGENT_NAMES } from "@/content/agents";
 import { SPAWN_MODE_ORDER, SPAWN_MODES } from "@/content/folders";
 import {
@@ -72,7 +72,7 @@ export function ClaudeSettingsCard() {
       queryClient.setQueryData(getClaudeSettingsOptions().queryKey, saved);
       void queryClient.invalidateQueries({ queryKey: agentsQueryOptions.queryKey });
       void queryClient.invalidateQueries({ queryKey: foldersQueryOptions.queryKey });
-      toastManager.add({ title: SETTINGS_DESCRIPTIONS.saved });
+      toast.add({ title: SETTINGS_DESCRIPTIONS.saved });
     },
   });
   const form = useForm({

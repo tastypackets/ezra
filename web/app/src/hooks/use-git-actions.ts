@@ -6,7 +6,7 @@ import {
 } from "@ezra/client/react-query.gen";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { toastManager } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast";
 import { GIT_DESCRIPTIONS } from "@/content/git";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
 
@@ -31,7 +31,7 @@ export function useGitActions() {
       queryClient.setQueryData(gitStatusQueryOptions.queryKey, (status: GitStatus | undefined) =>
         status ? { ...status, identity } : status,
       );
-      toastManager.add({ title: GIT_DESCRIPTIONS.saved });
+      toast.add({ title: GIT_DESCRIPTIONS.saved });
     },
   });
   return { startGitHubSignIn, signOutOfGitHub, saveIdentity };

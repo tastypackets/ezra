@@ -7,7 +7,7 @@ import {
 } from "@ezra/client/react-query.gen";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { toastManager } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast";
 import { CLAUDE_OPTIONS_DESCRIPTIONS, DELETE_FOLDER_DESCRIPTIONS } from "@/content/folders";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 
@@ -23,13 +23,13 @@ export function useFolderActions() {
   const chooseClaudeOptions = useMutation({
     ...chooseFolderClaudeOptionsMutation(),
     onSuccess: (_saved, { path }) =>
-      toastManager.add({ title: CLAUDE_OPTIONS_DESCRIPTIONS.saved(path.name) }),
+      toast.add({ title: CLAUDE_OPTIONS_DESCRIPTIONS.saved(path.name) }),
     onSettled: refreshFolders,
   });
   const deleteFolder = useMutation({
     ...deleteFolderMutation(),
     onSuccess: (_, { path }) => {
-      toastManager.add({ title: DELETE_FOLDER_DESCRIPTIONS.deleted(path.name) });
+      toast.add({ title: DELETE_FOLDER_DESCRIPTIONS.deleted(path.name) });
     },
     onSettled: refreshFolders,
   });

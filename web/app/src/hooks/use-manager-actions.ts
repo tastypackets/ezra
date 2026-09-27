@@ -4,7 +4,7 @@ import {
 } from "@ezra/client/react-query.gen";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { toastManager } from "@/components/ui/toast";
+import { toast } from "@/components/ui/toast";
 import { MANAGER_DESCRIPTIONS } from "@/content/manager";
 import { managerQueryOptions } from "@/queries/manager-queries";
 
@@ -16,12 +16,12 @@ export function useManagerActions() {
 
   const changePassword = useMutation({
     ...changePasswordMutation(),
-    onSuccess: () => toastManager.add({ title: MANAGER_DESCRIPTIONS.password_changed }),
+    onSuccess: () => toast.add({ title: MANAGER_DESCRIPTIONS.password_changed }),
     onSettled: refreshManager,
   });
   const regenerateCertificate = useMutation({
     ...regenerateCertificateMutation(),
-    onSuccess: () => toastManager.add({ title: MANAGER_DESCRIPTIONS.regenerated }),
+    onSuccess: () => toast.add({ title: MANAGER_DESCRIPTIONS.regenerated }),
     onSettled: refreshManager,
   });
   return { changePassword, regenerateCertificate };
