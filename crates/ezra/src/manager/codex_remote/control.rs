@@ -846,7 +846,7 @@ pub(super) mod tests {
         RelayWire {
             status,
             server_name: "ezra-dev".to_owned(),
-            environment_id: Some(ENVIRONMENT.to_owned()),
+            environment_id: (status != RelayStatusWire::Disabled).then(|| ENVIRONMENT.to_owned()),
         }
     }
 

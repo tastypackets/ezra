@@ -143,13 +143,13 @@ impl FakeControlServer {
     }
 
     /// Codex's relay status as `remoteControl/status/read` gives it, for ezra-dev in
-    /// `ENVIRONMENT`.
+    /// `ENVIRONMENT` unless disabled.
     pub fn relay(status: &str) -> Value {
         json!({
             "status": status,
             "serverName": "ezra-dev",
             "installationId": "installation-1",
-            "environmentId": ENVIRONMENT,
+            "environmentId": (status != "disabled").then_some(ENVIRONMENT),
         })
     }
 
