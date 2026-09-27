@@ -175,11 +175,10 @@ mod tests {
     use std::time::Duration;
 
     use futures_util::StreamExt;
-    use tokio::time::{Instant, sleep, timeout};
+    use tokio::time::{Instant, sleep};
 
-    use super::super::test_support::{ResponseExt, TestManager};
+    use super::super::test_support::{EventStreamExt, ResponseExt, TestManager};
     use super::*;
-    use crate::manager::events::ManagerEvent;
 
     #[tokio::test]
     async fn signing_in_and_out_refreshes_the_sign_in() {
@@ -286,12 +285,7 @@ esac"#,
             (finished.logged_in, finished.account.as_deref()),
             (true, Some("ChatGPT"))
         );
-        let mut published = Vec::new();
-        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
-            if let ManagerEvent::Changed { topic, .. } = event {
-                published.push(topic);
-            }
-        }
+        let published = events.published().await;
         assert!(published.contains(&Topic::Agents), "{published:?}");
     }
 

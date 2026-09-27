@@ -1,18 +1,24 @@
+use std::fmt::Debug;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::request::Builder;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use futures_util::{Stream, StreamExt};
 use http_body_util::BodyExt;
 use serde::de::DeserializeOwned;
+use tokio::time::{Instant, sleep, timeout};
 use tower::ServiceExt;
 
 use super::session::SessionStatus;
 use crate::manager::agents::{Agent, InstallPaths, TlsVerification};
+use crate::manager::events::{ManagerEvent, Topic};
 use crate::manager::folders::ProjectsDirectory;
 use crate::manager::git::GitTools;
 use crate::manager::settings::Settings;
@@ -67,25 +73,56 @@ impl TestManager {
         }
     }
 
-    /// Makes `script` the agent's command, installed as version 9.9.9. Each run is logged for
-    /// `fake_cli_runs`. Returns the script's path.
+    /// Makes `script` the agent's command, installed as version 9.9.9 outside the versions
+    /// directory. Each run is logged for `fake_cli_runs`. Returns the script's path.
     pub fn install_fake_cli(&self, agent: Agent, script: &str) -> PathBuf {
-        let fakes = self.directory.path().join("fakes");
-        let version = fakes.join(agent.command_name()).join("9.9.9");
+        let version = self
+            .directory
+            .path()
+            .join("fakes")
+            .join(agent.command_name())
+            .join("9.9.9");
+        self.install_fake(agent, &version, script)
+    }
+
+    /// Makes `script` the agent's command, installed as `version` in the versions directory like a
+    /// release. Each run is logged for `fake_cli_runs`. Returns the script's path.
+    pub fn install_fake_version(&self, agent: Agent, version: &str, script: &str) -> PathBuf {
+        let version = self
+            .state
+            .install_paths
+            .versions_directory(agent)
+            .join(version);
+        self.install_fake(agent, &version, script)
+    }
+
+    /// Writes the script where a release in `version` keeps the agent's command, without this
+    /// process holding it open for writing, and links the command to it.
+    fn install_fake(&self, agent: Agent, version: &Path, script: &str) -> PathBuf {
         let command = match agent {
-            Agent::Claude => version,
+            Agent::Claude => version.to_path_buf(),
             Agent::Codex => version.join("bin/codex"),
         };
-        fs::create_dir_all(command.parent().expect("the command has a parent"))
-            .expect("fake directory is created");
+        let fakes = self.directory.path().join("fakes");
+        for directory in [&fakes, command.parent().expect("the command has a parent")] {
+            fs::create_dir_all(directory).expect("fake directory is created");
+        }
         let runs = fakes.join(format!("{agent}.runs"));
-        fs::write(
-            &command,
-            format!("#!/bin/sh\necho \"$*\" >> '{}'\n{script}\n", runs.display()),
-        )
-        .expect("fake is written");
-        fs::set_permissions(&command, fs::Permissions::from_mode(0o755))
-            .expect("fake is executable");
+        let mut writer = Command::new("sh")
+            .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+            .arg(&command)
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("sh starts");
+        writer
+            .stdin
+            .take()
+            .expect("stdin is piped")
+            .write_all(
+                format!("#!/bin/sh\necho \"$*\" >> '{}'\n{script}\n", runs.display()).as_bytes(),
+            )
+            .expect("script is sent");
+        assert!(writer.wait().expect("sh ends").success());
         self.state
             .install_paths
             .command(agent)
@@ -222,5 +259,41 @@ impl ResponseExt for Response {
             .split_once(';')
             .map_or(set_cookie, |(name_and_value, _attributes)| name_and_value)
             .to_owned()
+    }
+}
+
+pub trait EventStreamExt {
+    /// The topics published until nothing more arrives for 100 ms.
+    async fn published(&mut self) -> Vec<Topic>;
+}
+
+impl<S: Stream<Item = ManagerEvent> + Unpin> EventStreamExt for S {
+    async fn published(&mut self) -> Vec<Topic> {
+        let mut topics = Vec::new();
+        while let Ok(Some(event)) = timeout(Duration::from_millis(100), self.next()).await {
+            if let ManagerEvent::Changed { topic, .. } = event {
+                topics.push(topic);
+            }
+        }
+        topics
+    }
+}
+
+/// Reads `current` every 50 ms until `wanted` holds for it, and fails the test after `longest`.
+pub async fn wait_until<T: Debug>(
+    longest: Duration,
+    mut current: impl FnMut() -> T,
+    wanted: impl Fn(&T) -> bool,
+) -> T {
+    let deadline = Instant::now()
+        .checked_add(longest)
+        .expect("the deadline fits");
+    loop {
+        let value = current();
+        if wanted(&value) {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "still {value:?}");
+        sleep(Duration::from_millis(50)).await;
     }
 }

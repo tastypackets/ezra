@@ -1416,67 +1416,32 @@ impl RemoteControlLineExt for str {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
-    use std::io::Write as _;
     use std::ops::Range;
     use std::os::unix::fs::symlink;
 
-    use futures_util::{Stream, StreamExt};
+    use futures_util::StreamExt;
 
     use super::*;
-    use crate::manager::api::test_support::TestManager;
+    use crate::manager::api::test_support::{EventStreamExt, TestManager, wait_until};
     use crate::manager::events::ManagerEvent;
     use crate::manager::folders::ProjectsDirectory;
 
     const SIGNED_IN: &str = r#"{"loggedIn":true}"#;
-
-    /// Writes an executable script without this process holding it open for writing.
-    fn write_script(path: &Path, script: &str) {
-        let mut writer = std::process::Command::new("sh")
-            .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
-            .arg(path)
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("sh starts");
-        writer
-            .stdin
-            .take()
-            .expect("stdin is piped")
-            .write_all(script.as_bytes())
-            .expect("script is sent");
-        assert!(writer.wait().expect("sh ends").success());
-    }
+    const WAIT: Duration = Duration::from_secs(10);
 
     /// A `claude` that is signed in and whose Remote Control runs `server`.
     fn fake_claude(manager: &TestManager, directory: &Path, server: &str) -> AppState {
-        let script = directory.join("claude");
-        write_script(
-            &script,
+        manager.install_fake_cli(
+            Agent::Claude,
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) {server} ;;\nesac\n"
+                "case \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) {server} ;;\nesac"
             ),
         );
-        manager
-            .state
-            .install_paths
-            .command(Agent::Claude)
-            .replace_symlink(&script)
-            .expect("command link is created");
         let served = directory.join("projects");
         fs::create_dir_all(&served).expect("served directory is created");
         let mut state = manager.state.clone();
         state.projects = ProjectsDirectory(served);
         state
-    }
-
-    /// The topics published until nothing more arrives for 100 ms.
-    async fn published(events: &mut (impl Stream<Item = ManagerEvent> + Unpin)) -> Vec<Topic> {
-        let mut topics = Vec::new();
-        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
-            if let ManagerEvent::Changed { topic, .. } = event {
-                topics.push(topic);
-            }
-        }
-        topics
     }
 
     async fn wait_for(state: &AppState, wanted: ServerState) -> RemoteControlStatus {
@@ -1488,23 +1453,17 @@ mod tests {
         directory: &Path,
         wanted: ServerState,
     ) -> RemoteControlStatus {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        loop {
-            let status = state
-                .remote_control
-                .status_of(directory)
-                .unwrap_or_default();
-            if status.state == wanted {
-                return status;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "still {status:?}, wanted {wanted:?}"
-            );
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || {
+                state
+                    .remote_control
+                    .status_of(directory)
+                    .unwrap_or_default()
+            },
+            |status| status.state == wanted,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -1621,20 +1580,17 @@ mod tests {
 
         let retrying = wait_for(&state, ServerState::Retrying).await;
         assert_eq!(retrying.problem, Some(ServerProblem::Offline));
-        let deadline = Instant::now()
-            .checked_add(FIRST_RETRY_DELAY.saturating_add(Duration::from_secs(10)))
-            .expect("the deadline fits");
-        let running = loop {
-            let status = state
-                .remote_control
-                .status_of(&state.projects.0)
-                .unwrap_or_default();
-            if status.state == ServerState::Running {
-                break status;
-            }
-            assert!(Instant::now() < deadline, "still {status:?}");
-            sleep(Duration::from_millis(100)).await;
-        };
+        let running = wait_until(
+            FIRST_RETRY_DELAY.saturating_add(WAIT),
+            || {
+                state
+                    .remote_control
+                    .status_of(&state.projects.0)
+                    .unwrap_or_default()
+            },
+            |status| status.state == ServerState::Running,
+        )
+        .await;
         assert_eq!(
             (running.problem, running.last_error, running.restarts),
             (None, None, 1)
@@ -1644,23 +1600,22 @@ mod tests {
         supervisor.await.expect("supervisor stops");
     }
 
-    /// Installs a `claude` script as `version`, the way the manager links a real install.
-    fn install_fake_claude(state: &AppState, directory: &Path, version: &str, server: &str) {
-        let versions = state.install_paths.versions_directory(Agent::Claude);
-        fs::create_dir_all(&versions).expect("versions directory is created");
-        let script = versions.join(version);
-        write_script(
-            &script,
+    /// A signed-in `claude` installed as `version`, which records its version in `starts` when
+    /// its Remote Control runs `server`.
+    fn install_claude_version(
+        manager: &TestManager,
+        directory: &Path,
+        version: &str,
+        server: &str,
+    ) {
+        manager.install_fake_version(
+            Agent::Claude,
+            version,
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) echo {version} >> {starts}; {server} ;;\nesac\n",
+                "case \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) echo {version} >> {starts}; {server} ;;\nesac",
                 starts = directory.join("starts").display()
             ),
         );
-        state
-            .install_paths
-            .command(Agent::Claude)
-            .replace_symlink(&script)
-            .expect("command link is created");
     }
 
     fn starts(directory: &Path) -> Vec<String> {
@@ -1677,19 +1632,18 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let server = "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60";
         let state = fake_claude(&manager, directory.path(), server);
-        install_fake_claude(&state, directory.path(), "2.1.1", server);
+        install_claude_version(&manager, directory.path(), "2.1.1", server);
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Running).await;
 
-        install_fake_claude(&state, directory.path(), "2.1.2", server);
+        install_claude_version(&manager, directory.path(), "2.1.2", server);
         state.remote_control.reconsider();
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while starts(directory.path()) != ["2.1.1", "2.1.2"] {
-            assert!(Instant::now() < deadline, "{:?}", starts(directory.path()));
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || starts(directory.path()),
+            |starts| starts == &["2.1.1", "2.1.2"],
+        )
+        .await;
         let running = wait_for(&state, ServerState::Running).await;
         assert_eq!(running.update, None);
         let versions = state.install_paths.versions_directory(Agent::Claude);
@@ -1709,26 +1663,23 @@ mod tests {
             session = session.display()
         );
         let state = fake_claude(&manager, directory.path(), &server);
-        install_fake_claude(&state, directory.path(), "2.1.1", &server);
+        install_claude_version(&manager, directory.path(), "2.1.1", &server);
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Running).await;
 
-        install_fake_claude(&state, directory.path(), "2.1.2", &server);
+        install_claude_version(&manager, directory.path(), "2.1.2", &server);
         state.remote_control.reconsider();
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        let waiting = loop {
-            let status = state
-                .remote_control
-                .status_of(&state.projects.0)
-                .unwrap_or_default();
-            if status.update.is_some() {
-                break status;
-            }
-            assert!(Instant::now() < deadline, "still {status:?}");
-            sleep(Duration::from_millis(50)).await;
-        };
+        let waiting = wait_until(
+            WAIT,
+            || {
+                state
+                    .remote_control
+                    .status_of(&state.projects.0)
+                    .unwrap_or_default()
+            },
+            |status| status.update.is_some(),
+        )
+        .await;
         assert_eq!(waiting.state, ServerState::Running);
         assert_eq!(
             waiting.update.map(|update| update.version).as_deref(),
@@ -1751,10 +1702,12 @@ mod tests {
             .expect("pid is a number");
         nix::sys::signal::kill(Pid::from_raw(session), Signal::SIGKILL).expect("session ends");
         state.remote_control.reconsider();
-        while starts(directory.path()) != ["2.1.1", "2.1.2"] {
-            assert!(Instant::now() < deadline, "{:?}", starts(directory.path()));
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || starts(directory.path()),
+            |starts| starts == &["2.1.1", "2.1.2"],
+        )
+        .await;
 
         state.remote_control.begin_shut_down();
         supervisor.await.expect("supervisor stops");
@@ -2194,16 +2147,12 @@ mod tests {
             .trim()
             .parse()
             .expect("pid is a number");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(5))
-            .expect("the deadline fits");
-        while nix::sys::signal::kill(Pid::from_raw(session), None).is_ok() {
-            assert!(
-                Instant::now() < deadline,
-                "session {session} is still running"
-            );
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || nix::sys::signal::kill(Pid::from_raw(session), None).is_ok(),
+            |running| !running,
+        )
+        .await;
 
         state.remote_control.begin_shut_down();
         supervisor.await.expect("supervisor stops");
@@ -2226,15 +2175,8 @@ mod tests {
                 .and_then(|id| i32::try_from(id).ok())
                 .expect("leader has a pid"),
         ));
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(5))
-            .expect("the deadline fits");
-        while group.usage(Some(4)).sessions < 2 {
-            assert!(Instant::now() < deadline, "the group did not start");
-            sleep(Duration::from_millis(20)).await;
-        }
-        let usage = group.usage(Some(4));
-        assert_eq!((usage.sessions, usage.capacity), (2, Some(4)));
+        let usage = wait_until(WAIT, || group.usage(Some(4)), |usage| usage.sessions == 2).await;
+        assert_eq!(usage.capacity, Some(4));
         assert!(usage.memory_bytes > 0);
 
         group.terminate(&mut leader).await;
@@ -2258,18 +2200,12 @@ mod tests {
         wait_for(&state, ServerState::Running).await;
 
         state.remote_control.restart();
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while fs::read_to_string(&starts)
-            .unwrap_or_default()
-            .lines()
-            .count()
-            < 2
-        {
-            assert!(Instant::now() < deadline, "the server did not start again");
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || fs::read_to_string(&starts).unwrap_or_default(),
+            |started| started.lines().count() == 2,
+        )
+        .await;
         wait_for(&state, ServerState::Running).await;
 
         state.remote_control.begin_shut_down();
@@ -2287,10 +2223,10 @@ mod tests {
             directory.path(),
             "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
         );
-        write_script(
-            &directory.path().join("claude"),
+        manager.install_fake_cli(
+            Agent::Claude,
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  auth) if [ -f {marker} ]; then echo '{SIGNED_IN}'; else echo '{{\"loggedIn\":false}}'; fi ;;\n  remote-control) echo 'https://claude.ai/code?environment=env_test'; exec sleep 60 ;;\nesac\n",
+                "case \"$1\" in\n  auth) if [ -f {marker} ]; then echo '{SIGNED_IN}'; else echo '{{\"loggedIn\":false}}'; fi ;;\n  remote-control) echo 'https://claude.ai/code?environment=env_test'; exec sleep 60 ;;\nesac",
                 marker = marker.display()
             ),
         );
@@ -2398,13 +2334,7 @@ esac"#,
         assert_eq!(servers_started(&manager), 1);
 
         sign_in_through_the_api(&manager, &cookie).await;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while servers_started(&manager) < 2 {
-            assert!(Instant::now() < deadline, "the server did not start again");
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(WAIT, || servers_started(&manager), |started| *started == 2).await;
         wait_for(&state, ServerState::Running).await;
 
         state.remote_control.begin_shut_down();
@@ -2440,13 +2370,7 @@ esac"#,
             .change_folder_choice("app", |choice| choice.serve = false)
             .await
             .expect("the choice is saved");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while state.remote_control.status_of(&app).is_some() {
-            assert!(Instant::now() < deadline, "the folder server did not stop");
-            sleep(Duration::from_millis(50)).await;
-        }
+        assert!(state.remote_control.wait_until_gone(&app, WAIT).await);
 
         state.remote_control.begin_shut_down();
         supervisor.await.expect("supervisor stops");
@@ -2488,38 +2412,36 @@ esac"#,
             })
             .await
             .expect("the choice is saved");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
         let arguments = |spawn: &str, rest: &str| {
             format!("remote-control --spawn {spawn} {rest}--permission-mode")
         };
-        loop {
-            let started = fs::read_to_string(&starts).unwrap_or_default();
-            let app_starts: Vec<&str> = started
+        let started_in = |started: &str, folder: &str| -> Vec<String> {
+            started
                 .lines()
-                .filter(|line| line.starts_with("app "))
-                .collect();
-            if let [first, second] = app_starts[..] {
-                assert!(first.contains(&arguments("worktree", "")), "{first}");
-                assert!(first.contains("--permission-mode auto"), "{first}");
-                assert!(
-                    second.contains(&arguments("same-dir", "--capacity 2 ")),
-                    "{second}"
-                );
-                assert!(second.contains("--permission-mode plan"), "{second}");
-                for plain in ["projects ", "notes "] {
-                    let starts: Vec<&str> = started
-                        .lines()
-                        .filter(|line| line.starts_with(plain))
-                        .collect();
-                    assert_eq!(starts.len(), 1, "{started}");
-                    assert!(starts[0].contains(&arguments("same-dir", "")), "{started}");
-                }
-                break;
-            }
-            assert!(Instant::now() < deadline, "started {started}");
-            sleep(Duration::from_millis(50)).await;
+                .filter(|line| line.starts_with(&format!("{folder} ")))
+                .map(str::to_owned)
+                .collect()
+        };
+        let started = wait_until(
+            WAIT,
+            || fs::read_to_string(&starts).unwrap_or_default(),
+            |started| started_in(started, "app").len() == 2,
+        )
+        .await;
+        let [first, second] = &started_in(&started, "app")[..] else {
+            unreachable!("the wait saw two starts");
+        };
+        assert!(first.contains(&arguments("worktree", "")), "{first}");
+        assert!(first.contains("--permission-mode auto"), "{first}");
+        assert!(
+            second.contains(&arguments("same-dir", "--capacity 2 ")),
+            "{second}"
+        );
+        assert!(second.contains("--permission-mode plan"), "{second}");
+        for plain in ["projects", "notes"] {
+            let starts = started_in(&started, plain);
+            assert_eq!(starts.len(), 1, "{started}");
+            assert!(starts[0].contains(&arguments("same-dir", "")), "{started}");
         }
         wait_in(&state, &app, ServerState::Running).await;
 
@@ -2543,7 +2465,7 @@ esac"#,
             .await
             .expect("the choice is saved");
         wait_in(&state, &app, ServerState::Waiting).await;
-        let published = published(&mut events).await;
+        let published = events.published().await;
         assert!(published.contains(&Topic::RemoteControl), "{published:?}");
 
         state.remote_control.begin_shut_down();
@@ -2585,15 +2507,9 @@ esac"#,
             .await
             .expect("the choice is saved");
         wait_in(&state, &app, ServerState::Stopping).await;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while state.remote_control.status_of(&app).is_some() {
-            assert!(Instant::now() < deadline, "the folder server did not stop");
-            sleep(Duration::from_millis(50)).await;
-        }
+        assert!(state.remote_control.wait_until_gone(&app, WAIT).await);
 
-        let published = published(&mut events).await;
+        let published = events.published().await;
         for expected in [Topic::Folders, Topic::RemoteControl] {
             assert!(
                 published.contains(&expected),
@@ -2668,23 +2584,19 @@ esac"#,
             .change_folder_choice("unserved", |choice| choice.serve = false)
             .await
             .expect("the choice is saved");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while state.remote_control.status_of(&unserved).is_some() {
-            assert!(Instant::now() < deadline, "the folder server did not stop");
-            sleep(Duration::from_millis(50)).await;
-        }
+        assert!(state.remote_control.wait_until_gone(&unserved, WAIT).await);
         assert!(log("unserved").is_dir());
 
         for folder in [&served, &unserved] {
             fs::remove_dir_all(folder).expect("folder is removed");
         }
         state.remote_control.reconsider();
-        while log("served").exists() || log("unserved").exists() {
-            assert!(Instant::now() < deadline, "a log of a gone folder is left");
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || (log("served").exists(), log("unserved").exists()),
+            |left| *left == (false, false),
+        )
+        .await;
         assert!(state.remote_control.log(&Served::Projects).0.is_dir());
 
         state.remote_control.begin_shut_down();
