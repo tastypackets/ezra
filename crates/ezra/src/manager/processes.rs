@@ -101,6 +101,18 @@ impl Process {
     }
 }
 
+#[cfg(test)]
+impl Process {
+    pub fn with_id(id: Pid) -> Self {
+        Self(PathBuf::from(format!("/proc/{id}")))
+    }
+
+    /// Exists and has not exited.
+    pub fn is_running(&self) -> bool {
+        self.stat().is_some_and(|stat| !stat.zombie)
+    }
+}
+
 /// A process and the processes it started, also those in process groups of their own, as they
 /// were when read.
 pub struct ProcessFamily {

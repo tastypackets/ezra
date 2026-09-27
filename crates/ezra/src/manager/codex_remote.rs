@@ -1,3 +1,13 @@
+#[cfg(test)]
+mod launch;
+#[cfg(test)]
+mod problem;
+#[cfg(test)]
+mod run;
+
+#[cfg(test)]
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -22,6 +32,29 @@ impl Default for CodexRemoteSettings {
             enabled: true,
             sandbox: CodexSandbox::default(),
             approvals: CodexApprovals::default(),
+        }
+    }
+}
+
+/// How long each step with the Codex server may take.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerBudget {
+    /// For each `--help` flag probe.
+    pub probe: Duration,
+    /// After the first SIGTERM, for running turns to finish.
+    pub drain: Duration,
+    /// After the second SIGTERM, before SIGKILL.
+    pub force: Duration,
+}
+
+#[cfg(test)]
+impl Default for ServerBudget {
+    fn default() -> Self {
+        Self {
+            probe: Duration::from_secs(5),
+            drain: Duration::from_secs(20),
+            force: Duration::from_secs(10),
         }
     }
 }
@@ -57,6 +90,8 @@ mod tests {
     use serde::de::DeserializeOwned;
 
     use super::*;
+    use crate::manager::remote_control::RemoteControl;
+    use crate::manager::supervision::OUTPUT_DRAIN_TIMEOUT;
 
     const SANDBOXES: [(CodexSandbox, &str); 3] = [
         (CodexSandbox::ReadOnly, "read-only"),
@@ -126,5 +161,16 @@ mod tests {
             serde_json::from_str::<CodexRemoteSettings>("{}").expect("empty settings parse"),
             CodexRemoteSettings::default()
         );
+    }
+
+    #[test]
+    fn the_default_stop_fits_in_claudes() {
+        let budget = ServerBudget::default();
+        let longest = budget
+            .drain
+            .saturating_add(budget.force)
+            .saturating_add(OUTPUT_DRAIN_TIMEOUT);
+        assert_eq!(longest, Duration::from_secs(31));
+        assert!(longest < RemoteControl::LONGEST_STOP);
     }
 }
