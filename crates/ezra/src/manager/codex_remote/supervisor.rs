@@ -1010,15 +1010,6 @@ mod tests {
         manager
     }
 
-    fn codex_home(manager: &TestManager) -> PathBuf {
-        manager
-            .state
-            .install_paths
-            .config_directory(Agent::Codex)
-            .expect("the test manager has a Codex home")
-            .to_path_buf()
-    }
-
     /// Installs a `codex` as `version` that runs the `case` branches in `first` before its own,
     /// takes every other flag probe, is signed in as `$CODEX_HOME/sign-in` says, and whose
     /// `app-server` adds its pid to `$CODEX_HOME/servers` before it runs `server`.
@@ -1042,7 +1033,7 @@ mod tests {
     }
 
     fn sign_in(manager: &TestManager, status: &str) {
-        let home = codex_home(manager);
+        let home = manager.codex_home();
         fs::create_dir_all(&home).expect("the Codex home is created");
         fs::write(home.join("sign-in"), format!("{status}\n")).expect("the sign-in is written");
     }
@@ -1054,7 +1045,7 @@ mod tests {
 
     /// The pid of each server started, in order.
     fn servers(manager: &TestManager) -> Vec<Pid> {
-        fs::read_to_string(codex_home(manager).join("servers"))
+        fs::read_to_string(manager.codex_home().join("servers"))
             .unwrap_or_default()
             .lines()
             .map(|pid| Pid::from_raw(pid.parse().expect("the pid is a number")))
@@ -1104,7 +1095,7 @@ mod tests {
     /// Serves the control socket and reports the relay as `relay` the way Codex does: pushed
     /// after `initialize`, then read.
     fn control(manager: &TestManager, relay: &str) -> FakeControlServer {
-        let fake = FakeControlServer::bind(&codex_home(manager));
+        let fake = FakeControlServer::bind(&manager.codex_home());
         fake.push_after("initialize", FakeControlServer::status_changed(relay));
         fake.reply(
             "remoteControl/status/read",
@@ -1163,7 +1154,7 @@ mod tests {
         );
         sign_in(manager, CHATGPT);
         let supervisor = supervise(manager);
-        let leftover = codex_home(manager).join("leftover");
+        let leftover = manager.codex_home().join("leftover");
         let helper = wait_until(
             WAIT,
             || {
@@ -1383,7 +1374,7 @@ mod tests {
         );
 
         let mut events = Box::pin(manager.state.events.stream());
-        fs::write(codex_home(&manager).join("again"), "").expect("the server is told to print");
+        fs::write(manager.codex_home().join("again"), "").expect("the server is told to print");
         wait_until(
             WAIT,
             || manager.state.codex_remote.log.tail().unwrap_or_default(),
@@ -1420,7 +1411,7 @@ mod tests {
     }
 
     fn tell_to_print(manager: &TestManager) {
-        fs::write(codex_home(manager).join("print"), "").expect("the server is told to print");
+        fs::write(manager.codex_home().join("print"), "").expect("the server is told to print");
     }
 
     /// Serves the control socket like `control`, and turns the relay off and on like Codex.
@@ -1594,7 +1585,7 @@ mod tests {
             ..CodexRemoteSettings::default()
         };
         save(&manager, &cookie, off).await;
-        let home = codex_home(&manager);
+        let home = manager.codex_home();
         wait_until(WAIT, || terms_seen(&home), |terms| *terms == 1).await;
         fake.push(FakeControlServer::status_changed("disabled"));
         let stopped = status_until(&manager, |status| status.state == ServerState::Off).await;
@@ -2271,7 +2262,7 @@ mod tests {
         sign_in(&manager, CHATGPT);
         let supervisor = supervise(&manager);
         let _fake = serve_control(&manager, "connected").await;
-        let grow = codex_home(&manager).join("grow");
+        let grow = manager.codex_home().join("grow");
         wait_until(
             WAIT,
             || fs::metadata(&grow).is_ok_and(|grow| grow.file_type().is_fifo()),
@@ -2461,8 +2452,8 @@ mod tests {
         sign_in(manager, CHATGPT);
         let supervisor = supervise(manager);
         servers_started(manager, 1).await;
-        let updater = daemon_updater(&codex_home(manager), SLEEPS).await;
-        fs::write(codex_home(manager).join("exit"), "").expect("the server is told to fail");
+        let updater = daemon_updater(&manager.codex_home(), SLEEPS).await;
+        fs::write(manager.codex_home().join("exit"), "").expect("the server is told to fail");
         let retrying = status_until(manager, |status| status.state == ServerState::Retrying).await;
         wait_until(
             FIRST_RETRY_DELAY.saturating_add(WAIT),
@@ -2480,7 +2471,7 @@ mod tests {
         sign_in(&manager, CHATGPT);
         let fake = control(&manager, "connected");
         assert_eq!(
-            ForeignServer::on(&ControlSocket::of(&codex_home(&manager))).await,
+            ForeignServer::on(&ControlSocket::of(&manager.codex_home())).await,
             None
         );
 
@@ -2504,7 +2495,7 @@ mod tests {
         let manager = manager(BUDGET);
         install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
         sign_in(&manager, CHATGPT);
-        let mut foreign = ForeignListener::in_home(&codex_home(&manager)).await;
+        let mut foreign = ForeignListener::in_home(&manager.codex_home()).await;
 
         let supervisor = supervise(&manager);
         servers_started(&manager, 1).await;
@@ -2545,7 +2536,7 @@ mod tests {
         let manager = manager(BUDGET);
         install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
         sign_in(&manager, API_KEY);
-        let mut updater = daemon_updater(&codex_home(&manager), SLEEPS).await;
+        let mut updater = daemon_updater(&manager.codex_home(), SLEEPS).await;
         let supervisor = supervise(&manager);
         status_until(&manager, |status| {
             status.problem == Some(CodexProblem::NotChatGpt)
@@ -2569,7 +2560,7 @@ mod tests {
         });
         install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
         sign_in(&manager, CHATGPT);
-        let home = codex_home(&manager);
+        let home = manager.codex_home();
         let _updater = daemon_updater(&home, &counting_terms(3, "")).await;
         let supervisor = supervise(&manager);
         wait_until(WAIT, || terms_seen(&home), |terms| *terms == 1).await;
@@ -2615,7 +2606,7 @@ mod tests {
         for answered in [false, true] {
             let manager = manager(BUDGET);
             let (supervisor, fake) = asking_for_mfa(&manager, |manager| {
-                let fake = FakeControlServer::bind(&codex_home(manager));
+                let fake = FakeControlServer::bind(&manager.codex_home());
                 fake.reply(
                     "remoteControl/status/read",
                     [
@@ -3169,7 +3160,7 @@ mod tests {
 
     /// What the fake Codex recorded in `$CODEX_HOME/order`, in order.
     fn order(manager: &TestManager) -> Vec<String> {
-        fs::read_to_string(codex_home(manager).join("order"))
+        fs::read_to_string(manager.codex_home().join("order"))
             .unwrap_or_default()
             .lines()
             .map(str::to_owned)
@@ -3183,7 +3174,7 @@ mod tests {
 
     /// Ends the waiting `login --device-auth` with `code`.
     fn end_login(manager: &TestManager, code: u8) {
-        fs::write(codex_home(manager).join("login-ends"), code.to_string())
+        fs::write(manager.codex_home().join("login-ends"), code.to_string())
             .expect("the sign-in is told to end");
     }
 
@@ -3280,7 +3271,7 @@ mod tests {
             (with_api_key.state, with_api_key.problem),
             (ServerState::Waiting, Some(CodexProblem::NotChatGpt))
         );
-        let checking = codex_home(&manager).join("checking");
+        let checking = manager.codex_home().join("checking");
 
         start_sign_in(&manager, &cookie).await;
         sign_in(&manager, CHATGPT);
@@ -3343,7 +3334,7 @@ mod tests {
         let manager = manager(BUDGET);
         let cookie = manager.logged_in().await;
         let (supervisor, _fake) = ready_to_sign_in(&manager).await;
-        fs::write(codex_home(&manager).join("no-link"), "").expect("the sign-in is told to fail");
+        fs::write(manager.codex_home().join("no-link"), "").expect("the sign-in is told to fail");
 
         let response = manager.post(LOGIN, "", Some(&cookie)).await;
 
@@ -3365,7 +3356,7 @@ mod tests {
         let manager = manager(BUDGET);
         let cookie = manager.logged_in().await;
         let (supervisor, _fake) = ready_to_sign_in(&manager).await;
-        let checking = codex_home(&manager).join("checking");
+        let checking = manager.codex_home().join("checking");
         fs::write(&checking, "").expect("the sign-in check is held");
 
         let (response, ()) = tokio::join!(manager.post(LOGOUT, "", Some(&cookie)), async {
@@ -3393,14 +3384,14 @@ mod tests {
         let manager = manager(BUDGET);
         let cookie = manager.logged_in().await;
         let (supervisor, _fake) = ready_to_sign_in(&manager).await;
-        let link_waits = codex_home(&manager).join("link-waits");
+        let link_waits = manager.codex_home().join("link-waits");
         fs::write(&link_waits, "").expect("the sign-in is told to wait");
 
         tokio::select! {
             _ = manager.post(LOGIN, "", Some(&cookie)) => panic!("the sign-in answered before its link"),
             order = order_until(&manager, 3) => assert_eq!(order, ["start", "stop", "login"]),
         }
-        fs::write(codex_home(&manager).join("no-link"), "").expect("the sign-in is told to fail");
+        fs::write(manager.codex_home().join("no-link"), "").expect("the sign-in is told to fail");
         fs::remove_file(&link_waits).expect("the sign-in goes on");
 
         wait_until(WAIT, || manager.state.codex_remote.is_held(), |held| !held).await;

@@ -219,10 +219,7 @@ mod tests {
             let (codex, version) = paths
                 .installed_command(Agent::Codex)
                 .expect("a fake codex is installed");
-            let codex_home = paths
-                .config_directory(Agent::Codex)
-                .expect("the test manager has a Codex home")
-                .to_path_buf();
+            let codex_home = manager.codex_home();
             let projects = manager.state.projects.0.clone();
             let log = ServerLog(manager.settings_path.with_file_name("codex-log"));
             for directory in [&codex_home, &projects, &log.0] {

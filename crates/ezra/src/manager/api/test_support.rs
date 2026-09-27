@@ -91,6 +91,14 @@ impl TestManager {
         self
     }
 
+    pub fn codex_home(&self) -> PathBuf {
+        self.state
+            .install_paths
+            .config_directory(Agent::Codex)
+            .expect("the test manager has a Codex home")
+            .to_path_buf()
+    }
+
     /// Makes `script` the agent's command, installed as version 9.9.9 outside the versions
     /// directory. Each run is logged for `fake_cli_runs`. Returns the script's path.
     pub fn install_fake_cli(&self, agent: Agent, script: &str) -> PathBuf {
