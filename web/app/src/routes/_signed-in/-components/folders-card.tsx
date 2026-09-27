@@ -66,7 +66,10 @@ export function FoldersCard() {
     <Card>
       <CardHeader>
         <CardTitle>{FOLDERS_DESCRIPTIONS.title}</CardTitle>
-        <CardDescription>{FOLDERS_DESCRIPTIONS.description}</CardDescription>
+        <CardDescription className="flex flex-col gap-1">
+          <p>{FOLDERS_DESCRIPTIONS.description}</p>
+          {claudeInstalled ? <p>{FOLDERS_DESCRIPTIONS.claude_switches}</p> : null}
+        </CardDescription>
         <CardAction>
           <CloneDialog taken={taken} claudeInstalled={claudeInstalled} />
         </CardAction>

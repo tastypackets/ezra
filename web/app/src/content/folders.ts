@@ -3,6 +3,8 @@ import type { SpawnMode } from "@ezra/client";
 export const FOLDERS_DESCRIPTIONS = {
   title: "Folders",
   description: "An agent started in /projects can also clone and set up repositories.",
+  claude_switches:
+    "The Claude app lists each folder switched on here, so sessions can start right in it.",
   empty: "No projects yet. Clone a repository, or ask an agent started in /projects to.",
   projects: "All projects",
   projects_path: "/projects",

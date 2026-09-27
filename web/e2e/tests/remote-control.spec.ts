@@ -147,9 +147,13 @@ test("Claude Code's parts are hidden until it is installed", async ({
     const row = page.getByRole("listitem").filter({ hasText: folder });
     const more = row.getByRole("button", { name: `More ${folder} actions` });
     const clone = page.getByRole("dialog", { name: "Clone repository" });
+    const switchesNote = page.getByText(
+      "The Claude app lists each folder switched on here, so sessions can start right in it.",
+    );
     await expect(claude).toContainText("Waiting");
     await expect(row).toBeVisible();
     await expect(projectsRow(page)).toBeHidden();
+    await expect(switchesNote).toBeHidden();
     await expect(row.getByRole("group", { name: "Claude Code" })).toBeHidden();
     await more.click();
     await expect(page.getByRole("menuitem", { name: "Delete" })).toBeVisible();
@@ -163,6 +167,7 @@ test("Claude Code's parts are hidden until it is installed", async ({
     installFakeClaude("2.1.0-e2e", CONNECTED);
     await nudgeRemoteControl(request);
     await expect(projectsRow(page).getByText("Running", { exact: true })).toBeVisible();
+    await expect(switchesNote).toBeVisible();
     await expect(
       projectsRow(page).getByText(/^In the Claude app, pick .+ under Remote Control\.$/),
     ).toBeVisible();
