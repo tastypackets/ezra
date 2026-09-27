@@ -2,7 +2,7 @@ import { EditorView } from "@codemirror/view";
 import type { ParseProblem, SettingsFileFormat } from "@ezra/client";
 import { type Ref, useEffect, useEffectEvent, useImperativeHandle, useRef } from "react";
 
-import { editorState, loadFile, markServerVerdict } from "@/lib/code-editor";
+import { editorState, loadFile, markServerVerdict, serverProblemIn } from "@/lib/code-editor";
 
 /** What a parent can do with a mounted editor. */
 export interface CodeEditorHandle {
@@ -17,7 +17,7 @@ interface CodeEditorProps {
   /** What the server said about the text, kept until the text changes: where it stops parsing, with the cursor moved there, or no problem. */
   serverVerdict?: { problem?: ParseProblem };
   onChange: (text: string) => void;
-  /** Called once typing pauses, with where the text stops parsing or `undefined`. */
+  /** Called with where the editor marks the text as not parsing, at the line and column it shows, or `undefined`: once typing pauses, and on each verdict from the server. */
   onProblem: (problem: ParseProblem | undefined) => void;
   "aria-labelledby": string;
   "aria-describedby": string;
@@ -70,6 +70,7 @@ export default function CodeEditor({
     const current = view.current;
     if (current && serverVerdict) {
       current.dispatch(markServerVerdict(current.state, serverVerdict.problem));
+      checked(serverProblemIn(current.state));
     }
   }, [serverVerdict]);
 

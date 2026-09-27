@@ -299,6 +299,16 @@ test.describe("with Claude Code installed", () => {
     expect(bytesOf(CLAUDE_FILE).toString()).toBe("[]");
   });
 
+  test("a problem's column leaves out the BOM the editor hides", async ({ page }) => {
+    writeInContainer(CLAUDE_FILE, '\uFEFF{"a": 1}');
+    const { box, editor } = await openSettings(page, CLAUDE_TITLE);
+    await editor.click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.type(",");
+    await expect(box.getByText("Line 1, column 9: Trailing comma")).toBeVisible();
+  });
+
   test("a change on disk loads by itself and never replaces unsaved text", async ({ page }) => {
     writeInContainer(CLAUDE_FILE, '{"model": "opus"}\n');
     const { box, editor, save, overwrite, revert } = await openSettings(page, CLAUDE_TITLE);
@@ -709,6 +719,20 @@ test.describe("with Codex installed", () => {
     await expect(hint).toBeHidden();
     await expect(editor).not.toHaveAttribute("aria-invalid");
     await expect(save).toBeDisabled();
+  });
+
+  test("the server's column leaves out the BOM the editor hides", async ({ page }) => {
+    writeInContainer(CODEX_FILE, "\uFEFFd = 1979-02-30\n");
+    const { box, editor, save } = await openSettings(page, CODEX_TITLE);
+    await editor.click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type("# x");
+    const refused = savedFile(page);
+    await save.click();
+    expect((await refused).status()).toBe(400);
+    await expect(
+      box.getByText("Line 1, column 5: Invalid date, expected day between 01 and 28"),
+    ).toBeVisible();
   });
 
   test("a config.toml created while editing is not overwritten unasked", async ({ page }) => {

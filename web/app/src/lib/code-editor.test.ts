@@ -11,6 +11,7 @@ import {
   fileOf,
   loadFile,
   markServerVerdict,
+  serverProblemIn,
 } from "./code-editor";
 
 function stateOf(text: string, format: SettingsFileFormat = "json") {
@@ -187,14 +188,14 @@ describe("editorState", () => {
     expect(state.phrase("Control character")).toBe("Hidden character");
   });
 
-  it("checks the whole file and reports where it stops the way the server does", () => {
+  it("checks the whole file and reports where it stops at the column the editor shows", () => {
     const reported: (ParseProblem | undefined)[] = [];
     const check = checkFile("json", (problem) => reported.push(problem));
     expect(check({ state: stateOf('\uFEFF{"a":1,}') })).toEqual([
       expect.objectContaining({ from: 7, message: "Trailing comma" }),
     ]);
     expect(check({ state: stateOf("\uFEFF \n") })).toEqual([]);
-    expect(reported).toEqual([{ line: 1, column: 9, error: "trailing comma" }, undefined]);
+    expect(reported).toEqual([{ line: 1, column: 8, error: "trailing comma" }, undefined]);
   });
 
   it("keeps the server's mark until the text changes", () => {
@@ -207,10 +208,12 @@ describe("editorState", () => {
       error: "invalid date",
     }).state;
     expect(marked.selection.main.head).toBe(4);
+    expect(serverProblemIn(marked)).toEqual({ line: 1, column: 5, error: "invalid date" });
     expect(check({ state: marked })).toEqual([
       expect.objectContaining({ from: 4, message: "Invalid date" }),
     ]);
     expect(check({ state: typed(marked, " ") })).toEqual([]);
+    expect(serverProblemIn(typed(marked, " "))).toBeUndefined();
   });
 
   it("drops the browser's mark on text the server parsed, until the text changes", () => {

@@ -93,7 +93,7 @@ function SettingsFileEditor({
   const [opened, setOpened] = useState(file);
   const [loaded, setLoaded] = useState({ text: file.text });
   const [text, setText] = useState(file.text);
-  const [checked, setChecked] = useState<ParseProblem>();
+  const [marked, setMarked] = useState<ParseProblem>();
   const [judged, setJudged] = useState<{ text: string; problem?: ParseProblem }>();
   const { queryKey } = settingsFileQueryOptions(agent);
   const save = useMutation({
@@ -122,7 +122,7 @@ function SettingsFileEditor({
     setOpened(next);
     setLoaded({ text: next.text });
     setText(next.text);
-    setChecked(undefined);
+    setMarked(undefined);
     setJudged(undefined);
   };
   const dirty = text !== opened.text;
@@ -133,10 +133,9 @@ function SettingsFileEditor({
     load(file);
   }
   const verdict = judged?.text === text ? judged : undefined;
-  const problem = verdict ? verdict.problem : checked;
   const blocked = verdict
     ? Boolean(verdict.problem)
-    : BROWSER_CHECK_BLOCKS_SAVE[file.format] && Boolean(checked);
+    : BROWSER_CHECK_BLOCKS_SAVE[file.format] && Boolean(marked);
   const notice = changedOnDisk
     ? SETTINGS_FILE_DESCRIPTIONS.changed_on_disk(file.path)
     : rereadError
@@ -167,14 +166,14 @@ function SettingsFileEditor({
                 save.reset();
               }
             }}
-            onProblem={setChecked}
+            onProblem={setMarked}
             aria-labelledby={labelledBy}
             aria-describedby={`${describedBy} ${problemId}`}
           />
         </Suspense>
-        {problem ? (
+        {marked ? (
           <FieldError id={problemId}>
-            {SETTINGS_FILE_DESCRIPTIONS.problem({ ...problem, error: capitalized(problem.error) })}
+            {SETTINGS_FILE_DESCRIPTIONS.problem({ ...marked, error: capitalized(marked.error) })}
           </FieldError>
         ) : null}
       </CardContent>

@@ -250,7 +250,7 @@ export function diagnosticsFor(problem: TextProblem | undefined): Diagnostic[] {
     : [];
 }
 
-/** Checks the file as `format`, leaving the server's verdict in place while the text is as sent. */
+/** Checks the file as `format`, reporting a problem at the line and column the editor shows, and leaving the server's verdict in place while the text is as sent. */
 export function checkFile(
   format: SettingsFileFormat,
   onProblem: (problem: ParseProblem | undefined) => void,
@@ -260,11 +260,17 @@ export function checkFile(
     if (verdict !== undefined) {
       return diagnosticsFor(verdict ?? undefined);
     }
-    const file = state.toText(fileOf(state));
-    const problem = FIND_PROBLEM[format](file);
-    onProblem(problem && parseProblemAt(file, problem));
-    return diagnosticsFor(problem && inEditor(state, problem));
+    const found = FIND_PROBLEM[format](state.toText(fileOf(state)));
+    const problem = found && inEditor(state, found);
+    onProblem(problem && parseProblemAt(state.doc, problem));
+    return diagnosticsFor(problem);
   };
+}
+
+/** Where the server said the text stops parsing, at the line and column the editor shows. */
+export function serverProblemIn(state: EditorState): ParseProblem | undefined {
+  const verdict = state.field(SERVER_VERDICT);
+  return verdict ? parseProblemAt(state.doc, verdict) : undefined;
 }
 
 /** Marks where the server said the text stops parsing and moves the cursor there, or clears the mark when it parsed. */
