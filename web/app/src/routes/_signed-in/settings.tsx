@@ -4,6 +4,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
 import { managerQueryOptions } from "@/queries/manager-queries";
+import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { getClaudeSettingsOptions, getCodexSettingsOptions } from "@ezra/client/react-query.gen";
 
 import { ClaudeSettingsCard } from "./-components/claude-settings-card";
@@ -20,6 +21,7 @@ export const Route = createFileRoute("/_signed-in/settings")({
       context.queryClient.ensureQueryData(getCodexSettingsOptions()),
       context.queryClient.ensureQueryData(gitStatusQueryOptions),
       context.queryClient.ensureQueryData(managerQueryOptions),
+      context.queryClient.ensureQueryData(remoteControlQueryOptions),
     ]);
   },
   component: SettingsPage,

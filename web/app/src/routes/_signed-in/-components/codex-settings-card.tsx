@@ -25,6 +25,7 @@ import {
   SETTINGS_DESCRIPTIONS,
 } from "@/content/settings";
 import { errorMessage } from "@/lib/utils";
+import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { RadioChoice } from "./radio-choice";
 
@@ -41,6 +42,10 @@ export function CodexSettingsCard() {
     approvalsHint: useId(),
   };
   const { data: settings } = useSuspenseQuery(getCodexSettingsOptions());
+  const { data: pickerBlocked } = useSuspenseQuery({
+    ...remoteControlQueryOptions,
+    select: (overview) => overview.codex.folder_picker === "blocked",
+  });
   const save = useMutation({
     ...updateCodexSettingsMutation(),
     onSuccess: (saved) => {
@@ -103,7 +108,9 @@ export function CodexSettingsCard() {
                     {SETTINGS_DESCRIPTIONS.codex_sandbox}
                   </FieldLegend>
                   <FieldDescription id={ids.sandboxHint}>
-                    {SETTINGS_DESCRIPTIONS.codex_sandbox_hint}
+                    {pickerBlocked
+                      ? SETTINGS_DESCRIPTIONS.codex_sandbox_blocked_hint
+                      : SETTINGS_DESCRIPTIONS.codex_sandbox_hint}
                   </FieldDescription>
                   <RadioGroup
                     aria-labelledby={ids.sandbox}

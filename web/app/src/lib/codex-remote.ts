@@ -56,6 +56,11 @@ export function codexRemoteView(
   return { label: stateLabel(status), note };
 }
 
+/** Whether a phone can pair: Codex runs and is connected to ChatGPT. */
+export function codexPairable({ state, relay }: CodexRemoteStatus): boolean {
+  return state === "running" && relay === "connected";
+}
+
 function stateLabel({ state, relay, usage }: CodexRemoteStatus): string {
   if (state !== "running" || !relay) {
     return SERVER_STATES[state];

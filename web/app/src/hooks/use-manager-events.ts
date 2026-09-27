@@ -1,10 +1,6 @@
 import { streamEvents } from "@ezra/client";
 import type { Topic } from "@ezra/client";
-import {
-  getClaudeSettingsOptions,
-  getCodexSettingsOptions,
-  listCodexPhonesOptions,
-} from "@ezra/client/react-query.gen";
+import { getClaudeSettingsOptions, getCodexSettingsOptions } from "@ezra/client/react-query.gen";
 import type { QueryKey } from "@tanstack/react-query";
 import { useEffect } from "react";
 
@@ -13,7 +9,10 @@ import { agentsQueryOptions } from "@/queries/agent-queries";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 import { gitHubRepositoriesQueryOptions, gitStatusQueryOptions } from "@/queries/git-queries";
 import { managerQueryOptions } from "@/queries/manager-queries";
-import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
+import {
+  codexPhonesQueryOptions,
+  remoteControlQueryOptions,
+} from "@/queries/remote-control-queries";
 
 /** First wait before reconnecting, doubled after each attempt that gets no event. */
 const FIRST_RECONNECT_DELAY_MS = 1_000;
@@ -23,7 +22,7 @@ const TOPIC_QUERIES: Record<Topic, readonly QueryKey[]> = {
   agents: [agentsQueryOptions.queryKey],
   claude_settings: [getClaudeSettingsOptions().queryKey],
   codex_settings: [getCodexSettingsOptions().queryKey],
-  codex_phones: [listCodexPhonesOptions().queryKey],
+  codex_phones: [codexPhonesQueryOptions.queryKey],
   folders: [foldersQueryOptions.queryKey],
   clones: [clonesQueryOptions.queryKey],
   remote_control: [remoteControlQueryOptions.queryKey],

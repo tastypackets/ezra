@@ -3,7 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { CODEX_PROBLEM_LABELS } from "@/content/remote-control";
 
-import { codexRemoteView } from "./codex-remote";
+import { codexPairable, codexRemoteView } from "./codex-remote";
 import type { CodexFix, RemoteView } from "./codex-remote";
 import { formatDateTime } from "./utils";
 
@@ -217,6 +217,20 @@ describe("codexRemoteView", () => {
               expect(shown.note?.text).not.toBe(shown.label);
             }
           }
+        }
+      }
+    }
+  });
+});
+
+describe("codexPairable", () => {
+  it("pairs only while Codex runs connected to ChatGPT", () => {
+    for (const state of STATES) {
+      for (const relay of [...RELAYS, undefined]) {
+        for (const problem of [...PROBLEMS, undefined]) {
+          expect(codexPairable(status({ state, relay, problem }))).toBe(
+            state === "running" && relay === "connected",
+          );
         }
       }
     }

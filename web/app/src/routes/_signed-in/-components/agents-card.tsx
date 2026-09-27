@@ -5,6 +5,7 @@ import { EllipsisIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
 import { useCallback, useId, useRef, useState } from "react";
 
+import { Waiting } from "@/components/sign-in-steps";
 import { Badge } from "@/components/ui/badge";
 import type { BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,18 +26,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
+import { PAIRING_DESCRIPTIONS } from "@/content/pairing";
 import { REMOTE_CONTROL_DESCRIPTIONS } from "@/content/remote-control";
 import {
   useAgentActionError,
   useAgentActionPending,
   useAgentActions,
 } from "@/hooks/use-agent-actions";
-import { useCodexActions } from "@/hooks/use-codex-actions";
+import { useCodexActions, useCodexPairing } from "@/hooks/use-codex-actions";
 import { useNow } from "@/hooks/use-now";
 import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
 import type { AgentStep } from "@/lib/agent-steps";
-import { codexRemoteView } from "@/lib/codex-remote";
-import type { CodexFix, RemoteView } from "@/lib/codex-remote";
+import { codexPairable, codexRemoteView } from "@/lib/codex-remote";
+import type { RemoteView } from "@/lib/codex-remote";
 import { handOffFocus } from "@/lib/focus";
 import { remoteControlSummary } from "@/lib/remote-control";
 import { signInEnd } from "@/lib/sign-in";
@@ -44,6 +46,8 @@ import type { SignInEnd } from "@/lib/sign-in";
 import { downloadPercent, formatDateTime } from "@/lib/utils";
 
 import { CodexSignInDialog } from "./codex-sign-in-dialog";
+import { PairPhoneDialog } from "./pair-phone-dialog";
+import { PairedPhonesDialog } from "./paired-phones-dialog";
 import { ServerLogDialog } from "./server-log-dialog";
 
 /** How often the sign-in warning is checked against the clock. */
@@ -60,11 +64,14 @@ interface AgentProps {
   end: SignInEnd | undefined;
   /** The agent's Remote cell. */
   remote: RemoteView;
+  /** Whether a phone can pair with Codex. */
+  pairable: boolean;
 }
 
 /** Every agent with its install and sign-in actions: a table on wide screens, a list on phones. */
 export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
   const now = useNow(CLOCK_MS);
+  const pairable = codexPairable(remoteControl.codex);
   const remote = (status: AgentStatus): RemoteView =>
     status.agent === "claude"
       ? { label: remoteControlSummary(remoteControl) }
@@ -100,6 +107,7 @@ export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
                 status={status}
                 end={signInEnd(status, now)}
                 remote={remote(status)}
+                pairable={pairable}
               />
             ))}
           </TableBody>
@@ -113,6 +121,7 @@ export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
               status={status}
               end={signInEnd(status, now)}
               remote={remote(status)}
+              pairable={pairable}
             />
           ))}
         </ul>
@@ -121,7 +130,7 @@ export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
   );
 }
 
-function AgentRow({ status, end, remote }: AgentProps) {
+function AgentRow({ status, end, remote, pairable }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status, end);
@@ -147,7 +156,8 @@ function AgentRow({ status, end, remote }: AgentProps) {
           status={status}
           nameId={nameId}
           ending={Boolean(end)}
-          fix={remote.fix}
+          remote={remote}
+          pairable={pairable}
           className="items-end"
         />
       </TableCell>
@@ -155,7 +165,7 @@ function AgentRow({ status, end, remote }: AgentProps) {
   );
 }
 
-function AgentListItem({ status, end, remote }: AgentProps) {
+function AgentListItem({ status, end, remote, pairable }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status, end);
@@ -190,7 +200,8 @@ function AgentListItem({ status, end, remote }: AgentProps) {
         status={status}
         nameId={nameId}
         ending={Boolean(end)}
-        fix={remote.fix}
+        remote={remote}
+        pairable={pairable}
         className="items-start"
       />
     </li>
@@ -244,18 +255,22 @@ function AgentActions({
   status,
   nameId,
   ending,
-  fix,
+  remote,
+  pairable,
   className,
 }: {
   status: AgentStatus;
   nameId: string;
   ending: boolean;
-  fix: CodexFix | undefined;
+  remote: RemoteView;
+  pairable: boolean;
   className: string;
 }) {
   const { install, startSignIn, signOut } = useAgentActions(status.agent);
   const codex = useCodexActions();
+  const pairing = useCodexPairing();
   const [logOpen, setLogOpen] = useState(false);
+  const [phonesOpen, setPhonesOpen] = useState(false);
   const installPending = useAgentActionPending(status.agent, "install");
   const signInPending = useAgentActionPending(status.agent, "start_sign_in");
   const signOutPending = useAgentActionPending(status.agent, "sign_out");
@@ -268,7 +283,7 @@ function AgentActions({
   const name = AGENT_NAMES[status.agent];
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
-  const step = nextAgentStep(status, installing, ending, fix);
+  const step = nextAgentStep(status, installing, ending, remote.fix);
   const failure = useAgentActionError(
     status.agent,
     step === "try_again" ? undefined : "retry_remote_control",
@@ -345,9 +360,20 @@ function AgentActions({
                 </DropdownMenuItem>
               ) : null}
               {status.agent === "codex" ? (
-                <DropdownMenuItem onClick={() => setLogOpen(true)}>
-                  {REMOTE_CONTROL_DESCRIPTIONS.show_log}
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuItem
+                    disabled={pairing.start.isPending}
+                    onClick={() => void pairing.pairPhone(remote, pairable)}
+                  >
+                    {PAIRING_DESCRIPTIONS.pair}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setPhonesOpen(true)}>
+                    {PAIRING_DESCRIPTIONS.phones}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setLogOpen(true)}>
+                    {REMOTE_CONTROL_DESCRIPTIONS.show_log}
+                  </DropdownMenuItem>
+                </>
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -360,6 +386,11 @@ function AgentActions({
       ) : null}
       {status.agent === "codex" ? (
         <>
+          <div role="status" className="empty:sr-only">
+            {pairing.start.isPending && !pairing.open ? (
+              <Waiting label={PAIRING_DESCRIPTIONS.getting_code} />
+            ) : null}
+          </div>
           <CodexSignInDialog
             open={codex.confirmingSignIn}
             onOpenChange={codex.setConfirmingSignIn}
@@ -371,6 +402,8 @@ function AgentActions({
             open={logOpen}
             onOpenChange={setLogOpen}
           />
+          <PairPhoneDialog flow={pairing} />
+          <PairedPhonesDialog open={phonesOpen} onOpenChange={setPhonesOpen} />
         </>
       ) : null}
     </div>
