@@ -1,4 +1,10 @@
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  invertedEffects,
+  isolateHistory,
+} from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import {
   bracketMatching,
@@ -18,12 +24,15 @@ import {
   setDiagnostics,
 } from "@codemirror/lint";
 import {
+  Compartment,
   EditorState,
   type Extension,
   Facet,
   StateEffect,
   StateField,
+  Text,
   type Transaction,
+  type TransactionSpec,
 } from "@codemirror/state";
 import {
   drawSelection,
@@ -121,6 +130,94 @@ const LANGUAGES: Record<SettingsFileFormat, Extension> = {
 /** The file's leading BOM, which the text in the editor leaves out. */
 const KEPT_PREFIX = Facet.define<string, string>({ combine: (prefixes) => prefixes[0] ?? "" });
 
+/** What the file keeps around the text in the editor: its leading BOM, line break and indent. */
+interface FileShape {
+  prefix: string;
+  lineBreak: string;
+  indent: string;
+}
+
+const SHAPE = new Compartment();
+
+const reshaped = StateEffect.define();
+
+function shapeOf(text: string): FileShape {
+  return {
+    prefix: text.startsWith(BOM) ? BOM : "",
+    lineBreak: lineBreakOf(text),
+    indent: /^\t/m.test(text) ? "\t" : "  ",
+  };
+}
+
+function shapeIn(state: EditorState): FileShape {
+  return {
+    prefix: state.facet(KEPT_PREFIX),
+    lineBreak: state.lineBreak,
+    indent: state.facet(indentUnit),
+  };
+}
+
+function shapeExtension({ prefix, lineBreak, indent }: FileShape): Extension {
+  return [KEPT_PREFIX.of(prefix), EditorState.lineSeparator.of(lineBreak), indentUnit.of(indent)];
+}
+
+function reshape(shape: FileShape): StateEffect<unknown>[] {
+  return [reshaped.of(null), SHAPE.reconfigure(shapeExtension(shape))];
+}
+
+/** True when `transaction` gave the file another BOM, line break or indent. */
+function reshapes(transaction: Transaction): boolean {
+  return transaction.effects.some((effect) => effect.is(reshaped));
+}
+
+/** How many UTF-16 units `before` and `after` share at their start, not splitting a character. */
+function sharedStart(before: string, after: string): number {
+  const shorter = Math.min(before.length, after.length);
+  let shared = 0;
+  while (shared < shorter && before.charCodeAt(shared) === after.charCodeAt(shared)) {
+    shared += 1;
+  }
+  return shared > 0 && /[\uD800-\uDBFF]/.test(before.charAt(shared - 1)) ? shared - 1 : shared;
+}
+
+/** How many UTF-16 units `before` and `after` share at their end, not splitting a character or overlapping `start`. */
+function sharedEnd(before: string, after: string, start: number): number {
+  const shorter = Math.min(before.length, after.length) - start;
+  let shared = 0;
+  while (
+    shared < shorter &&
+    before.charCodeAt(before.length - 1 - shared) === after.charCodeAt(after.length - 1 - shared)
+  ) {
+    shared += 1;
+  }
+  return shared > 0 && /[\uDC00-\uDFFF]/.test(before.charAt(before.length - shared))
+    ? shared - 1
+    : shared;
+}
+
+/** Replaces the file in the editor with `text` as one undoable change to what differs, `undefined` when nothing does. */
+export function loadFile(state: EditorState, text: string): TransactionSpec | undefined {
+  const shape = shapeOf(text);
+  const current = shapeIn(state);
+  const sameShape =
+    shape.prefix === current.prefix &&
+    shape.lineBreak === current.lineBreak &&
+    shape.indent === current.indent;
+  const doc = Text.of(text.slice(shape.prefix.length).split(shape.lineBreak));
+  const before = state.doc.toString();
+  const after = doc.toString();
+  const start = sharedStart(before, after);
+  const end = sharedEnd(before, after, start);
+  if (sameShape && start === before.length && start === after.length) {
+    return undefined;
+  }
+  return {
+    changes: { from: start, to: before.length - end, insert: doc.slice(start, after.length - end) },
+    effects: sameShape ? [] : reshape(shape),
+    annotations: isolateHistory.of("full"),
+  };
+}
+
 const setServerVerdict = StateEffect.define<TextProblem | null>();
 
 /** Where the server said the text in the editor stops parsing, `null` when it parsed, until the text changes. */
@@ -132,7 +229,7 @@ const SERVER_VERDICT = StateField.define<TextProblem | null | undefined>({
         return effect.value;
       }
     }
-    return transaction.docChanged ? undefined : verdict;
+    return transaction.docChanged || reshapes(transaction) ? undefined : verdict;
   },
 });
 
@@ -200,26 +297,30 @@ export function editorState({
   onChange: (text: string) => void;
   onProblem: (problem: ParseProblem | undefined) => void;
 }): EditorState {
-  const prefix = text.startsWith(BOM) ? BOM : "";
+  const shape = shapeOf(text);
   return EditorState.create({
-    doc: text.slice(prefix.length),
+    doc: text.slice(shape.prefix.length),
     extensions: [
       SETUP,
       LANGUAGES[format],
-      KEPT_PREFIX.of(prefix),
+      SHAPE.of(shapeExtension(shape)),
+      invertedEffects.of((transaction) =>
+        reshapes(transaction) ? reshape(shapeIn(transaction.startState)) : [],
+      ),
       SERVER_VERDICT,
-      EditorState.lineSeparator.of(lineBreakOf(text)),
-      indentUnit.of(/^\t/m.test(text) ? "\t" : "  "),
       EditorView.clipboardInputFilter.of((input, state) =>
         input.replace(/\r\n?|\n/g, state.lineBreak),
       ),
-      linter(checkFile(format, onProblem), { delay: CHECK_DELAY_MS }),
+      linter(checkFile(format, onProblem), {
+        delay: CHECK_DELAY_MS,
+        needsRefresh: (update) => update.transactions.some(reshapes),
+      }),
       EditorView.contentAttributes.of(attributes),
       EditorView.contentAttributes.of(({ state }) =>
         diagnosticCount(state) ? { "aria-invalid": "true" } : null,
       ),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
+        if (update.docChanged || update.transactions.some(reshapes)) {
           onChange(fileOf(update.state));
         }
       }),

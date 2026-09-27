@@ -91,9 +91,7 @@ function SettingsFileEditor({
   const editor = useRef<CodeEditorHandle>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
   const [opened, setOpened] = useState(file);
-  const [edition, setEdition] = useState(0);
-  const [editorFocused, setEditorFocused] = useState(false);
-  const [focusOnLoad, setFocusOnLoad] = useState(false);
+  const [loaded, setLoaded] = useState({ text: file.text });
   const [text, setText] = useState(file.text);
   const [checked, setChecked] = useState<ParseProblem>();
   const [judged, setJudged] = useState<{ text: string; problem?: ParseProblem }>();
@@ -120,20 +118,19 @@ function SettingsFileEditor({
     },
   });
 
-  const load = (next: SettingsFileText, focus: boolean) => {
+  const load = (next: SettingsFileText) => {
     setOpened(next);
+    setLoaded({ text: next.text });
     setText(next.text);
     setChecked(undefined);
     setJudged(undefined);
-    setFocusOnLoad(focus);
-    setEdition(edition + 1);
   };
   const dirty = text !== opened.text;
   const changedOnDisk = !save.isPending && file.version !== opened.version;
   if (changedOnDisk && text === file.text) {
     setOpened(file);
   } else if (changedOnDisk && !dirty) {
-    load(file, editorFocused);
+    load(file);
   }
   const verdict = judged?.text === text ? judged : undefined;
   const problem = verdict ? verdict.problem : checked;
@@ -151,34 +148,30 @@ function SettingsFileEditor({
   return (
     <>
       <CardContent className="flex flex-col gap-2">
-        <div onFocus={() => setEditorFocused(true)} onBlur={() => setEditorFocused(false)}>
-          <Suspense
-            fallback={
-              <div className="flex justify-center py-8 text-muted-foreground">
-                <Spinner className="size-6" />
-              </div>
-            }
-          >
-            <CodeEditor
-              key={edition}
-              ref={editor}
-              format={file.format}
-              initialText={opened.text}
-              autoFocus={focusOnLoad}
-              serverVerdict={verdict}
-              onChange={(next) => {
-                setText(next);
-                setJudged(undefined);
-                if (save.isError) {
-                  save.reset();
-                }
-              }}
-              onProblem={setChecked}
-              aria-labelledby={labelledBy}
-              aria-describedby={`${describedBy} ${problemId}`}
-            />
-          </Suspense>
-        </div>
+        <Suspense
+          fallback={
+            <div className="flex justify-center py-8 text-muted-foreground">
+              <Spinner className="size-6" />
+            </div>
+          }
+        >
+          <CodeEditor
+            ref={editor}
+            format={file.format}
+            loaded={loaded}
+            serverVerdict={verdict}
+            onChange={(next) => {
+              setText(next);
+              setJudged(undefined);
+              if (save.isError) {
+                save.reset();
+              }
+            }}
+            onProblem={setChecked}
+            aria-labelledby={labelledBy}
+            aria-describedby={`${describedBy} ${problemId}`}
+          />
+        </Suspense>
         {problem ? (
           <FieldError id={problemId}>
             {SETTINGS_FILE_DESCRIPTIONS.problem({ ...problem, error: capitalized(problem.error) })}
@@ -195,7 +188,8 @@ function SettingsFileEditor({
             disabled={!dirty || save.isPending}
             onClick={() => {
               save.reset();
-              load(file, true);
+              load(file);
+              editor.current?.focus();
             }}
           >
             {SETTINGS_FILE_DESCRIPTIONS.revert}

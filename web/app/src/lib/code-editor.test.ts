@@ -1,10 +1,17 @@
-import { insertNewlineAndIndent, undo } from "@codemirror/commands";
+import { insertNewlineAndIndent, redo, undo } from "@codemirror/commands";
 import { EditorSelection, EditorState, type StateCommand } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import type { ParseProblem, SettingsFileFormat } from "@ezra/client";
 import { describe, expect, it } from "vitest";
 
-import { checkFile, diagnosticsFor, editorState, fileOf, markServerVerdict } from "./code-editor";
+import {
+  checkFile,
+  diagnosticsFor,
+  editorState,
+  fileOf,
+  loadFile,
+  markServerVerdict,
+} from "./code-editor";
 
 function stateOf(text: string, format: SettingsFileFormat = "json") {
   return editorState({
@@ -33,6 +40,12 @@ function cursorAt(state: EditorState, at: number) {
 
 function typed(state: EditorState, text: string) {
   return state.update(state.replaceSelection(text)).state;
+}
+
+function loaded(state: EditorState, text: string) {
+  const load = loadFile(state, text);
+  expect(load).toBeDefined();
+  return state.update(load ?? {}).state;
 }
 
 function pasted(state: EditorState, text: string) {
@@ -116,6 +129,44 @@ describe("editorState", () => {
     expect(pasted(stateOf("{\r\n}"), "a\r\nb\nc\rd")).toBe("a\r\nb\r\nc\r\nd");
     expect(pasted(stateOf("{\n}"), "a\r\nb\nc\rd")).toBe("a\nb\nc\nd");
     expect(pasted(stateOf("a = 1\r\n", "toml"), "b = 2\n")).toBe("b = 2\r\n");
+  });
+
+  it("loads new text as one change undo and redo reverse, with its BOM and line breaks", () => {
+    const opened = stateOf('\uFEFF{\r\n\t"a": 1\r\n}\r\n');
+    const edited = typed(cursorAt(opened, opened.doc.length), "x");
+    const disk = '{\n  "a": 1,\n  "b": 2\n}\n';
+    const reloaded = loaded(edited, disk);
+    expect(fileOf(reloaded)).toBe(disk);
+    expect(fileOf(run(cursorAt(reloaded, 1), insertNewlineAndIndent))).toBe(
+      `{\n  ${disk.slice(1)}`,
+    );
+    const undone = run(reloaded, undo);
+    expect(fileOf(undone)).toBe('\uFEFF{\r\n\t"a": 1\r\n}\r\nx');
+    expect(undone.selection.main.head).toBe(edited.selection.main.head);
+    expect(fileOf(run(cursorAt(undone, 1), insertNewlineAndIndent))).toBe(
+      '\uFEFF{\r\n\t\r\n\t"a": 1\r\n}\r\nx',
+    );
+    expect(fileOf(run(undone, redo))).toBe(disk);
+    expect(fileOf(run(run(run(undone, redo), undo), undo))).toBe('\uFEFF{\r\n\t"a": 1\r\n}\r\n');
+  });
+
+  it("changes only what differs, so the cursor stays with its text", () => {
+    const text = '{\n  "a": 1,\n  "z": 26\n}\n';
+    const opened = cursorAt(stateOf(text), text.indexOf("26"));
+    const added = loaded(opened, '{\n  "new": true,\n  "a": 1,\n  "z": 26\n}\n');
+    expect(added.sliceDoc(added.selection.main.head, added.selection.main.head + 2)).toBe("26");
+    const emoji = stateOf('{"a": "\u{1F600}"}');
+    expect(fileOf(loaded(emoji, '{"a": "\u{1F601}"}'))).toBe('{"a": "\u{1F601}"}');
+    expect(loadFile(opened, text)).toBeUndefined();
+  });
+
+  it("loads a file that differs only in its BOM or line breaks", () => {
+    const opened = stateOf("\uFEFF{\r\n}\r\n");
+    const reshaped = opened.update(loadFile(opened, "{\n}\n") ?? {});
+    expect(reshaped.docChanged).toBe(false);
+    expect(reshaped.reconfigured).toBe(true);
+    expect(fileOf(reshaped.state)).toBe("{\n}\n");
+    expect(fileOf(run(reshaped.state, undo))).toBe("\uFEFF{\r\n}\r\n");
   });
 
   it("leaves Tab to move focus and binds the error list", () => {

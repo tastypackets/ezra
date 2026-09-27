@@ -221,6 +221,18 @@ test.describe("with Claude Code installed", () => {
 
     await page.reload();
     await expect(editor).toContainText('"deny": []');
+
+    writeLikeClaude(CLAUDE_FILE, '{\n\t"model": "opus"\n}\n');
+    await expect(editor).not.toContainText('"deny"', { timeout: 10_000 });
+    await editor.click();
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type('"effort": "low",');
+    const resaved = savedFile(page);
+    await save.click();
+    expect((await resaved).status()).toBe(200);
+    expect(bytesOf(CLAUDE_FILE).toString()).toBe('{\n\t"effort": "low",\n\t"model": "opus"\n}\n');
   });
 
   test("a missing settings.json reads as empty and Save creates it", async ({ page }) => {
@@ -314,6 +326,14 @@ test.describe("with Claude Code installed", () => {
     await expect(box.getByText(CHANGED(CLAUDE_FILE))).toHaveCount(0);
     await expect(save).toBeDisabled();
 
+    await page.keyboard.press("Control+Z");
+    await expect(editor).toHaveText('{"mine": 1}');
+    await expect(save).toBeEnabled();
+    await expect(box.getByText(CHANGED(CLAUDE_FILE))).toHaveCount(0);
+    await page.keyboard.press("Control+Y");
+    await expect(editor).toContainText('"model": "haiku"');
+    await expect(save).toBeDisabled();
+
     await page.keyboard.press("Control+A");
     await page.keyboard.type('{"mine": true}');
     writeLikeClaude(CLAUDE_FILE, "{}\n");
@@ -322,6 +342,30 @@ test.describe("with Claude Code installed", () => {
     await expect(page.getByText(`${CLAUDE_FILE} saved.`).last()).toBeVisible();
     await expect(box.getByText(CHANGED(CLAUDE_FILE))).toHaveCount(0);
     expect(bytesOf(CLAUDE_FILE).toString()).toBe('{"mine": true}');
+  });
+
+  test("a change on disk keeps the cursor and scroll where they were", async ({ page }) => {
+    const keys = Array.from({ length: 60 }, (_, index) => `  "key${index}": ${index},`);
+    const opened = `{\n${keys.join("\n")}\n  "last": true\n}\n`;
+    writeInContainer(CLAUDE_FILE, opened);
+    const { box, editor } = await openSettings(page, CLAUDE_TITLE);
+    await editor.click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    const cursorLine = editor.locator(".cm-activeLine");
+    const cursorLineNumber = box.locator(".cm-lineNumbers .cm-activeLineGutter");
+    await expect(cursorLine).toHaveText(/"last": true/);
+    await expect(cursorLineNumber).toHaveText("62");
+    const scrollTop = () => editor.evaluate((content) => content.parentElement?.scrollTop ?? 0);
+    const scrolled = await scrollTop();
+    expect(scrolled).toBeGreaterThan(0);
+
+    writeLikeClaude(CLAUDE_FILE, opened.replace("{\n", '{\n  "added": 1,\n'));
+    await expect(cursorLineNumber).toHaveText("63", { timeout: 10_000 });
+    await expect(cursorLine).toHaveText(/"last": true/);
+    await expect(editor).toBeFocused();
+    expect(await scrollTop()).toBeGreaterThanOrEqual(scrolled);
   });
 
   test("a save over a file deleted meanwhile is refused, then offered again", async ({ page }) => {
