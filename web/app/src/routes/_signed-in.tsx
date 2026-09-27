@@ -1,5 +1,6 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
+import { useCodexPairingClaim } from "@/hooks/use-codex-actions";
 import { useManagerEvents } from "@/hooks/use-manager-events";
 import { sessionQueryOptions } from "@/queries/session-queries";
 
@@ -19,5 +20,6 @@ export const Route = createFileRoute("/_signed-in")({
 function SignedInLayout() {
   const { initialRevision } = Route.useRouteContext();
   useManagerEvents(initialRevision);
+  useCodexPairingClaim();
   return <Outlet />;
 }

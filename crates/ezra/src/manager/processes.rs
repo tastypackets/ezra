@@ -1,21 +1,34 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use nix::sys::resource::{Resource, getrlimit, rlim_t, setrlimit};
+use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
+use tokio::time::{Instant, sleep};
 
 const DELETED_SUFFIX: &str = " (deleted)";
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// A process as /proc describes it.
 pub struct Process(PathBuf);
 
 pub struct ProcessStat {
     pub parent: Pid,
+    /// The pid of the process that started its session.
+    pub session: Pid,
     /// Exited and waiting for its parent to collect it.
     pub zombie: bool,
+    /// When it started, in clock ticks after boot.
+    pub started: u64,
 }
 
 impl Process {
+    pub fn with_id(id: Pid) -> Self {
+        Self(PathBuf::from(format!("/proc/{id}")))
+    }
+
     pub fn all() -> impl Iterator<Item = Self> {
         fs::read_dir("/proc")
             .into_iter()
@@ -35,33 +48,6 @@ impl Process {
         Some(Pid::from_raw(id))
     }
 
-    /// `leader` and the processes it started, also those in process groups of their own.
-    pub fn family_of(leader: Pid) -> Vec<(Self, ProcessStat)> {
-        let mut children: HashMap<Pid, Vec<(Self, ProcessStat)>> = HashMap::new();
-        let mut family = Vec::new();
-        for process in Self::all() {
-            let (Some(id), Some(stat)) = (process.id(), process.stat()) else {
-                continue;
-            };
-            if id == leader {
-                family.push((process, stat));
-            } else {
-                children
-                    .entry(stat.parent)
-                    .or_default()
-                    .push((process, stat));
-            }
-        }
-        let mut next = 0;
-        while let Some((process, _)) = family.get(next) {
-            if let Some(started) = process.id().and_then(|id| children.remove(&id)) {
-                family.extend(started);
-            }
-            next = next.saturating_add(1);
-        }
-        family
-    }
-
     /// The program and its arguments.
     pub fn arguments(&self) -> Vec<String> {
         fs::read(self.0.join("cmdline"))
@@ -78,9 +64,13 @@ impl Process {
         let mut fields = after_name.split_whitespace();
         let zombie = fields.next()? == "Z";
         let parent = fields.next()?.parse().ok()?;
+        let session = fields.nth(1)?.parse().ok()?;
+        let started = fields.nth(15)?.parse().ok()?;
         Some(ProcessStat {
             parent: Pid::from_raw(parent),
+            session: Pid::from_raw(session),
             zombie,
+            started,
         })
     }
 
@@ -107,13 +97,24 @@ impl Process {
         ))
     }
 
+    /// The running processes whose executable lies inside `directory`, each with the
+    /// executable's path in there.
+    pub fn running_inside(directory: &Path) -> impl Iterator<Item = (Self, PathBuf)> + use<> {
+        let directory = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+        Self::all().filter_map(move |process| {
+            let inside = process
+                .executable()?
+                .strip_prefix(&directory)
+                .ok()?
+                .to_path_buf();
+            Some((process, inside))
+        })
+    }
+
     /// Names of the entries in `directory` that a running process executes from.
     pub fn running_from(directory: &Path) -> Vec<String> {
-        let directory = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
-        Self::all()
-            .filter_map(|process| process.executable())
-            .filter_map(|executable| {
-                let inside = executable.strip_prefix(&directory).ok()?;
+        Self::running_inside(directory)
+            .filter_map(|(_, inside)| {
                 let first = inside.components().next()?;
                 Some(first.as_os_str().to_string_lossy().into_owned())
             })
@@ -122,18 +123,305 @@ impl Process {
 }
 
 #[cfg(test)]
+impl Process {
+    /// Exists and has not exited.
+    pub fn is_running(&self) -> bool {
+        self.stat().is_some_and(|stat| !stat.zombie)
+    }
+}
+
+/// A process and the processes it started, also those in process groups or sessions of their own,
+/// as they were when read.
+pub struct ProcessFamily {
+    leader: Pid,
+    members: Vec<(Process, ProcessStat)>,
+    /// The members that started a session, also after they exited while their session lives on.
+    sessions: Vec<ProcessIdentity>,
+}
+
+impl ProcessFamily {
+    /// Reads /proc, so it blocks.
+    pub fn of(leader: Pid) -> Self {
+        let mut family = Self {
+            leader,
+            members: Vec::new(),
+            sessions: Vec::new(),
+        };
+        family.read(|id, _| id == leader);
+        family
+    }
+
+    /// Reads /proc again, keeping the members still running, also those whose parent exited, and
+    /// adding what they and their sessions started since. Blocks.
+    pub fn read_again(&mut self) {
+        let earlier: HashSet<ProcessIdentity> = self.identities().collect();
+        self.read(|id, stat| {
+            earlier.contains(&ProcessIdentity {
+                id,
+                started: stat.started,
+            })
+        });
+    }
+
+    /// Reads /proc with the processes `is_root` picks as the first members, the leader first.
+    fn read(&mut self, is_root: impl Fn(Pid, &ProcessStat) -> bool) {
+        let running: Vec<(Process, ProcessStat)> = Process::all()
+            .filter_map(|process| {
+                let stat = process.stat()?;
+                Some((process, stat))
+            })
+            .collect();
+        let started: HashMap<Pid, u64> = running
+            .iter()
+            .filter_map(|(process, stat)| Some((process.id()?, stat.started)))
+            .collect();
+        self.sessions.retain(|leader| {
+            started
+                .get(&leader.id)
+                .is_none_or(|started| *started == leader.started)
+        });
+        let (mut members, mut others): (Vec<_>, Vec<_>) = running
+            .into_iter()
+            .partition(|(process, stat)| process.id().is_some_and(|id| is_root(id, stat)));
+        members.sort_by_key(|(process, _)| process.id() != Some(self.leader));
+        loop {
+            for (process, stat) in &members {
+                let leads = process.id() == Some(stat.session);
+                if leads && !self.sessions.iter().any(|known| known.id == stat.session) {
+                    self.sessions.push(ProcessIdentity {
+                        id: stat.session,
+                        started: stat.started,
+                    });
+                }
+            }
+            let ids: HashSet<Pid> = members
+                .iter()
+                .filter_map(|(process, _)| process.id())
+                .collect();
+            let (joined, rest): (Vec<_>, Vec<_>) = others.into_iter().partition(|(_, stat)| {
+                ids.contains(&stat.parent)
+                    || self.sessions.iter().any(|known| known.id == stat.session)
+            });
+            others = rest;
+            if joined.is_empty() {
+                break;
+            }
+            members.extend(joined);
+        }
+        self.sessions
+            .retain(|leader| members.iter().any(|(_, stat)| stat.session == leader.id));
+        self.members = members;
+    }
+
+    /// The leader as read, unless it had exited.
+    pub fn leader(&self) -> Option<ProcessIdentity> {
+        self.identities()
+            .next()
+            .filter(|first| first.id == self.leader)
+    }
+
+    /// The leader's children that have not exited.
+    pub fn children(&self) -> impl Iterator<Item = &Process> {
+        self.members
+            .iter()
+            .filter(|(_, stat)| stat.parent == self.leader && !stat.zombie)
+            .map(|(process, _)| process)
+    }
+
+    /// Memory the members still running use, with shared memory counted once. Blocks.
+    pub fn memory_bytes(&self) -> u64 {
+        self.identities()
+            .filter(|member| member.is_running())
+            .filter_map(|member| Process::with_id(member.id).proportional_memory())
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Kills the members still running with the start time they had when read, never this
+    /// process. Blocks.
+    pub fn kill_survivors(&self) {
+        for member in self.identities() {
+            member.send(Signal::SIGKILL);
+        }
+    }
+
+    /// The members that had not exited when read.
+    fn identities(&self) -> impl Iterator<Item = ProcessIdentity> {
+        self.members
+            .iter()
+            .filter(|(_, stat)| !stat.zombie)
+            .filter_map(|(process, stat)| {
+                Some(ProcessIdentity {
+                    id: process.id()?,
+                    started: stat.started,
+                })
+            })
+    }
+}
+
+/// A process known by its pid and start time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProcessIdentity {
+    id: Pid,
+    /// When it started, in clock ticks after boot.
+    started: u64,
+}
+
+impl ProcessIdentity {
+    /// Has not exited. Blocks.
+    fn is_running(self) -> bool {
+        Process::with_id(self.id)
+            .stat()
+            .is_some_and(|stat| !stat.zombie && stat.started == self.started)
+    }
+
+    /// Sends `signal` unless it exited or is this process. Blocks.
+    fn send(self, signal: Signal) {
+        if self.id != Pid::this() && self.is_running() {
+            let _already_gone = kill(self.id, signal);
+        }
+    }
+
+    /// Sends `signal` unless it exited or is this process.
+    pub async fn signal(self, signal: Signal) {
+        let _sent = tokio::task::spawn_blocking(move || self.send(signal)).await;
+    }
+
+    /// Reads /proc until it exited, for at most `longest`. True once it has.
+    pub async fn exits_within(self, longest: Duration) -> bool {
+        let started = Instant::now();
+        loop {
+            let running = tokio::task::spawn_blocking(move || self.is_running()).await;
+            if matches!(running, Ok(false)) {
+                return true;
+            }
+            if started.elapsed() >= longest {
+                return false;
+            }
+            sleep(EXIT_POLL_INTERVAL).await;
+        }
+    }
+}
+
+/// How many files a process can have open, which the processes it starts inherit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenFileLimit {
+    pub soft: rlim_t,
+    pub hard: rlim_t,
+}
+
+impl OpenFileLimit {
+    const HIGHEST_TARGET: rlim_t = 1_048_576;
+
+    /// This process's limit.
+    pub fn current() -> nix::Result<Self> {
+        let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE)?;
+        Ok(Self { soft, hard })
+    }
+
+    /// The soft limit to raise to under `hard`.
+    pub fn target(hard: rlim_t) -> rlim_t {
+        hard.min(Self::HIGHEST_TARGET)
+    }
+
+    /// Raises this process's soft limit to the target unless it is higher already.
+    pub fn raise(self) -> nix::Result<Self> {
+        let raised = Self {
+            soft: self.soft.max(Self::target(self.hard)),
+            ..self
+        };
+        if raised != self {
+            setrlimit(Resource::RLIMIT_NOFILE, raised.soft, raised.hard)?;
+        }
+        Ok(raised)
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{self, Command, Stdio};
+    use std::thread::sleep;
+    use std::time::{Duration, Instant};
+
+    use nix::errno::Errno;
+    use nix::sys::resource::RLIM_INFINITY;
+    use nix::sys::signal::{Signal, killpg};
 
     use super::*;
+    use crate::manager::api::test_support::{PidExt, ProgramExt, wait_until};
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    impl ProcessFamily {
+        fn has(&self, id: Pid) -> bool {
+            self.members
+                .iter()
+                .any(|(process, stat)| process.id() == Some(id) && !stat.zombie)
+        }
+    }
+
+    /// A shell script leading a process group of its own, with `$DIR` set to a temporary
+    /// directory.
+    struct Script {
+        directory: tempfile::TempDir,
+        leader: process::Child,
+    }
+
+    impl Script {
+        /// Starts `script` and waits until it created `$DIR/ready`.
+        async fn started(script: &str) -> Self {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let leader = Command::new("sh")
+                .args(["-c", script])
+                .env("DIR", directory.path())
+                .process_group(0)
+                .stdin(Stdio::null())
+                .spawn()
+                .expect("the script starts");
+            let ready = directory.path().join("ready");
+            wait_until(WAIT, || ready.exists(), |ready| *ready).await;
+            Self { directory, leader }
+        }
+
+        fn id(&self) -> Pid {
+            Pid::from_raw(i32::try_from(self.leader.id()).expect("the pid fits"))
+        }
+
+        /// Waits until the script wrote a pid to `$DIR/<name>`, and returns it.
+        async fn pid_in(&self, name: &str) -> Pid {
+            let path = self.directory.path().join(name);
+            let pid = wait_until(
+                WAIT,
+                || {
+                    fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|pid| pid.trim().parse().ok())
+                },
+                Option::is_some,
+            )
+            .await;
+            Pid::from_raw(pid.expect("the pid is written"))
+        }
+
+        fn tell(&self, name: &str) {
+            fs::write(self.directory.path().join(name), "").expect("the script is told");
+        }
+    }
+
+    impl Drop for Script {
+        fn drop(&mut self) {
+            let _already_gone = killpg(self.id(), Signal::SIGKILL);
+            let _reaped = self.leader.wait();
+        }
+    }
 
     #[test]
     fn a_copied_program_counts_as_running_from_its_directory() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let sleep = fs::canonicalize("/bin/sleep").expect("sleep is installed");
+        let installed = fs::canonicalize("/bin/sleep").expect("sleep is installed");
         let copy = directory.path().join("2.1.1");
-        fs::copy(&sleep, &copy).expect("sleep is copied");
+        let copied = Command::new("cp").arg(&installed).arg(&copy).status();
+        assert!(copied.expect("cp runs").success());
         let mut running = Command::new(&copy)
             .arg0("sleep")
             .arg("30")
@@ -141,11 +429,329 @@ mod tests {
             .spawn()
             .expect("the copy starts");
         fs::remove_file(&copy).expect("the copy is deleted while it runs");
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .expect("the deadline fits");
+        while Process::running_from(directory.path()).is_empty() {
+            assert!(Instant::now() < deadline, "the copy did not start");
+            sleep(Duration::from_millis(20));
+        }
 
         assert_eq!(Process::running_from(directory.path()), ["2.1.1"]);
 
         running.kill().expect("the copy stops");
         running.wait().expect("the copy is reaped");
         assert!(Process::running_from(directory.path()).is_empty());
+    }
+
+    #[test]
+    fn the_session_and_start_time_are_the_sixth_and_twenty_second_stat_fields() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        fs::write(
+            directory.path().join("stat"),
+            "42 (a (b) c) S 7 41 40 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 123456 2000000 100\n",
+        )
+        .expect("stat is written");
+        let stat = Process(directory.path().to_path_buf())
+            .stat()
+            .expect("stat is readable");
+        assert_eq!(
+            (stat.parent, stat.session, stat.zombie, stat.started),
+            (Pid::from_raw(7), Pid::from_raw(40), false, 123_456)
+        );
+    }
+
+    #[test]
+    fn a_family_is_the_leader_and_everything_it_started() {
+        let mut leader = Command::new("sh")
+            .args(["-c", "sh -c 'sleep 30; :' & sleep 30 & wait"])
+            .process_group(0)
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("the leader starts");
+        let leader_id = Pid::from_raw(i32::try_from(leader.id()).expect("the pid fits"));
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .expect("the deadline fits");
+        let family = loop {
+            let family = ProcessFamily::of(leader_id);
+            if family.members.len() == 4 {
+                break family;
+            }
+            assert!(Instant::now() < deadline, "the family did not start");
+            sleep(Duration::from_millis(20));
+        };
+        assert_eq!(family.children().count(), 2);
+        assert!(family.memory_bytes() > 0);
+
+        killpg(leader_id, Signal::SIGKILL).expect("the family is killed");
+        leader.wait().expect("the leader is reaped");
+        while killpg(leader_id, None) != Err(Errno::ESRCH) {
+            assert!(Instant::now() < deadline, "the family did not exit");
+            sleep(Duration::from_millis(20));
+        }
+        assert_eq!(family.memory_bytes(), 0);
+        assert!(ProcessFamily::of(leader_id).members.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reading_a_family_again_keeps_a_member_whose_parent_exited() {
+        let script = Script::started(
+            "sh -c 'sleep 30 > /dev/null 2>&1 &\n\
+             echo $! > \"$DIR/orphan\"\n\
+             : > \"$DIR/ready\"\n\
+             until [ -e \"$DIR/go\" ]; do sleep 0.02; done' &\n\
+             sleep 30 &\n\
+             wait",
+        )
+        .await;
+        let orphan = script.pid_in("orphan").await;
+        let mut family = ProcessFamily::of(script.id());
+        assert!(family.has(orphan));
+
+        script.tell("go");
+        wait_until(
+            WAIT,
+            || ProcessFamily::of(script.id()).has(orphan),
+            |found| !found,
+        )
+        .await;
+        family.read_again();
+
+        assert!(family.has(orphan));
+        family.kill_survivors();
+        orphan.wait_until_gone().await;
+    }
+
+    #[tokio::test]
+    async fn reading_a_family_again_adds_what_a_session_a_member_started_holds() {
+        if !"setsid".is_installed() {
+            return;
+        }
+        let script = Script::started(
+            "setsid sh -c 'echo $$ > \"$DIR/session\"\n\
+             : > \"$DIR/ready\"\n\
+             until [ -e \"$DIR/go\" ]; do sleep 0.02; done\n\
+             sleep 30 > /dev/null 2>&1 &\n\
+             echo $! > \"$DIR/late\"' &\n\
+             sleep 30 &\n\
+             wait",
+        )
+        .await;
+        let session = script.pid_in("session").await;
+        let mut family = ProcessFamily::of(script.id());
+        assert!(family.has(session));
+
+        script.tell("go");
+        let late = script.pid_in("late").await;
+        session.wait_until_gone().await;
+        assert!(!ProcessFamily::of(script.id()).has(late));
+        family.read_again();
+
+        assert!(family.has(late));
+        family.kill_survivors();
+        late.wait_until_gone().await;
+    }
+
+    #[tokio::test]
+    async fn a_session_whose_leader_is_another_process_now_is_forgotten() {
+        if !"setsid".is_installed() {
+            return;
+        }
+        let mut leading = Command::new("setsid")
+            .args(["sleep", "30"])
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("setsid starts");
+        let id = Pid::from_raw(i32::try_from(leading.id()).expect("the pid fits"));
+        let started = wait_until(
+            WAIT,
+            || {
+                Process::with_id(id)
+                    .stat()
+                    .filter(|stat| stat.session == id)
+                    .map(|stat| stat.started)
+            },
+            Option::is_some,
+        )
+        .await
+        .expect("sleep leads a session");
+        let read_with_session = |started| {
+            let mut family = ProcessFamily {
+                leader: id,
+                members: Vec::new(),
+                sessions: vec![ProcessIdentity { id, started }],
+            };
+            family.read_again();
+            family
+        };
+
+        assert!(!read_with_session(started.saturating_add(1)).has(id));
+        assert!(read_with_session(started).has(id));
+        leading.kill().expect("sleep is killed");
+        leading.wait().expect("sleep is reaped");
+    }
+
+    #[test]
+    fn children_leave_out_grandchildren_and_exited_children() {
+        let member = |id: i32, parent: i32, zombie: bool| {
+            (
+                Process(PathBuf::from(format!("/proc/{id}"))),
+                ProcessStat {
+                    parent: Pid::from_raw(parent),
+                    session: Pid::from_raw(1),
+                    zombie,
+                    started: 1,
+                },
+            )
+        };
+        let family = ProcessFamily {
+            leader: Pid::from_raw(10),
+            members: vec![
+                member(10, 1, false),
+                member(11, 10, false),
+                member(12, 10, true),
+                member(13, 11, false),
+            ],
+            sessions: Vec::new(),
+        };
+        let children: Vec<Option<Pid>> = family.children().map(Process::id).collect();
+        assert_eq!(children, [Some(Pid::from_raw(11))]);
+    }
+
+    #[test]
+    fn memory_leaves_out_a_member_whose_pid_was_reused() {
+        let own = PathBuf::from(format!("/proc/{}", process::id()));
+        let started = Process(own.clone())
+            .stat()
+            .expect("this process has a stat")
+            .started;
+        let remembered = |started| ProcessFamily {
+            leader: Pid::this(),
+            members: vec![(
+                Process(own.clone()),
+                ProcessStat {
+                    parent: Pid::parent(),
+                    session: Pid::parent(),
+                    zombie: false,
+                    started,
+                },
+            )],
+            sessions: Vec::new(),
+        };
+        assert!(remembered(started).memory_bytes() > 0);
+        assert_eq!(remembered(started.saturating_add(1)).memory_bytes(), 0);
+    }
+
+    #[test]
+    fn only_members_with_their_remembered_start_time_are_killed() {
+        let sleep = || {
+            Command::new("sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .spawn()
+                .expect("sleep starts")
+        };
+        let (mut remembered, mut reused) = (sleep(), sleep());
+        let member = |id: u32, ticks_later: u64| {
+            let process = Process(PathBuf::from(format!("/proc/{id}")));
+            let stat = process.stat().expect("the process has a stat");
+            let stat = ProcessStat {
+                started: stat.started.saturating_add(ticks_later),
+                ..stat
+            };
+            (process, stat)
+        };
+        let family = ProcessFamily {
+            leader: Pid::this(),
+            members: vec![
+                member(process::id(), 0),
+                member(remembered.id(), 0),
+                member(reused.id(), 1),
+            ],
+            sessions: Vec::new(),
+        };
+
+        family.kill_survivors();
+
+        let killed = remembered.wait().expect("sleep is reaped");
+        assert_eq!(killed.signal(), Some(Signal::SIGKILL as i32));
+        assert!(reused.try_wait().expect("sleep is readable").is_none());
+        reused.kill().expect("sleep is killed");
+        reused.wait().expect("sleep is reaped");
+    }
+
+    #[tokio::test]
+    async fn only_the_leader_with_its_remembered_start_time_is_signalled() {
+        let mut sleeping = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("sleep starts");
+        let id = Pid::from_raw(i32::try_from(sleeping.id()).expect("the pid fits"));
+        let leader = ProcessFamily::of(id).leader().expect("sleep runs");
+        let reused = ProcessIdentity {
+            started: leader.started.saturating_add(1),
+            ..leader
+        };
+        let this = ProcessFamily::of(Pid::this())
+            .leader()
+            .expect("this process runs");
+
+        reused.signal(Signal::SIGKILL).await;
+        this.signal(Signal::SIGKILL).await;
+        assert!(reused.exits_within(Duration::ZERO).await);
+        assert!(!leader.exits_within(Duration::from_millis(100)).await);
+
+        leader.signal(Signal::SIGKILL).await;
+        assert!(leader.exits_within(Duration::from_secs(5)).await);
+        assert_eq!(ProcessFamily::of(id).leader(), None);
+        let killed = sleeping.wait().expect("sleep is reaped");
+        assert_eq!(killed.signal(), Some(Signal::SIGKILL as i32));
+    }
+
+    #[test]
+    fn the_open_file_target_is_the_hard_limit_up_to_a_million() {
+        assert_eq!(OpenFileLimit::target(524_288), 524_288);
+        assert_eq!(OpenFileLimit::target(1_073_741_816), 1_048_576);
+        assert_eq!(OpenFileLimit::target(RLIM_INFINITY), 1_048_576);
+    }
+
+    #[test]
+    fn raising_the_open_file_limit_sets_the_soft_limit_to_the_target() {
+        let OpenFileLimit { soft, hard } = OpenFileLimit::current().expect("the limit is readable");
+        setrlimit(Resource::RLIMIT_NOFILE, soft.min(1024), hard)
+            .expect("the soft limit is lowered");
+
+        let raised = OpenFileLimit::current()
+            .and_then(OpenFileLimit::raise)
+            .expect("the soft limit is raised");
+
+        assert_eq!(
+            raised,
+            OpenFileLimit {
+                soft: OpenFileLimit::target(hard),
+                hard
+            }
+        );
+        assert_eq!(OpenFileLimit::current(), Ok(raised));
+    }
+
+    #[test]
+    fn a_soft_limit_above_the_target_is_kept() {
+        let limit = OpenFileLimit {
+            soft: 2_097_152,
+            hard: RLIM_INFINITY,
+        };
+        assert_eq!(limit.raise(), Ok(limit));
+    }
+
+    #[test]
+    fn a_limit_the_kernel_refuses_is_an_error() {
+        let limit = OpenFileLimit {
+            soft: 0,
+            hard: RLIM_INFINITY,
+        };
+        assert_eq!(limit.raise(), Err(Errno::EPERM));
     }
 }

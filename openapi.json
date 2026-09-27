@@ -126,6 +126,77 @@
         }
       }
     },
+    "/api/v1/agents/codex/settings": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get Codex settings",
+        "operationId": "getCodexSettings",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexSettingsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Change Codex settings",
+        "description": "Saves the settings, restarting Codex's remote control when they change.",
+        "operationId": "updateCodexSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodexSettingsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexSettingsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents/{agent}/install": {
       "post": {
         "tags": [
@@ -1469,7 +1540,7 @@
         "operationId": "getRemoteControl",
         "responses": {
           "200": {
-            "description": "The servers for /projects and its folders",
+            "description": "Claude Code's servers for /projects and its folders, and Codex's server",
             "content": {
               "application/json": {
                 "schema": {
@@ -1480,6 +1551,315 @@
           },
           "401": {
             "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/log": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get the end of Codex's remote control log",
+        "description": "Returns up to the last 200 lines Codex printed while serving the ChatGPT app.",
+        "operationId": "getCodexRemoteControlLog",
+        "responses": {
+          "200": {
+            "description": "The last lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerLogTail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/pairing": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get the latest pairing code and whether a phone used it",
+        "operationId": "getCodexPairing",
+        "responses": {
+          "200": {
+            "description": "The latest code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexPairingState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get a code to pair a phone with Codex",
+        "description": "Replaces the earlier code.",
+        "operationId": "startCodexPairing",
+        "responses": {
+          "200": {
+            "description": "The code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexPairing"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running or not connected to ChatGPT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/pairing/qr.svg": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get the latest pairing code's link as a QR code",
+        "operationId": "getCodexPairingQr",
+        "responses": {
+          "200": {
+            "description": "An SVG image",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No code a phone can still use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/phones": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "List the phones paired with Codex",
+        "operationId": "listCodexPhones",
+        "responses": {
+          "200": {
+            "description": "Paired phones",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PairedPhone"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running or not connected to ChatGPT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/phones/{id}": {
+      "delete": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Remove a paired phone",
+        "description": "The phone can no longer reach this box.",
+        "operationId": "removeCodexPhone",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The phone's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running or not connected to ChatGPT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/retry": {
+      "post": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Connect Codex to ChatGPT again",
+        "description": "Clears the problem shown, and turns Codex's connection to ChatGPT back on when the manager turned it off.",
+        "operationId": "retryCodexRemoteControl",
+        "responses": {
+          "204": {
+            "description": "Codex is trying again"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -1814,6 +2194,252 @@
           }
         }
       },
+      "CodexApprovals": {
+        "type": "string",
+        "description": "When Codex asks for approval.",
+        "enum": [
+          "on-request",
+          "never"
+        ]
+      },
+      "CodexPairing": {
+        "type": "object",
+        "description": "A code a phone pairs with Codex through.",
+        "required": [
+          "link",
+          "expires_at",
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why checking the code failed, absent unless it did."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the code stops working."
+          },
+          "link": {
+            "type": "string",
+            "description": "The link the QR code holds."
+          },
+          "manual_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The code to enter in the ChatGPT app, absent when Codex gave none."
+          },
+          "state": {
+            "$ref": "#/components/schemas/PairingState"
+          }
+        }
+      },
+      "CodexPairingState": {
+        "type": "object",
+        "description": "The pairing code asked for last.",
+        "properties": {
+          "pairing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CodexPairing",
+                "description": "Absent before the first code."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CodexProblem": {
+        "type": "string",
+        "description": "A known reason Codex does not serve this box to the ChatGPT app.",
+        "enum": [
+          "mfa_required",
+          "not_chatgpt",
+          "signed_out",
+          "not_allowed",
+          "socket_in_use",
+          "relay_unavailable",
+          "unsupported_version"
+        ]
+      },
+      "CodexRemoteSettings": {
+        "type": "object",
+        "description": "How Codex serves this box to the ChatGPT app.",
+        "required": [
+          "enabled",
+          "sandbox",
+          "approvals"
+        ],
+        "properties": {
+          "approvals": {
+            "$ref": "#/components/schemas/CodexApprovals",
+            "description": "When Codex asks for approval.",
+            "default": "on-request"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Serve this box to the ChatGPT app while Codex is signed in with ChatGPT.",
+            "default": true
+          },
+          "sandbox": {
+            "$ref": "#/components/schemas/CodexSandbox",
+            "description": "The sandbox Codex runs commands in.",
+            "default": "danger-full-access"
+          }
+        }
+      },
+      "CodexRemoteStatus": {
+        "type": "object",
+        "description": "The manager's view of Codex's remote control server.",
+        "required": [
+          "state",
+          "restarts"
+        ],
+        "properties": {
+          "folder_picker": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FolderPicker",
+                "description": "Whether the ChatGPT app's folder picker is expected to work, absent until Codex was checked."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The line that named the problem or the last output before a stop, until Codex connects."
+          },
+          "problem": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CodexProblem",
+                "description": "What keeps Codex from serving the ChatGPT app, absent when nothing known does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "relay": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RelayState",
+                "description": "Whether Codex is connected to ChatGPT, absent while the server does not answer."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restarts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Unexpected stops since the manager started.",
+            "minimum": 0
+          },
+          "server_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the ChatGPT app lists this box under, absent while the server does not answer."
+          },
+          "server_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Codex version the server runs, absent while none runs."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ServerState"
+          },
+          "update": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PendingUpdate",
+                "description": "A newer Codex the server restarts on once no chat runs, absent while none waits."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CodexUsage",
+                "description": "What the server and its chats use, absent while no server runs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CodexSandbox": {
+        "type": "string",
+        "description": "What Codex's commands can change.",
+        "enum": [
+          "read-only",
+          "workspace-write",
+          "danger-full-access"
+        ]
+      },
+      "CodexSettingsBody": {
+        "type": "object",
+        "description": "How the manager runs Codex.",
+        "required": [
+          "remote_control"
+        ],
+        "properties": {
+          "remote_control": {
+            "$ref": "#/components/schemas/CodexRemoteSettings"
+          }
+        }
+      },
+      "CodexUsage": {
+        "type": "object",
+        "description": "What a running Codex server and its chats use.",
+        "required": [
+          "chats",
+          "running_chats",
+          "memory_bytes"
+        ],
+        "properties": {
+          "chats": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Chats the server has loaded.",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Memory the server, its chats and their commands use, with shared memory counted once.",
+            "minimum": 0
+          },
+          "running_chats": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Chats running a turn or waiting for an answer, and chats whose state is not known yet.",
+            "minimum": 0
+          }
+        }
+      },
       "CommitIdentity": {
         "type": "object",
         "description": "The name and email git writes into commits.",
@@ -1942,6 +2568,14 @@
             "description": "The folder's name in /projects."
           }
         }
+      },
+      "FolderPicker": {
+        "type": "string",
+        "description": "Whether the ChatGPT app's folder picker is expected to work in this box.",
+        "enum": [
+          "works",
+          "blocked"
+        ]
       },
       "FolderStatus": {
         "allOf": [
@@ -2170,6 +2804,79 @@
           }
         }
       },
+      "PairedPhone": {
+        "type": "object",
+        "description": "A phone paired with Codex.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "app_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ChatGPT app's version, absent when not reported."
+          },
+          "device_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kind of device, absent when not reported."
+          },
+          "id": {
+            "type": "string",
+            "description": "Identifies the phone."
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When ChatGPT last saw the phone, absent when not reported."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device model, absent when not reported."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the phone gives, absent when it gives none."
+          },
+          "os_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operating system's version, absent when not reported."
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operating system, absent when not reported."
+          }
+        }
+      },
+      "PairingState": {
+        "type": "string",
+        "description": "Whether a phone used a pairing code.",
+        "enum": [
+          "open",
+          "claimed",
+          "expired",
+          "failed"
+        ]
+      },
       "ParseProblem": {
         "type": "object",
         "description": "Where a settings file's text stops parsing.",
@@ -2222,7 +2929,7 @@
       },
       "PendingUpdate": {
         "type": "object",
-        "description": "A newer Claude Code a running server waits to restart on.",
+        "description": "A newer version of the agent a running server waits to restart on.",
         "required": [
           "version",
           "restart_by"
@@ -2231,13 +2938,23 @@
           "restart_by": {
             "type": "string",
             "format": "date-time",
-            "description": "When it restarts even with sessions running."
+            "description": "When it restarts even while it is busy."
           },
           "version": {
             "type": "string",
             "description": "The installed version the server restarts on."
           }
         }
+      },
+      "RelayState": {
+        "type": "string",
+        "description": "Whether Codex is connected to ChatGPT.",
+        "enum": [
+          "disabled",
+          "connecting",
+          "connected",
+          "errored"
+        ]
       },
       "ReleaseChannel": {
         "type": "string",
@@ -2252,9 +2969,14 @@
         "description": "Every Remote Control server, and where the Claude app lists them.",
         "required": [
           "projects",
-          "folders"
+          "folders",
+          "codex"
         ],
         "properties": {
+          "codex": {
+            "$ref": "#/components/schemas/CodexRemoteStatus",
+            "description": "The server that serves this box to the ChatGPT app."
+          },
           "device": {
             "type": [
               "string",
@@ -2556,6 +3278,8 @@
         "enum": [
           "agents",
           "claude_settings",
+          "codex_settings",
+          "codex_phones",
           "folders",
           "clones",
           "remote_control",

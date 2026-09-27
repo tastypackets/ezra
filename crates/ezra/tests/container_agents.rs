@@ -6,32 +6,18 @@ mod common;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{DockerResource, Manager, curl_in, docker, stdout_of};
+use common::{DockerResource, Manager, docker, stdout_of};
+use serde_json::{Value, json};
 
 const REINSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Posts to the manager API and returns the status code and body.
-fn post(container: &DockerResource, path: &str, body: &str) -> (String, String) {
-    let url = format!("https://localhost:8443{path}");
-    let output = stdout_of(&curl_in(
-        container,
-        &[
-            "--header",
-            "Content-Type: application/json",
-            "--data",
-            body,
-            "--write-out",
-            "\n%{http_code}",
-            &url,
-        ],
-    ));
-    let (response_body, status) = output.rsplit_once('\n').unwrap_or(("", &output));
-    (status.to_owned(), response_body.to_owned())
-}
-
-fn get(container: &DockerResource, path: &str) -> String {
-    let url = format!("https://localhost:8443{path}");
-    stdout_of(&curl_in(container, &["--fail", &url]))
+impl Manager {
+    /// Every agent's install and sign-in state.
+    fn agents(&self) -> Vec<Value> {
+        let (status, agents) = self.request("GET", "/api/v1/agents", None);
+        assert_eq!(status, "200", "{agents}");
+        serde_json::from_value(agents).expect("the agents are a list")
+    }
 }
 
 #[test]
@@ -40,25 +26,28 @@ fn installed_agents_run_and_offer_sign_in() {
     let manager = Manager::start("agents-install", &[]);
     let container = &manager.container;
     let saw_download_progress = thread::scope(|scope| {
-        let claude_install = scope.spawn(|| post(container, "/api/v1/agents/claude/install", ""));
+        let claude_install =
+            scope.spawn(|| manager.request("POST", "/api/v1/agents/claude/install", None));
         let mut saw_progress = false;
         while !claude_install.is_finished() {
-            saw_progress |= get(container, "/api/v1/agents")
-                .contains(r#""install_progress":{"received_bytes":"#);
+            saw_progress |= manager
+                .agents()
+                .iter()
+                .any(|agent| agent["install_progress"]["received_bytes"].is_u64());
             thread::sleep(Duration::from_millis(200));
         }
         let (status, body) = claude_install.join().expect("install thread finishes");
         assert_eq!(status, "200", "{body}");
-        assert!(body.contains(r#""configured":true"#), "{body}");
+        assert_eq!(body["configured"], true, "{body}");
         saw_progress
     });
     assert!(
         saw_download_progress,
         "the Claude download never reported progress"
     );
-    let (status, body) = post(container, "/api/v1/agents/codex/install", "");
+    let (status, body) = manager.request("POST", "/api/v1/agents/codex/install", None);
     assert_eq!(status, "200", "{body}");
-    assert!(body.contains(r#""install_progress":null"#), "{body}");
+    assert!(body["install_progress"].is_null(), "{body}");
 
     let large_files_on_the_volume = stdout_of(&docker(&[
         "exec",
@@ -82,45 +71,53 @@ fn installed_agents_run_and_offer_sign_in() {
     let codex_version = stdout_of(&container.run_as_agent(&["codex", "--version"]));
     assert!(codex_version.starts_with("codex-cli "), "{codex_version}");
 
-    let (status, claude_prompt) = post(container, "/api/v1/agents/claude/login", "");
+    let (status, claude_prompt) = manager.request("POST", "/api/v1/agents/claude/login", None);
     assert_eq!(status, "200", "{claude_prompt}");
     assert!(
-        claude_prompt.contains(r#""url":"https://claude.com/cai/oauth/authorize?"#),
+        claude_prompt["url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("https://claude.com/cai/oauth/authorize?")),
         "{claude_prompt}"
     );
-    let (status, codex_prompt) = post(container, "/api/v1/agents/codex/login", "");
+    let (status, codex_prompt) = manager.request("POST", "/api/v1/agents/codex/login", None);
     assert_eq!(status, "200", "{codex_prompt}");
-    assert!(
-        codex_prompt.contains(r#""url":"https://auth.openai.com/codex/device""#),
+    assert_eq!(
+        codex_prompt["url"], "https://auth.openai.com/codex/device",
         "{codex_prompt}"
     );
-    assert!(!codex_prompt.contains(r#""code":null"#), "{codex_prompt}");
-    let listing = get(container, "/api/v1/agents");
+    assert!(codex_prompt["code"].is_string(), "{codex_prompt}");
+    let agents = manager.agents();
     assert_eq!(
-        listing.matches(r#""login_prompt":{"url""#).count(),
+        agents
+            .iter()
+            .filter(|agent| agent["login_prompt"]["url"].is_string())
+            .count(),
         2,
-        "{listing}"
+        "{agents:?}"
     );
 
-    let (status, body) = post(
-        container,
+    let (status, body) = manager.request(
+        "POST",
         "/api/v1/agents/claude/login/code",
-        r#"{"code":"not-a-real-code"}"#,
+        Some(&json!({ "code": "not-a-real-code" })),
     );
     assert_eq!(status, "502", "{body}");
     for agent in ["claude", "codex"] {
-        let (status, body) = post(container, &format!("/api/v1/agents/{agent}/logout"), "");
+        let (status, body) =
+            manager.request("POST", &format!("/api/v1/agents/{agent}/logout"), None);
         assert_eq!(status, "204", "{agent}: {body}");
     }
-    let listing = get(container, "/api/v1/agents");
+    let agents = manager.agents();
     assert_eq!(
-        listing
-            .matches(
-                r#""logged_in":false,"account":null,"sign_in_ends_at":null,"login_prompt":null"#
-            )
+        agents
+            .iter()
+            .filter(|agent| agent["logged_in"] == false
+                && agent["account"].is_null()
+                && agent["sign_in_ends_at"].is_null()
+                && agent["login_prompt"].is_null())
             .count(),
         2,
-        "{listing}"
+        "{agents:?}"
     );
 }
 
@@ -131,7 +128,7 @@ fn configured_agent_is_reinstalled_after_a_recreate() {
     let config_mount = format!("{}:/config", volume.name);
 
     let first = Manager::start("agents-first", &["--volume", &config_mount]);
-    let (status, body) = post(&first.container, "/api/v1/agents/codex/install", "");
+    let (status, body) = first.request("POST", "/api/v1/agents/codex/install", None);
     assert_eq!(status, "200", "{body}");
     drop(first);
 

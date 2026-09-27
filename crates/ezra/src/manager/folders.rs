@@ -474,7 +474,7 @@ impl AppState {
             Ok(())
         })
         .await?;
-        self.remote_control.reconsider();
+        self.remote_control.supervision.reconsider();
         self.events.publish(Topic::Folders);
         Ok(())
     }
@@ -512,7 +512,7 @@ impl AppState {
             Ok::<(), SettingsError>(())
         })
         .await?;
-        self.remote_control.reconsider();
+        self.remote_control.supervision.reconsider();
         self.events.publish(Topic::Folders);
         if !self
             .remote_control
@@ -602,7 +602,7 @@ impl AppState {
                             });
                     if recorded || folders != known {
                         known = folders;
-                        self.remote_control.reconsider();
+                        self.remote_control.supervision.reconsider();
                         self.events.publish(Topic::Folders);
                     }
                 }

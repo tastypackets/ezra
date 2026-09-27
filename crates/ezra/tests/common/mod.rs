@@ -62,41 +62,6 @@ const EVENTS_CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 /// The uid of the container's `dev` user, who runs the manager and the agents.
 pub const AGENT_UID: u32 = 1000;
 
-/// Runs curl inside the container, keeping the manager session cookie in `MANAGER_COOKIES`.
-pub fn curl_in(container: &DockerResource, arguments: &[&str]) -> Output {
-    let mut command = vec![
-        "exec",
-        &container.name,
-        "curl",
-        "--silent",
-        "--insecure",
-        "--cookie",
-        MANAGER_COOKIES,
-        "--cookie-jar",
-        MANAGER_COOKIES,
-    ];
-    command.extend_from_slice(arguments);
-    docker(&command)
-}
-
-/// Waits until the manager answers and returns its session status.
-pub fn wait_for_manager(container: &DockerResource, port: u16) -> String {
-    let url = format!("https://localhost:{port}/api/v1/session");
-    let started = Instant::now();
-    loop {
-        let response = curl_in(container, &["--fail", &url]);
-        if response.status.success() {
-            return stdout_of(&response);
-        }
-        assert!(
-            started.elapsed() < MANAGER_START_TIMEOUT,
-            "manager did not answer: {}",
-            stderr_of(&docker(&["logs", &container.name]))
-        );
-        thread::sleep(Duration::from_millis(200));
-    }
-}
-
 /// Removes a Docker container or volume created by a test, even if the test panics.
 pub struct DockerResource {
     pub kind: &'static str,
@@ -128,6 +93,41 @@ impl DockerResource {
         let started = docker(&arguments);
         assert!(started.status.success(), "{}", stderr_of(&started));
         container
+    }
+
+    /// Runs curl inside the container, keeping the manager session cookie in `MANAGER_COOKIES`.
+    pub fn curl(&self, arguments: &[&str]) -> Output {
+        let mut command = vec![
+            "exec",
+            &self.name,
+            "curl",
+            "--silent",
+            "--insecure",
+            "--cookie",
+            MANAGER_COOKIES,
+            "--cookie-jar",
+            MANAGER_COOKIES,
+        ];
+        command.extend_from_slice(arguments);
+        docker(&command)
+    }
+
+    /// Waits until the manager answers and returns its session status.
+    pub fn wait_for_manager(&self, port: u16) -> String {
+        let url = format!("https://localhost:{port}/api/v1/session");
+        let started = Instant::now();
+        loop {
+            let response = self.curl(&["--fail", &url]);
+            if response.status.success() {
+                return stdout_of(&response);
+            }
+            assert!(
+                started.elapsed() < MANAGER_START_TIMEOUT,
+                "manager did not answer: {}",
+                stderr_of(&docker(&["logs", &self.name]))
+            );
+            thread::sleep(Duration::from_millis(200));
+        }
     }
 
     /// Runs `command` in this container as the agent user, `dev`.
@@ -251,7 +251,7 @@ impl Manager {
     /// Starts a container and sets the manager's password, which signs curl in.
     pub fn start(purpose: &str, docker_options: &[&str]) -> Self {
         let container = DockerResource::start_container(purpose, docker_options, &[]);
-        wait_for_manager(&container, 8443);
+        container.wait_for_manager(8443);
         let manager = Self { container };
         let (status, body) =
             manager.request("POST", "/api/v1/setup", Some(&json!({ "password": "x" })));
@@ -275,8 +275,8 @@ impl Manager {
             arguments.extend(["--data-binary", body]);
         }
         arguments.push(&url);
-        let output = String::from_utf8(curl_in(&self.container, &arguments).stdout)
-            .expect("curl prints text");
+        let output =
+            String::from_utf8(self.container.curl(&arguments).stdout).expect("curl prints text");
         let (response, status) = output
             .rsplit_once('\n')
             .expect("curl prints the status last");

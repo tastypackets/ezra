@@ -5,14 +5,15 @@ import { createFileRoute } from "@tanstack/react-router";
 import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
 import { managerQueryOptions } from "@/queries/manager-queries";
+import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { settingsFileQueryOptions } from "@/queries/settings-file-queries";
-import { getClaudeSettingsOptions } from "@ezra/client/react-query.gen";
+import { getClaudeSettingsOptions, getCodexSettingsOptions } from "@ezra/client/react-query.gen";
 
 import { ClaudeSettingsCard } from "./-components/claude-settings-card";
+import { CodexSettingsCard } from "./-components/codex-settings-card";
 import { EnvironmentCard } from "./-components/environment-card";
 import { GitCard } from "./-components/git-card";
 import { ManagerCard } from "./-components/manager-card";
-import { SettingsFileCard } from "./-components/settings-file-card";
 
 const SETTINGS_FILE_AGENTS: readonly Agent[] = ["claude", "codex"];
 
@@ -32,18 +33,16 @@ export const Route = createFileRoute("/_signed-in/settings")({
     await Promise.all([
       settingsFiles,
       context.queryClient.ensureQueryData(getClaudeSettingsOptions()),
+      context.queryClient.ensureQueryData(getCodexSettingsOptions()),
       context.queryClient.ensureQueryData(gitStatusQueryOptions),
       context.queryClient.ensureQueryData(managerQueryOptions),
+      context.queryClient.ensureQueryData(remoteControlQueryOptions),
     ]);
   },
   component: SettingsPage,
 });
 
 function SettingsPage() {
-  const { data: claudeInstalled } = useSuspenseQuery({
-    ...agentsQueryOptions,
-    select: isInstalled("claude"),
-  });
   const { data: codexInstalled } = useSuspenseQuery({
     ...agentsQueryOptions,
     select: isInstalled("codex"),
@@ -51,8 +50,7 @@ function SettingsPage() {
   return (
     <div className="flex flex-col gap-4">
       <ClaudeSettingsCard />
-      {claudeInstalled ? <SettingsFileCard agent="claude" /> : null}
-      {codexInstalled ? <SettingsFileCard agent="codex" /> : null}
+      {codexInstalled ? <CodexSettingsCard /> : null}
       <GitCard />
       <ManagerCard />
       <EnvironmentCard />

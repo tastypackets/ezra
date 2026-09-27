@@ -1,61 +1,46 @@
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::sync::{Arc, Mutex as SyncMutex, PoisonError};
-use std::time::{Duration, SystemTime};
+use std::sync::Arc;
+use std::time::Duration;
 
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, gethostname};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use time::Time;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
-use time::{OffsetDateTime, Time};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, MissedTickBehavior, interval, sleep, timeout, timeout_at};
+use tokio::time::{Instant, MissedTickBehavior, interval, sleep, timeout};
 use utoipa::ToSchema;
 
 use super::agents::Agent;
+use super::codex_remote::CodexRemoteStatus;
 use super::events::{Events, Topic};
 use super::folders::Folder;
-use super::login::{AgentCli, SignInStatus, StrExt};
-use super::processes::{Process, ProcessStat};
+use super::login::AgentCli;
+use super::processes::ProcessFamily;
 use super::state::AppState;
+use super::supervision::{
+    Failure, Failures, FlagExt, LineWatcher, OUTPUT_DRAIN_TIMEOUT, PendingUpdate, Published,
+    RECHECK_INTERVAL, RunEnd, ServerLog, ServerOutput, Signals, Supervision,
+    UPDATE_RESTART_DEADLINE, USAGE_INTERVAL, UpdateWait, Verdict, Wake, Wanted,
+};
 use crate::path_ext::PathExt;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
 const CONFIG_LOCK_STALE: Duration = Duration::from_secs(10);
 const CONFIG_LOCK_WAIT: Duration = Duration::from_secs(15);
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(35);
-const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const GROUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const RECHECK_INTERVAL: Duration = Duration::from_secs(60);
-const FIRST_RETRY_DELAY: Duration = Duration::from_secs(5);
-const LONGEST_RETRY_DELAY: Duration = Duration::from_secs(300);
-const HEALTHY_RUN: Duration = Duration::from_secs(600);
-const USAGE_INTERVAL: Duration = Duration::from_secs(15);
 const STARTING_USAGE_INTERVAL: Duration = Duration::from_secs(1);
-const OUTPUT_LINES_KEPT: usize = 20;
-const OUTPUT_LINES_REPORTED: usize = 5;
-const UPDATE_RESTART_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
-const LOG_FILE: &str = "server.log";
-const LOG_TIME: &[BorrowedFormatItem<'_>] =
-    format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
 const CLAUDE_LOG_STAMP: &[BorrowedFormatItem<'_>] = format_description!("[hour]:[minute]:[second]");
-const ROTATED_LOG_FILE: &str = "server.log.1";
-const LATEST_LOG_LINK: &str = "latest";
-const LOG_TAIL_LINES: usize = 200;
-const LOG_TAIL_BYTES: u64 = 256 * 1024;
-const SESSION_LOGS_KEPT_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-const SESSION_LOGS_LARGEST: u64 = 64 * 1024 * 1024;
 /// The modes `claude remote-control --permission-mode` takes, `manual` being `default`.
 const PERMISSION_MODES: [&str; 7] = [
     "acceptEdits",
@@ -208,7 +193,7 @@ impl ClaudeOptions {
 pub enum ServerState {
     /// Turned off in the settings.
     Off,
-    /// Waiting for Claude Code to be installed and signed in.
+    /// Waiting for the agent to be installed and signed in.
     #[default]
     Waiting,
     /// Started, not connected yet.
@@ -334,16 +319,6 @@ impl ServerProblem {
     }
 }
 
-/// A newer Claude Code a running server waits to restart on.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct PendingUpdate {
-    /// The installed version the server restarts on.
-    pub version: String,
-    /// When it restarts even with sessions running.
-    #[serde(with = "time::serde::rfc3339")]
-    pub restart_by: OffsetDateTime,
-}
-
 /// What a running server and its sessions use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ServerUsage {
@@ -364,45 +339,38 @@ pub struct RemoteControlOverview {
     pub projects: RemoteControlStatus,
     /// The servers for folders in /projects, by folder name.
     pub folders: BTreeMap<String, RemoteControlStatus>,
+    /// The server that serves this box to the ChatGPT app.
+    pub codex: CodexRemoteStatus,
 }
 
 /// The shared handle the API reads statuses from and signals changes through.
 #[derive(Debug)]
 pub struct RemoteControl {
     device: Option<String>,
-    servers: SyncMutex<BTreeMap<PathBuf, RemoteControlStatus>>,
+    servers: Published<BTreeMap<PathBuf, RemoteControlStatus>>,
     logs: PathBuf,
-    events: Events,
-    changes: watch::Sender<u64>,
-    restarts: watch::Sender<u64>,
-    shutdown: watch::Sender<bool>,
-    stopped: watch::Sender<bool>,
+    pub supervision: Supervision,
 }
 
 impl RemoteControl {
+    /// How long the supervisor may take to stop its servers.
+    pub const LONGEST_STOP: Duration = STOP_GRACE_PERIOD.saturating_add(OUTPUT_DRAIN_TIMEOUT);
+
     /// Publishes every status change to `events` and keeps each server's logs under `logs`.
     pub fn new(events: Events, logs: PathBuf) -> Self {
         Self {
             device: gethostname()
                 .ok()
                 .and_then(|hostname| hostname.into_string().ok()),
-            servers: SyncMutex::default(),
+            servers: Published::new(BTreeMap::new(), events, Topic::RemoteControl),
             logs,
-            events,
-            changes: watch::Sender::new(0),
-            restarts: watch::Sender::new(0),
-            shutdown: watch::Sender::new(false),
-            stopped: watch::Sender::new(false),
+            supervision: Supervision::default(),
         }
     }
 
     /// The server for `directory`, absent when it has none.
     pub fn status_of(&self, directory: &Path) -> Option<RemoteControlStatus> {
-        self.servers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(directory)
-            .cloned()
+        self.servers.read(|servers| servers.get(directory).cloned())
     }
 
     /// Waits until `directory` has no server. False when `longest` passed first.
@@ -416,9 +384,8 @@ impl RemoteControl {
         .is_ok()
     }
 
-    pub fn overview(&self, projects: &Path) -> RemoteControlOverview {
-        let servers = self.servers.lock().unwrap_or_else(PoisonError::into_inner);
-        RemoteControlOverview {
+    pub fn overview(&self, projects: &Path, codex: CodexRemoteStatus) -> RemoteControlOverview {
+        self.servers.read(|servers| RemoteControlOverview {
             device: self.device.clone(),
             projects: servers.get(projects).cloned().unwrap_or_default(),
             folders: servers
@@ -429,7 +396,8 @@ impl RemoteControl {
                     Some((name.to_owned(), status.clone()))
                 })
                 .collect(),
-        }
+            codex,
+        })
     }
 
     pub fn log(&self, served: &Served) -> ServerLog {
@@ -439,53 +407,9 @@ impl RemoteControl {
         })
     }
 
-    /// Settings, folders or the install changed, so servers may need to start, stop or restart.
-    pub fn reconsider(&self) {
-        self.changes
-            .send_modify(|generation| *generation = generation.wrapping_add(1));
-    }
-
-    /// The sign-in changed, maybe to another account, so servers start again with it.
-    pub fn restart(&self) {
-        self.restarts
-            .send_modify(|generation| *generation = generation.wrapping_add(1));
-    }
-
-    pub fn begin_shut_down(&self) {
-        self.shutdown.send_replace(true);
-    }
-
-    pub async fn wait_until_stopped(&self) {
-        let mut stopped = self.stopped.subscribe();
-        let longest = STOP_GRACE_PERIOD.saturating_add(OUTPUT_DRAIN_TIMEOUT);
-        if timeout(longest, stopped.wait_for(|stopped| *stopped))
-            .await
-            .is_err()
-        {
-            tracing::warn!("Claude Remote Control did not stop in time");
-        }
-    }
-
-    fn signals(&self, sign_in: watch::Receiver<Option<SignInStatus>>) -> Signals {
-        Signals {
-            sign_in,
-            changes: self.changes.subscribe(),
-            restarts: self.restarts.subscribe(),
-            shutdown: self.shutdown.subscribe(),
-        }
-    }
-
     fn update(&self, directory: &Path, change: impl FnOnce(&mut RemoteControlStatus)) {
-        let changed = {
-            let mut servers = self.servers.lock().unwrap_or_else(PoisonError::into_inner);
-            let before = servers.get(directory).cloned();
-            let status = servers.entry(directory.to_path_buf()).or_default();
-            change(status);
-            before.as_ref() != Some(&*status)
-        };
-        if changed {
-            self.events.publish(Topic::RemoteControl);
-        }
+        self.servers
+            .update(|servers| change(servers.entry(directory.to_path_buf()).or_default()));
     }
 
     /// Removes the logs of folders that are not in /projects any more.
@@ -502,58 +426,7 @@ impl RemoteControl {
     }
 
     fn forget(&self, directory: &Path) {
-        let forgotten = self
-            .servers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(directory);
-        if forgotten.is_some() {
-            self.events.publish(Topic::RemoteControl);
-        }
-    }
-}
-
-/// One task's view of the sign-in, change, restart and shutdown signals.
-struct Signals {
-    sign_in: watch::Receiver<Option<SignInStatus>>,
-    changes: watch::Receiver<u64>,
-    restarts: watch::Receiver<u64>,
-    shutdown: watch::Receiver<bool>,
-}
-
-/// What woke a waiting task.
-#[derive(Debug, PartialEq, Eq)]
-enum Wake {
-    Changed,
-    ShutDown,
-}
-
-impl Signals {
-    fn is_shutting_down(&self) -> bool {
-        *self.shutdown.borrow()
-    }
-
-    async fn wait_for_change(&mut self, longest: Duration) -> Wake {
-        if self.is_shutting_down() {
-            return Wake::ShutDown;
-        }
-        tokio::select! {
-            _ = self.changes.changed() => Wake::Changed,
-            _ = self.restarts.changed() => Wake::Changed,
-            _ = self.sign_in.changed() => Wake::Changed,
-            () = self.shutdown.until_set() => Wake::ShutDown,
-            () = sleep(longest) => Wake::Changed,
-        }
-    }
-}
-
-trait FlagExt {
-    async fn until_set(&mut self);
-}
-
-impl FlagExt for watch::Receiver<bool> {
-    async fn until_set(&mut self) {
-        let _closed_counts_as_set = self.wait_for(|set| *set).await.map(|_| ());
+        self.servers.update(|servers| servers.remove(directory));
     }
 }
 
@@ -562,15 +435,6 @@ impl FlagExt for watch::Receiver<bool> {
 pub enum Served {
     Projects,
     Folder(String),
-}
-
-/// What should be running right now. `Unknown` until Claude first answers a sign-in check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Wanted {
-    Off,
-    Waiting,
-    Unknown,
-    Server(Launch),
 }
 
 /// One `claude remote-control` process to start. A new Claude version is a different launch.
@@ -719,179 +583,17 @@ impl Drop for ConfigLock {
     }
 }
 
-/// One server's log directory. Claude writes `server.log`, rotates it to `server.log.1` at 10 MiB
-/// and adds a debug log and a transcript per session. The manager adds the server's output lines
-/// to `server.log`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerLog(PathBuf);
-
-impl ServerLog {
-    pub fn debug_file(&self) -> PathBuf {
-        self.0.join(LOG_FILE)
-    }
-
-    /// Adds a line the server printed, stamped like Claude's own lines.
-    async fn append_output(&self, line: &str) -> io::Result<()> {
-        let stamp = OffsetDateTime::now_utc()
-            .format(LOG_TIME)
-            .map_err(io::Error::other)?;
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.debug_file())
-            .await?;
-        file.write_all(format!("{stamp} [OUTPUT] {line}\n").as_bytes())
-            .await
-    }
-
-    /// The server's last lines, oldest first.
-    pub fn tail(&self) -> io::Result<Vec<String>> {
-        let mut lines = VecDeque::new();
-        let mut budget = LOG_TAIL_BYTES;
-        for name in [LOG_FILE, ROTATED_LOG_FILE] {
-            if lines.len() >= LOG_TAIL_LINES || budget == 0 {
-                break;
-            }
-            let text = self.0.join(name).read_last_lines(budget)?;
-            budget = budget.saturating_sub(u64::try_from(text.len()).unwrap_or(u64::MAX));
-            for line in text.lines().rev() {
-                lines.push_front(line.to_owned());
-            }
-        }
-        let skipped = lines.len().saturating_sub(LOG_TAIL_LINES);
-        Ok(lines.into_iter().skip(skipped).collect())
-    }
-
-    /// Creates the directory and removes session logs older than a week, then the oldest ones
-    /// past the size limit.
-    fn prepare(&self) -> io::Result<()> {
-        fs::create_dir_all(&self.0)?;
-        let mut sessions: Vec<(PathBuf, SystemTime, u64)> = self
-            .0
-            .entries_or_empty()?
-            .into_iter()
-            .filter(|path| {
-                path.file_name().is_some_and(|name| {
-                    ![LOG_FILE, ROTATED_LOG_FILE, LATEST_LOG_LINK]
-                        .iter()
-                        .any(|kept| name == *kept)
-                })
-            })
-            .filter_map(|path| {
-                let metadata = fs::symlink_metadata(&path)
-                    .ok()
-                    .filter(fs::Metadata::is_file)?;
-                Some((path, metadata.modified().ok()?, metadata.len()))
-            })
-            .collect();
-        sessions.sort_by_key(|(_, modified, _)| Reverse(*modified));
-        let mut kept_bytes = 0_u64;
-        for (path, modified, bytes) in sessions {
-            let old = modified
-                .elapsed()
-                .is_ok_and(|age| age > SESSION_LOGS_KEPT_FOR);
-            if old || kept_bytes.saturating_add(bytes) > SESSION_LOGS_LARGEST {
-                path.remove_if_present()?;
-            } else {
-                kept_bytes = kept_bytes.saturating_add(bytes);
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Why a server run ended.
-enum RunEnd {
-    /// What should run changed, so it was stopped on purpose.
-    Reconsidered,
-    /// The manager is stopping.
-    ShutDown,
-    /// It could not start, did not connect, or stopped by itself.
-    Failed(Failure),
-}
-
-/// What went wrong with a server run.
-#[derive(Debug, PartialEq, Eq)]
-struct Failure {
-    message: String,
-    problem: Option<ServerProblem>,
-}
-
-impl From<String> for Failure {
-    fn from(message: String) -> Self {
-        Self {
-            message,
-            problem: None,
-        }
-    }
-}
-
-/// What to do with a running server after something changed.
-#[derive(Debug, PartialEq, Eq)]
-enum Verdict {
-    Keep,
-    /// The sign-in could not be checked, so nothing changes.
-    Unsure,
-    Stop,
-    /// Restart it on this Claude Code version once it has no sessions.
-    Update(String),
-}
-
-/// A running server waiting to restart on a newer Claude Code.
-struct UpdateWait {
-    version: String,
-    restart_by: OffsetDateTime,
-    deadline: Instant,
-}
-
-impl UpdateWait {
-    fn starting_now(version: String) -> Self {
-        Self {
-            version,
-            restart_by: OffsetDateTime::now_utc().saturating_add(
-                time::Duration::try_from(UPDATE_RESTART_DEADLINE).unwrap_or(time::Duration::MAX),
-            ),
-            deadline: Instant::now()
-                .checked_add(UPDATE_RESTART_DEADLINE)
-                .unwrap_or_else(Instant::now),
-        }
-    }
-
-    fn pending(&self) -> PendingUpdate {
-        PendingUpdate {
-            version: self.version.clone(),
-            restart_by: self.restart_by,
-        }
-    }
-
-    fn is_due(&self, usage: Option<ServerUsage>) -> bool {
-        usage.is_none_or(|usage| usage.sessions == 0) || Instant::now() >= self.deadline
-    }
-}
-
-/// Unexpected stops in a row, which set how long to wait before starting again.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Failures(u32);
-
-impl Failures {
-    fn retry_delay(self) -> Duration {
-        let doublings = self.0.saturating_sub(1).min(16);
-        FIRST_RETRY_DELAY
-            .saturating_mul(2_u32.saturating_pow(doublings))
-            .min(LONGEST_RETRY_DELAY)
-    }
-}
-
 impl AppState {
     /// Runs the /projects server, and one server for each folder chosen, until shutdown.
     pub async fn supervise_remote_control(self) {
         let mut signals = self
             .remote_control
+            .supervision
             .signals(self.agent_checks.watch_sign_in(Agent::Claude));
         let projects = tokio::spawn(self.clone().supervise_server(Served::Projects));
         let mut folders: HashMap<String, JoinHandle<()>> = HashMap::new();
         loop {
-            if !self.check_sign_in(&mut signals).await {
+            if !self.check_sign_in(Agent::Claude, &mut signals).await {
                 break;
             }
             folders.retain(|_, supervisor| !supervisor.is_finished());
@@ -913,18 +615,7 @@ impl AppState {
         for supervisor in folders.into_values() {
             let _stopped = supervisor.await;
         }
-        self.remote_control.stopped.send_replace(true);
-    }
-
-    /// Checks Claude Code's sign-in for every server when the last answer is older than the
-    /// recheck interval. False when shutdown interrupted it.
-    async fn check_sign_in(&self, signals: &mut Signals) -> bool {
-        tokio::select! {
-            () = self.agent_checks.check_sign_in(Agent::Claude, RECHECK_INTERVAL) => {}
-            () = signals.shutdown.until_set() => return false,
-        }
-        signals.sign_in.mark_unchanged();
-        true
+        self.remote_control.supervision.mark_stopped();
     }
 
     async fn served_folder_names(&self, folders: Vec<Folder>) -> Vec<String> {
@@ -947,6 +638,7 @@ impl AppState {
         };
         let mut signals = self
             .remote_control
+            .supervision
             .signals(self.agent_checks.watch_sign_in(Agent::Claude));
         let mut failures = Failures::default();
         loop {
@@ -970,16 +662,14 @@ impl AppState {
                     self.idle_server(&directory, ServerState::Off, &mut signals)
                         .await
                 }
-                Wanted::Waiting | Wanted::Unknown => {
+                Wanted::Waiting(()) | Wanted::Unknown => {
                     self.idle_server(&directory, ServerState::Waiting, &mut signals)
                         .await
                 }
                 Wanted::Server(launch) => {
                     let started = Instant::now();
                     let end = self.run_server(&served, &launch, &mut signals).await;
-                    if started.elapsed() >= HEALTHY_RUN {
-                        failures = Failures::default();
-                    }
+                    failures.forget_after_healthy_run(started);
                     end
                 }
             };
@@ -987,7 +677,7 @@ impl AppState {
                 RunEnd::Reconsidered => {}
                 RunEnd::ShutDown => return,
                 RunEnd::Failed(Failure { message, problem }) => {
-                    failures = Failures(failures.0.saturating_add(1));
+                    failures.add_one();
                     tracing::warn!(
                         "Claude Remote Control in {} stopped: {message}",
                         directory.display()
@@ -1011,7 +701,7 @@ impl AppState {
         directory: &Path,
         state: ServerState,
         signals: &mut Signals,
-    ) -> RunEnd {
+    ) -> RunEnd<ServerProblem> {
         self.remote_control
             .update(directory, |status| status.enter(state));
         match signals.wait_for_change(RECHECK_INTERVAL).await {
@@ -1020,7 +710,7 @@ impl AppState {
         }
     }
 
-    async fn wanted_server(&self, served: &Served, directory: &Path) -> Wanted {
+    async fn wanted_server(&self, served: &Served, directory: &Path) -> Wanted<Launch, ()> {
         let folder = match served {
             Served::Projects => None,
             Served::Folder(name) => match self.projects.find(name) {
@@ -1042,11 +732,11 @@ impl AppState {
             return Wanted::Off;
         }
         if AgentCli::installed(Agent::Claude, &self.install_paths).is_err() {
-            return Wanted::Waiting;
+            return Wanted::Waiting(());
         }
         match self.agent_checks.sign_in(Agent::Claude) {
             Some(sign_in) if sign_in.logged_in => {}
-            Some(_) => return Wanted::Waiting,
+            Some(_) => return Wanted::Waiting(()),
             None => return Wanted::Unknown,
         }
         let options = choice.map(|choice| choice.options).unwrap_or_default();
@@ -1076,11 +766,16 @@ impl AppState {
                 Verdict::Update(wanted.claude_version.unwrap_or_default())
             }
             Wanted::Unknown => Verdict::Unsure,
-            Wanted::Server(_) | Wanted::Off | Wanted::Waiting => Verdict::Stop,
+            Wanted::Server(_) | Wanted::Off | Wanted::Waiting(()) => Verdict::Stop,
         }
     }
 
-    async fn run_server(&self, served: &Served, launch: &Launch, signals: &mut Signals) -> RunEnd {
+    async fn run_server(
+        &self,
+        served: &Served,
+        launch: &Launch,
+        signals: &mut Signals,
+    ) -> RunEnd<ServerProblem> {
         signals.restarts.mark_unchanged();
         if signals.is_shutting_down() {
             return RunEnd::ShutDown;
@@ -1088,7 +783,7 @@ impl AppState {
         if let Err(message) = launch.accept_prompts().await {
             return RunEnd::Failed(message.into());
         }
-        if let Err(error) = launch.log.prepare() {
+        if let Err(error) = launch.log.prepare().await {
             tracing::warn!("could not prepare {}: {error}", launch.log.0.display());
         }
         let mut server = match ServerRun::start(launch, &self.remote_control) {
@@ -1128,7 +823,7 @@ impl AppState {
                 _ = signals.changes.changed() => {}
                 _ = signals.sign_in.changed() => {}
                 _ = recheck.tick() => {
-                    if let Err(error) = launch.log.prepare() {
+                    if let Err(error) = launch.log.prepare().await {
                         tracing::warn!("could not prune {}: {error}", launch.log.0.display());
                     }
                 }
@@ -1158,17 +853,18 @@ impl AppState {
                 Verdict::Stop => return self.stop_server(server, launch).await,
                 Verdict::Update(version) => {
                     let usage = server.note_usage(&self.remote_control, launch).await;
-                    let waiting =
-                        update.get_or_insert_with(|| UpdateWait::starting_now(version.clone()));
+                    let waiting = update.get_or_insert_with(|| {
+                        UpdateWait::starting_now(version.clone(), UPDATE_RESTART_DEADLINE)
+                    });
                     waiting.version = version;
-                    if waiting.is_due(usage) {
+                    if waiting.is_due(usage.is_some_and(|usage| usage.sessions > 0)) {
                         tracing::info!(
                             "restarting Claude Remote Control in {} on Claude Code {}",
                             launch.directory.display(),
                             waiting.version
                         );
                         let end = self.stop_server(server, launch).await;
-                        self.remove_unused_claude_versions().await;
+                        self.remove_unused_versions(Agent::Claude).await;
                         return end;
                     }
                     let pending = waiting.pending();
@@ -1179,33 +875,19 @@ impl AppState {
         }
     }
 
-    async fn stop_server(&self, server: ServerRun, launch: &Launch) -> RunEnd {
+    async fn stop_server(&self, server: ServerRun, launch: &Launch) -> RunEnd<ServerProblem> {
         self.remote_control.update(&launch.directory, |status| {
             status.enter(ServerState::Stopping);
         });
         server.stop().await;
         RunEnd::Reconsidered
     }
-
-    /// Skipped while an install runs, which removes them itself.
-    async fn remove_unused_claude_versions(&self) {
-        let Ok(_one_install_at_a_time) = self.install_lock.try_lock() else {
-            return;
-        };
-        let paths = Arc::clone(&self.install_paths);
-        let removed =
-            tokio::task::spawn_blocking(move || paths.remove_unused_versions(Agent::Claude)).await;
-        if let Ok(Err(error)) = removed {
-            tracing::warn!("could not remove old Claude Code versions: {error}");
-        }
-    }
 }
 
-/// A running server, the readers of its output, and the sessions in its process group.
+/// A running server, its output, and the sessions in its process group.
 struct ServerRun {
     child: Child,
     group: Option<ProcessGroup>,
-    readers: Vec<JoinHandle<()>>,
     output: ServerOutput,
 }
 
@@ -1216,29 +898,18 @@ impl ServerRun {
             .id()
             .and_then(|id| i32::try_from(id).ok())
             .map(|id| ProcessGroup(Pid::from_raw(id)));
-        let output = ServerOutput::default();
-        let mut readers = Vec::new();
-        if let Some(stdout) = child.stdout.take() {
-            readers.push(tokio::spawn(output.clone().collect(
-                stdout,
-                Arc::clone(remote_control),
-                launch.clone(),
-            )));
-        }
-        if let Some(stderr) = child.stderr.take() {
-            readers.push(tokio::spawn(output.clone().collect(
-                stderr,
-                Arc::clone(remote_control),
-                launch.clone(),
-            )));
-        }
+        let output = ServerOutput::read(&mut child, &launch.log, || ClaudeLines {
+            remote_control: Arc::clone(remote_control),
+            directory: launch.directory.clone(),
+            in_debug_dump: false,
+            redraws: RedrawFilter::default(),
+        });
         remote_control.update(&launch.directory, |status| {
             status.enter(ServerState::Starting);
         });
         Ok(Self {
             child,
             group,
-            readers,
             output,
         })
     }
@@ -1248,16 +919,16 @@ impl ServerRun {
             group.terminate(&mut self.child).await;
         }
         let _already_gone = self.child.kill().await;
-        self.stop_reading().await;
+        self.output.stop_reading().await;
     }
 
     /// After the server exited by itself: stops the sessions it left and describes the exit.
-    async fn finish(mut self, exit: io::Result<ExitStatus>) -> Failure {
+    async fn finish(mut self, exit: io::Result<ExitStatus>) -> Failure<ServerProblem> {
         if let Some(group) = &self.group {
             group.terminate(&mut self.child).await;
         }
-        self.stop_reading().await;
-        self.output.describe_exit(exit)
+        self.output.stop_reading().await;
+        self.output.describe_exit(exit, ServerProblem::in_output)
     }
 
     async fn note_usage(
@@ -1272,19 +943,6 @@ impl ServerRun {
             .ok();
         remote_control.update(&launch.directory, |status| status.usage = usage);
         usage
-    }
-
-    async fn stop_reading(&mut self) {
-        let deadline = Instant::now().checked_add(OUTPUT_DRAIN_TIMEOUT);
-        for reader in &mut self.readers {
-            let drained = match deadline {
-                Some(deadline) => timeout_at(deadline, &mut *reader).await.is_ok(),
-                None => false,
-            };
-            if !drained {
-                reader.abort();
-            }
-        }
     }
 }
 
@@ -1315,113 +973,66 @@ impl ProcessGroup {
     /// Sessions are the leader's live `--sdk-url` children. Memory counts every process it
     /// started.
     fn usage(&self, capacity: Option<u32>) -> ServerUsage {
-        let mut usage = ServerUsage {
-            sessions: 0,
-            capacity,
-            memory_bytes: 0,
-        };
-        for (process, ProcessStat { parent, zombie, .. }) in Process::family_of(self.0) {
-            if parent == self.0
-                && !zombie
-                && process
+        let family = ProcessFamily::of(self.0);
+        let sessions = family
+            .children()
+            .filter(|process| {
+                process
                     .arguments()
                     .iter()
                     .any(|argument| argument == SESSION_ARGUMENT)
-            {
-                usage.sessions = usage.sessions.saturating_add(1);
-            }
-            if let Some(memory) = process.proportional_memory() {
-                usage.memory_bytes = usage.memory_bytes.saturating_add(memory);
-            }
+            })
+            .count();
+        ServerUsage {
+            sessions: u32::try_from(sessions).unwrap_or(u32::MAX),
+            capacity,
+            memory_bytes: family.memory_bytes(),
         }
-        usage
     }
 }
 
-/// The last lines a server printed, shared by its stdout and stderr readers. The account dump
-/// Claude prints after an error in debug mode goes only to the log.
-#[derive(Debug, Clone, Default)]
-struct ServerOutput(Arc<SyncMutex<VecDeque<String>>>);
+/// Finds the connect URL in Claude Code's output. The account dump Claude Code prints after an
+/// error in debug mode goes only to the log.
+struct ClaudeLines {
+    remote_control: Arc<RemoteControl>,
+    directory: PathBuf,
+    in_debug_dump: bool,
+    redraws: RedrawFilter,
+}
 
-impl ServerOutput {
-    async fn collect(
-        self,
-        stream: impl AsyncRead + Unpin,
-        remote_control: Arc<RemoteControl>,
-        launch: Launch,
-    ) {
-        let mut reader = BufReader::new(stream);
-        let mut bytes = Vec::new();
-        let mut in_debug_dump = false;
-        let mut redraws = RedrawFilter::default();
-        loop {
-            bytes.clear();
-            match reader.read_until(b'\n', &mut bytes).await {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-            let raw = String::from_utf8_lossy(&bytes);
-            let line = raw.trim_end().without_terminal_codes();
-            for logged in redraws.lines_to_log(line.clone(), raw.starts_redraw()) {
-                if let Err(error) = launch.log.append_output(&logged).await {
-                    tracing::debug!("could not log to {}: {error}", launch.log.0.display());
-                }
-            }
-            if line.trim().is_empty() {
-                continue;
-            }
-            in_debug_dump = line.starts_with("[debug] ")
-                || (in_debug_dump && line.starts_with(char::is_whitespace));
-            if in_debug_dump {
-                continue;
-            }
-            if let Some(url) = line.connect_url() {
-                let mut newly_connected = false;
-                remote_control.update(&launch.directory, |status| {
-                    if !matches!(status.state, ServerState::Starting | ServerState::Running) {
-                        return;
-                    }
-                    newly_connected = status.state != ServerState::Running
-                        || status.url.as_deref() != Some(url.as_str());
-                    status.connect(url.clone());
-                });
-                if newly_connected {
-                    tracing::info!(
-                        "Claude Remote Control in {} is connected: {url}",
-                        launch.directory.display()
-                    );
-                }
-            }
-            let mut kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-            kept.push_back(line);
-            while kept.len() > OUTPUT_LINES_KEPT {
-                kept.pop_front();
-            }
-        }
-        for logged in redraws.shorter_redraw() {
-            if let Err(error) = launch.log.append_output(&logged).await {
-                tracing::debug!("could not log to {}: {error}", launch.log.0.display());
-            }
-        }
+impl LineWatcher for ClaudeLines {
+    fn lines_to_log(&mut self, raw: &str, line: String) -> Vec<String> {
+        self.redraws.lines_to_log(line, raw.starts_redraw())
     }
 
-    fn describe_exit(&self, exit: io::Result<ExitStatus>) -> Failure {
-        let kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let lines: Vec<&str> = kept.iter().map(String::as_str).collect();
-        let skipped = lines.len().saturating_sub(OUTPUT_LINES_REPORTED);
-        let tail = lines.get(skipped..).unwrap_or_default().join("\n");
-        let exit = match exit {
-            Ok(status) => status.to_string(),
-            Err(error) => error.to_string(),
-        };
-        Failure {
-            message: if tail.is_empty() {
-                exit
-            } else {
-                format!("{exit}: {tail}")
-            },
-            problem: ServerProblem::in_output(&lines),
+    fn last_lines(&mut self) -> Vec<String> {
+        self.redraws.shorter_redraw()
+    }
+
+    fn watch(&mut self, line: &str) -> bool {
+        self.in_debug_dump = line.starts_with("[debug] ")
+            || (self.in_debug_dump && line.starts_with(char::is_whitespace));
+        if self.in_debug_dump {
+            return false;
         }
+        if let Some(url) = line.connect_url() {
+            let mut newly_connected = false;
+            self.remote_control.update(&self.directory, |status| {
+                if !matches!(status.state, ServerState::Starting | ServerState::Running) {
+                    return;
+                }
+                newly_connected = status.state != ServerState::Running
+                    || status.url.as_deref() != Some(url.as_str());
+                status.connect(url.clone());
+            });
+            if newly_connected {
+                tracing::info!(
+                    "Claude Remote Control in {} is connected: {url}",
+                    self.directory.display()
+                );
+            }
+        }
+        true
     }
 }
 
@@ -1513,67 +1124,31 @@ impl RemoteControlLineExt for str {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
-    use std::io::Write as _;
-    use std::ops::Range;
-    use std::os::unix::fs::symlink;
 
-    use futures_util::{Stream, StreamExt};
+    use futures_util::StreamExt;
 
     use super::*;
-    use crate::manager::api::test_support::TestManager;
+    use crate::manager::api::test_support::{EventStreamExt, TestManager, wait_until};
     use crate::manager::events::ManagerEvent;
     use crate::manager::folders::ProjectsDirectory;
+    use crate::manager::supervision::{FIRST_RETRY_DELAY, LOG_TIME};
 
     const SIGNED_IN: &str = r#"{"loggedIn":true}"#;
-
-    /// Writes an executable script without this process holding it open for writing.
-    fn write_script(path: &Path, script: &str) {
-        let mut writer = std::process::Command::new("sh")
-            .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
-            .arg(path)
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("sh starts");
-        writer
-            .stdin
-            .take()
-            .expect("stdin is piped")
-            .write_all(script.as_bytes())
-            .expect("script is sent");
-        assert!(writer.wait().expect("sh ends").success());
-    }
+    const WAIT: Duration = Duration::from_secs(10);
 
     /// A `claude` that is signed in and whose Remote Control runs `server`.
     fn fake_claude(manager: &TestManager, directory: &Path, server: &str) -> AppState {
-        let script = directory.join("claude");
-        write_script(
-            &script,
+        manager.install_fake_cli(
+            Agent::Claude,
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) {server} ;;\nesac\n"
+                "case \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) {server} ;;\nesac"
             ),
         );
-        manager
-            .state
-            .install_paths
-            .command(Agent::Claude)
-            .replace_symlink(&script)
-            .expect("command link is created");
         let served = directory.join("projects");
         fs::create_dir_all(&served).expect("served directory is created");
         let mut state = manager.state.clone();
         state.projects = ProjectsDirectory(served);
         state
-    }
-
-    /// The topics published until nothing more arrives for 100 ms.
-    async fn published(events: &mut (impl Stream<Item = ManagerEvent> + Unpin)) -> Vec<Topic> {
-        let mut topics = Vec::new();
-        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
-            if let ManagerEvent::Changed { topic, .. } = event {
-                topics.push(topic);
-            }
-        }
-        topics
     }
 
     async fn wait_for(state: &AppState, wanted: ServerState) -> RemoteControlStatus {
@@ -1585,23 +1160,17 @@ mod tests {
         directory: &Path,
         wanted: ServerState,
     ) -> RemoteControlStatus {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        loop {
-            let status = state
-                .remote_control
-                .status_of(directory)
-                .unwrap_or_default();
-            if status.state == wanted {
-                return status;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "still {status:?}, wanted {wanted:?}"
-            );
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || {
+                state
+                    .remote_control
+                    .status_of(directory)
+                    .unwrap_or_default()
+            },
+            |status| status.state == wanted,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -1628,10 +1197,10 @@ mod tests {
             })
             .await
             .expect("settings save");
-        state.remote_control.reconsider();
+        state.remote_control.supervision.reconsider();
         wait_for(&state, ServerState::Off).await;
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -1652,7 +1221,7 @@ mod tests {
             "{retrying:?}"
         );
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -1697,7 +1266,7 @@ mod tests {
             "{log:?}"
         );
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -1743,7 +1312,7 @@ mod tests {
             ]
         );
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -1764,46 +1333,42 @@ mod tests {
 
         let retrying = wait_for(&state, ServerState::Retrying).await;
         assert_eq!(retrying.problem, Some(ServerProblem::Offline));
-        let deadline = Instant::now()
-            .checked_add(FIRST_RETRY_DELAY.saturating_add(Duration::from_secs(10)))
-            .expect("the deadline fits");
-        let running = loop {
-            let status = state
-                .remote_control
-                .status_of(&state.projects.0)
-                .unwrap_or_default();
-            if status.state == ServerState::Running {
-                break status;
-            }
-            assert!(Instant::now() < deadline, "still {status:?}");
-            sleep(Duration::from_millis(100)).await;
-        };
+        let running = wait_until(
+            FIRST_RETRY_DELAY.saturating_add(WAIT),
+            || {
+                state
+                    .remote_control
+                    .status_of(&state.projects.0)
+                    .unwrap_or_default()
+            },
+            |status| status.state == ServerState::Running,
+        )
+        .await;
         assert_eq!(
             (running.problem, running.last_error, running.restarts),
             (None, None, 1)
         );
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
-    /// Installs a `claude` script as `version`, the way the manager links a real install.
-    fn install_fake_claude(state: &AppState, directory: &Path, version: &str, server: &str) {
-        let versions = state.install_paths.versions_directory(Agent::Claude);
-        fs::create_dir_all(&versions).expect("versions directory is created");
-        let script = versions.join(version);
-        write_script(
-            &script,
+    /// A signed-in `claude` installed as `version`, which records its version in `starts` when
+    /// its Remote Control runs `server`.
+    fn install_claude_version(
+        manager: &TestManager,
+        directory: &Path,
+        version: &str,
+        server: &str,
+    ) {
+        manager.install_fake_version(
+            Agent::Claude,
+            version,
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) echo {version} >> {starts}; {server} ;;\nesac\n",
+                "case \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) echo {version} >> {starts}; {server} ;;\nesac",
                 starts = directory.join("starts").display()
             ),
         );
-        state
-            .install_paths
-            .command(Agent::Claude)
-            .replace_symlink(&script)
-            .expect("command link is created");
     }
 
     fn starts(directory: &Path) -> Vec<String> {
@@ -1820,25 +1385,24 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let server = "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60";
         let state = fake_claude(&manager, directory.path(), server);
-        install_fake_claude(&state, directory.path(), "2.1.1", server);
+        install_claude_version(&manager, directory.path(), "2.1.1", server);
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Running).await;
 
-        install_fake_claude(&state, directory.path(), "2.1.2", server);
-        state.remote_control.reconsider();
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while starts(directory.path()) != ["2.1.1", "2.1.2"] {
-            assert!(Instant::now() < deadline, "{:?}", starts(directory.path()));
-            sleep(Duration::from_millis(50)).await;
-        }
+        install_claude_version(&manager, directory.path(), "2.1.2", server);
+        state.remote_control.supervision.reconsider();
+        wait_until(
+            WAIT,
+            || starts(directory.path()),
+            |starts| starts == &["2.1.1", "2.1.2"],
+        )
+        .await;
         let running = wait_for(&state, ServerState::Running).await;
         assert_eq!(running.update, None);
         let versions = state.install_paths.versions_directory(Agent::Claude);
         assert!(!versions.join("2.1.1").exists());
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -1852,26 +1416,23 @@ mod tests {
             session = session.display()
         );
         let state = fake_claude(&manager, directory.path(), &server);
-        install_fake_claude(&state, directory.path(), "2.1.1", &server);
+        install_claude_version(&manager, directory.path(), "2.1.1", &server);
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Running).await;
 
-        install_fake_claude(&state, directory.path(), "2.1.2", &server);
-        state.remote_control.reconsider();
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        let waiting = loop {
-            let status = state
-                .remote_control
-                .status_of(&state.projects.0)
-                .unwrap_or_default();
-            if status.update.is_some() {
-                break status;
-            }
-            assert!(Instant::now() < deadline, "still {status:?}");
-            sleep(Duration::from_millis(50)).await;
-        };
+        install_claude_version(&manager, directory.path(), "2.1.2", &server);
+        state.remote_control.supervision.reconsider();
+        let waiting = wait_until(
+            WAIT,
+            || {
+                state
+                    .remote_control
+                    .status_of(&state.projects.0)
+                    .unwrap_or_default()
+            },
+            |status| status.update.is_some(),
+        )
+        .await;
         assert_eq!(waiting.state, ServerState::Running);
         assert_eq!(
             waiting.update.map(|update| update.version).as_deref(),
@@ -1893,13 +1454,15 @@ mod tests {
             .parse()
             .expect("pid is a number");
         nix::sys::signal::kill(Pid::from_raw(session), Signal::SIGKILL).expect("session ends");
-        state.remote_control.reconsider();
-        while starts(directory.path()) != ["2.1.1", "2.1.2"] {
-            assert!(Instant::now() < deadline, "{:?}", starts(directory.path()));
-            sleep(Duration::from_millis(50)).await;
-        }
+        state.remote_control.supervision.reconsider();
+        wait_until(
+            WAIT,
+            || starts(directory.path()),
+            |starts| starts == &["2.1.1", "2.1.2"],
+        )
+        .await;
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2172,33 +1735,6 @@ mod tests {
     }
 
     #[test]
-    fn retries_back_off_up_to_five_minutes() {
-        assert_eq!(Failures(1).retry_delay(), Duration::from_secs(5));
-        assert_eq!(Failures(2).retry_delay(), Duration::from_secs(10));
-        assert_eq!(Failures(4).retry_delay(), Duration::from_secs(40));
-        assert_eq!(Failures(10).retry_delay(), LONGEST_RETRY_DELAY);
-        assert_eq!(Failures(u32::MAX).retry_delay(), LONGEST_RETRY_DELAY);
-    }
-
-    #[test]
-    fn exit_description_ends_with_the_last_lines() {
-        let output = ServerOutput::default();
-        output
-            .0
-            .lock()
-            .expect("output lock")
-            .extend(["one", "Workspace not trusted"].map(str::to_owned));
-        let failure = output.describe_exit(Err(io::Error::other("gone")));
-        assert_eq!(
-            failure,
-            Failure {
-                message: "gone: one\nWorkspace not trusted".to_owned(),
-                problem: None
-            }
-        );
-    }
-
-    #[test]
     fn claude_messages_name_the_problem() {
         for (line, problem) in [
             (
@@ -2324,92 +1860,6 @@ mod tests {
         assert!(!resized.is_update_of(&running));
     }
 
-    #[test]
-    fn an_update_waits_for_the_last_session_or_the_deadline() {
-        let usage = |sessions| {
-            Some(ServerUsage {
-                sessions,
-                capacity: Some(4),
-                memory_bytes: 1,
-            })
-        };
-        let waiting = UpdateWait::starting_now("2.1.290".to_owned());
-        assert!(!waiting.is_due(usage(1)));
-        assert!(waiting.is_due(usage(0)));
-        assert!(waiting.is_due(None));
-        let overdue = UpdateWait {
-            deadline: Instant::now(),
-            ..waiting
-        };
-        assert!(overdue.is_due(usage(3)));
-        assert_eq!(overdue.pending().version, "2.1.290");
-        assert!(overdue.pending().restart_by > OffsetDateTime::now_utc());
-    }
-
-    #[test]
-    fn the_log_tail_continues_into_the_rotated_log() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let log = ServerLog(directory.path().to_path_buf());
-        assert!(log.tail().expect("an empty log is readable").is_empty());
-        let numbered = |range: Range<usize>| -> String {
-            range.map(|number| format!("line {number}\n")).collect()
-        };
-        fs::write(directory.path().join(ROTATED_LOG_FILE), numbered(0..150))
-            .expect("rotated log is written");
-        fs::write(directory.path().join(LOG_FILE), numbered(150..250)).expect("log is written");
-        let tail = log.tail().expect("log is readable");
-        assert_eq!(tail.len(), LOG_TAIL_LINES);
-        assert_eq!(tail.first().map(String::as_str), Some("line 50"));
-        assert_eq!(tail.last().map(String::as_str), Some("line 249"));
-    }
-
-    #[test]
-    fn old_and_excess_session_logs_are_removed() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let log = ServerLog(directory.path().join("projects"));
-        log.prepare().expect("the directory is created");
-        let write = |name: &str, bytes: u64, age: Duration| {
-            let path = log.0.join(name);
-            let file = fs::File::create(&path).expect("file is created");
-            file.set_len(bytes).expect("file is sized");
-            file.set_modified(SystemTime::now().checked_sub(age).expect("the time fits"))
-                .expect("time is set");
-        };
-        let hour = Duration::from_secs(60 * 60);
-        let old = SESSION_LOGS_KEPT_FOR.saturating_add(hour);
-        write(LOG_FILE, 1, old);
-        write(ROTATED_LOG_FILE, 1, old);
-        write("server-old.log", 1, old);
-        write("server-recent.log", 1, hour);
-        write("bridge-transcript-recent.jsonl", 1, hour);
-        write(
-            "bridge-transcript-large.jsonl",
-            SESSION_LOGS_LARGEST,
-            hour.saturating_mul(2),
-        );
-        symlink(log.debug_file(), log.0.join(LATEST_LOG_LINK)).expect("link is created");
-
-        log.prepare().expect("session logs are pruned");
-        let mut remaining: Vec<String> = log
-            .0
-            .entries_or_empty()
-            .expect("directory is readable")
-            .into_iter()
-            .filter_map(|path| Some(path.file_name()?.to_str()?.to_owned()))
-            .collect();
-        remaining.sort();
-        assert_eq!(
-            remaining,
-            [
-                "bridge-transcript-recent.jsonl",
-                LATEST_LOG_LINK,
-                "server-recent.log",
-                LOG_FILE,
-                ROTATED_LOG_FILE,
-            ]
-        );
-    }
-
     #[tokio::test]
     async fn sessions_left_by_a_stopped_server_are_stopped_too() {
         let manager = TestManager::new();
@@ -2431,18 +1881,14 @@ mod tests {
             .trim()
             .parse()
             .expect("pid is a number");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(5))
-            .expect("the deadline fits");
-        while nix::sys::signal::kill(Pid::from_raw(session), None).is_ok() {
-            assert!(
-                Instant::now() < deadline,
-                "session {session} is still running"
-            );
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(
+            WAIT,
+            || nix::sys::signal::kill(Pid::from_raw(session), None).is_ok(),
+            |running| !running,
+        )
+        .await;
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2463,15 +1909,8 @@ mod tests {
                 .and_then(|id| i32::try_from(id).ok())
                 .expect("leader has a pid"),
         ));
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(5))
-            .expect("the deadline fits");
-        while group.usage(Some(4)).sessions < 2 {
-            assert!(Instant::now() < deadline, "the group did not start");
-            sleep(Duration::from_millis(20)).await;
-        }
-        let usage = group.usage(Some(4));
-        assert_eq!((usage.sessions, usage.capacity), (2, Some(4)));
+        let usage = wait_until(WAIT, || group.usage(Some(4)), |usage| usage.sessions == 2).await;
+        assert_eq!(usage.capacity, Some(4));
         assert!(usage.memory_bytes > 0);
 
         group.terminate(&mut leader).await;
@@ -2494,24 +1933,24 @@ mod tests {
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Running).await;
 
-        state.remote_control.restart();
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while fs::read_to_string(&starts)
-            .unwrap_or_default()
-            .lines()
-            .count()
-            < 2
-        {
-            assert!(Instant::now() < deadline, "the server did not start again");
-            sleep(Duration::from_millis(50)).await;
-        }
+        state.remote_control.supervision.restart();
+        wait_until(
+            WAIT,
+            || fs::read_to_string(&starts).unwrap_or_default(),
+            |started| started.lines().count() == 2,
+        )
+        .await;
         wait_for(&state, ServerState::Running).await;
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
-        assert!(*state.remote_control.stopped.borrow());
+        assert!(
+            state
+                .remote_control
+                .supervision
+                .wait_until_stopped(Duration::ZERO)
+                .await
+        );
     }
 
     #[tokio::test]
@@ -2524,10 +1963,10 @@ mod tests {
             directory.path(),
             "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
         );
-        write_script(
-            &directory.path().join("claude"),
+        manager.install_fake_cli(
+            Agent::Claude,
             &format!(
-                "#!/bin/sh\ncase \"$1\" in\n  auth) if [ -f {marker} ]; then echo '{SIGNED_IN}'; else echo '{{\"loggedIn\":false}}'; fi ;;\n  remote-control) echo 'https://claude.ai/code?environment=env_test'; exec sleep 60 ;;\nesac\n",
+                "case \"$1\" in\n  auth) if [ -f {marker} ]; then echo '{SIGNED_IN}'; else echo '{{\"loggedIn\":false}}'; fi ;;\n  remote-control) echo 'https://claude.ai/code?environment=env_test'; exec sleep 60 ;;\nesac",
                 marker = marker.display()
             ),
         );
@@ -2538,7 +1977,7 @@ mod tests {
         state.agent_checks.refresh(Agent::Claude).await;
         wait_for(&state, ServerState::Running).await;
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2618,7 +2057,7 @@ esac"#,
         assert_eq!(seen.last(), Some(&ServerState::Running), "{seen:?}");
         assert_eq!(servers_started(&manager), 1);
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2635,16 +2074,10 @@ esac"#,
         assert_eq!(servers_started(&manager), 1);
 
         sign_in_through_the_api(&manager, &cookie).await;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while servers_started(&manager) < 2 {
-            assert!(Instant::now() < deadline, "the server did not start again");
-            sleep(Duration::from_millis(50)).await;
-        }
+        wait_until(WAIT, || servers_started(&manager), |started| *started == 2).await;
         wait_for(&state, ServerState::Running).await;
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2677,15 +2110,9 @@ esac"#,
             .change_folder_choice("app", |choice| choice.serve = false)
             .await
             .expect("the choice is saved");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while state.remote_control.status_of(&app).is_some() {
-            assert!(Instant::now() < deadline, "the folder server did not stop");
-            sleep(Duration::from_millis(50)).await;
-        }
+        assert!(state.remote_control.wait_until_gone(&app, WAIT).await);
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2725,42 +2152,40 @@ esac"#,
             })
             .await
             .expect("the choice is saved");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
         let arguments = |spawn: &str, rest: &str| {
             format!("remote-control --spawn {spawn} {rest}--permission-mode")
         };
-        loop {
-            let started = fs::read_to_string(&starts).unwrap_or_default();
-            let app_starts: Vec<&str> = started
+        let started_in = |started: &str, folder: &str| -> Vec<String> {
+            started
                 .lines()
-                .filter(|line| line.starts_with("app "))
-                .collect();
-            if let [first, second] = app_starts[..] {
-                assert!(first.contains(&arguments("worktree", "")), "{first}");
-                assert!(first.contains("--permission-mode auto"), "{first}");
-                assert!(
-                    second.contains(&arguments("same-dir", "--capacity 2 ")),
-                    "{second}"
-                );
-                assert!(second.contains("--permission-mode plan"), "{second}");
-                for plain in ["projects ", "notes "] {
-                    let starts: Vec<&str> = started
-                        .lines()
-                        .filter(|line| line.starts_with(plain))
-                        .collect();
-                    assert_eq!(starts.len(), 1, "{started}");
-                    assert!(starts[0].contains(&arguments("same-dir", "")), "{started}");
-                }
-                break;
-            }
-            assert!(Instant::now() < deadline, "started {started}");
-            sleep(Duration::from_millis(50)).await;
+                .filter(|line| line.starts_with(&format!("{folder} ")))
+                .map(str::to_owned)
+                .collect()
+        };
+        let started = wait_until(
+            WAIT,
+            || fs::read_to_string(&starts).unwrap_or_default(),
+            |started| started_in(started, "app").len() == 2,
+        )
+        .await;
+        let [first, second] = &started_in(&started, "app")[..] else {
+            unreachable!("the wait saw two starts");
+        };
+        assert!(first.contains(&arguments("worktree", "")), "{first}");
+        assert!(first.contains("--permission-mode auto"), "{first}");
+        assert!(
+            second.contains(&arguments("same-dir", "--capacity 2 ")),
+            "{second}"
+        );
+        assert!(second.contains("--permission-mode plan"), "{second}");
+        for plain in ["projects", "notes"] {
+            let starts = started_in(&started, plain);
+            assert_eq!(starts.len(), 1, "{started}");
+            assert!(starts[0].contains(&arguments("same-dir", "")), "{started}");
         }
         wait_in(&state, &app, ServerState::Running).await;
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2780,10 +2205,10 @@ esac"#,
             .await
             .expect("the choice is saved");
         wait_in(&state, &app, ServerState::Waiting).await;
-        let published = published(&mut events).await;
+        let published = events.published().await;
         assert!(published.contains(&Topic::RemoteControl), "{published:?}");
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2806,7 +2231,7 @@ esac"#,
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Running).await;
         wait_in(&state, &app, ServerState::Running).await;
-        let overview = state.remote_control.overview(&state.projects.0);
+        let overview = state.remote_control_overview();
         assert_eq!(overview.projects.state, ServerState::Running);
         assert_eq!(
             overview
@@ -2822,15 +2247,9 @@ esac"#,
             .await
             .expect("the choice is saved");
         wait_in(&state, &app, ServerState::Stopping).await;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while state.remote_control.status_of(&app).is_some() {
-            assert!(Instant::now() < deadline, "the folder server did not stop");
-            sleep(Duration::from_millis(50)).await;
-        }
+        assert!(state.remote_control.wait_until_gone(&app, WAIT).await);
 
-        let published = published(&mut events).await;
+        let published = events.published().await;
         for expected in [Topic::Folders, Topic::RemoteControl] {
             assert!(
                 published.contains(&expected),
@@ -2838,7 +2257,7 @@ esac"#,
             );
         }
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2869,7 +2288,7 @@ esac"#,
         assert_eq!(state.remote_control.status_of(&app), None);
         assert!(state.settings.lock().await.agents.claude.folders.is_empty());
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 
@@ -2905,26 +2324,22 @@ esac"#,
             .change_folder_choice("unserved", |choice| choice.serve = false)
             .await
             .expect("the choice is saved");
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .expect("the deadline fits");
-        while state.remote_control.status_of(&unserved).is_some() {
-            assert!(Instant::now() < deadline, "the folder server did not stop");
-            sleep(Duration::from_millis(50)).await;
-        }
+        assert!(state.remote_control.wait_until_gone(&unserved, WAIT).await);
         assert!(log("unserved").is_dir());
 
         for folder in [&served, &unserved] {
             fs::remove_dir_all(folder).expect("folder is removed");
         }
-        state.remote_control.reconsider();
-        while log("served").exists() || log("unserved").exists() {
-            assert!(Instant::now() < deadline, "a log of a gone folder is left");
-            sleep(Duration::from_millis(50)).await;
-        }
+        state.remote_control.supervision.reconsider();
+        wait_until(
+            WAIT,
+            || (log("served").exists(), log("unserved").exists()),
+            |left| *left == (false, false),
+        )
+        .await;
         assert!(state.remote_control.log(&Served::Projects).0.is_dir());
 
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 }

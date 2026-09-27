@@ -4,7 +4,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { useCallback, useId, useRef } from "react";
 import type { RefObject } from "react";
 
-import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
+import { SignInSteps, Waiting } from "@/components/sign-in-steps";
 import { Badge } from "@/components/ui/badge";
 import type { BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/componen
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { GIT_DESCRIPTIONS } from "@/content/git";
+import { SIGN_IN_DESCRIPTIONS } from "@/content/sign-in";
 import { useGitActions } from "@/hooks/use-git-actions";
 import { handOffFocus } from "@/lib/focus";
 import { errorMessage } from "@/lib/utils";
@@ -131,7 +132,7 @@ function GitHubSignIn({
     >
       <SignInSteps prompt={prompt} />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <WaitingForWebsite />
+        <Waiting label={SIGN_IN_DESCRIPTIONS.waiting_for_website} />
         <Button variant="outline" size="sm" loading={restarting} onClick={startOver}>
           {GIT_DESCRIPTIONS.start_over}
         </Button>

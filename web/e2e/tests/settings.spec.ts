@@ -1,7 +1,18 @@
 import { expect, test } from "@playwright/test";
 import type { Page, PlaywrightTestOptions, PlaywrightWorkerArgs } from "@playwright/test";
 
-import { PASSWORD, installFakeClaude, removeFakeClaude } from "./manager.ts";
+import {
+  CODEX_SIGNED_OUT,
+  PASSWORD,
+  installFakeClaude,
+  installFakeCodex,
+  removeFakeClaude,
+  removeFakeCodex,
+} from "./manager.ts";
+
+const CODEX_DEFAULTS = {
+  remote_control: { enabled: true, sandbox: "danger-full-access", approvals: "on-request" },
+};
 
 function card(page: Page, title: string) {
   return page.locator("section[data-slot=card]", {
@@ -89,7 +100,7 @@ test.describe("with Claude Code installed", () => {
     await mode.fill("acceptEdits");
     await page.keyboard.press("Escape");
     await capacity.fill("2");
-    await claude.getByRole("button", { name: "Save" }).click();
+    await claude.locator("form").getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
 
     await page.reload();
@@ -106,7 +117,7 @@ test.describe("with Claude Code installed", () => {
     await mode.fill("auto");
     await page.keyboard.press("Escape");
     await capacity.fill("");
-    await claude.getByRole("button", { name: "Save" }).click();
+    await claude.locator("form").getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("Claude Code settings saved.").last()).toBeVisible();
   });
 
@@ -130,6 +141,101 @@ test.describe("with Claude Code installed", () => {
       "New sessions from the Claude app start in this mode. Choose one of the listed modes.",
     );
   });
+});
+
+test.describe("with Codex installed", () => {
+  test.beforeEach(() => installFakeCodex("9.9.9-settings", CODEX_SIGNED_OUT));
+  test.afterEach(async ({ request }) => {
+    try {
+      const reset = await request.put("api/v1/agents/codex/settings", { data: CODEX_DEFAULTS });
+      expect(reset.ok()).toBe(true);
+    } finally {
+      await removeFakeCodex(request);
+    }
+  });
+
+  test("every Codex setting is named and described", async ({ page }) => {
+    await page.goto("./settings");
+    const codex = card(page, "Codex");
+    await expect(
+      codex.getByRole("switch", { name: "Serve to the ChatGPT app" }),
+    ).toHaveAccessibleDescription("Serves this box while Codex is signed in with ChatGPT.");
+    await expect(codex.getByRole("radiogroup", { name: "Sandbox" })).toHaveAccessibleDescription(
+      "Read only and Workspace write need a container that allows user namespaces.",
+    );
+    await expect(codex.getByRole("radiogroup", { name: "Approvals" })).toHaveAccessibleDescription(
+      "Codex's questions go to the ChatGPT app.",
+    );
+    const options = [
+      ["No sandbox", "The container is the only boundary."],
+      [
+        "Workspace write",
+        "Commands can write in the chat's folder, except .git, and in /tmp, with no network.",
+      ],
+      ["Read only", "Commands can read files but not change them."],
+      ["On request", "Codex asks when it needs to, such as before rm -\u2060rf."],
+      ["Never", "Codex never asks and refuses commands like rm -\u2060rf."],
+    ] as const;
+    for (const [name, description] of options) {
+      await expect(codex.getByRole("radio", { name, exact: true })).toHaveAccessibleDescription(
+        description,
+      );
+    }
+  });
+
+  test("Codex settings start at their defaults and are saved", async ({ page }) => {
+    await page.goto("./settings");
+    const codex = card(page, "Codex");
+    const serve = codex.getByRole("switch", { name: "Serve to the ChatGPT app" });
+    const readOnly = codex.getByRole("radio", { name: "Read only", exact: true });
+    const never = codex.getByRole("radio", { name: "Never", exact: true });
+    await expect(serve).toBeChecked();
+    await expect(codex.getByRole("radio", { name: "No sandbox", exact: true })).toBeChecked();
+    await expect(codex.getByRole("radio", { name: "On request", exact: true })).toBeChecked();
+
+    await serve.setChecked(false);
+    await readOnly.click();
+    await never.click();
+    await codex.locator("form").getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("Codex settings saved.").last()).toBeVisible();
+
+    await page.reload();
+    await expect(serve).not.toBeChecked();
+    await expect(readOnly).toBeChecked();
+    await expect(never).toBeChecked();
+  });
+
+  test("a failed Codex save shows why and keeps the choices", async ({ page }) => {
+    await page.route("**/api/v1/agents/codex/settings", (route) =>
+      route.request().method() === "PUT"
+        ? route.fulfill({ status: 500, json: { error: "could not write settings" } })
+        : route.fallback(),
+    );
+    await page.goto("./settings");
+    const codex = card(page, "Codex");
+    const never = codex.getByRole("radio", { name: "Never", exact: true });
+    await never.click();
+    await codex.locator("form").getByRole("button", { name: "Save" }).click();
+    await expect(codex.locator("form").getByRole("alert")).toHaveText("could not write settings");
+    await expect(never).toBeChecked();
+    await expect(page.getByText("Codex settings saved.")).toHaveCount(0);
+  });
+});
+
+test("the Codex card is hidden until Codex is installed", async ({ page, request }) => {
+  await page.goto("./settings");
+  await expect(card(page, "Claude Code")).toBeVisible();
+  await expect(card(page, "Codex")).toBeHidden();
+
+  installFakeCodex("9.9.9-settings", CODEX_SIGNED_OUT);
+  try {
+    await page.reload();
+    await expect(
+      card(page, "Codex").getByRole("switch", { name: "Serve to the ChatGPT app" }),
+    ).toBeVisible();
+  } finally {
+    await removeFakeCodex(request);
+  }
 });
 
 test("git starts signed out of GitHub and keeps the commit identity", async ({ page }) => {

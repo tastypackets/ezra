@@ -19,7 +19,12 @@ import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions } from "@/queries/agent-queries";
 import { AGENT_ACTION } from "@/queries/query-keys";
 
-export type AgentAction = "install" | "start_sign_in" | "submit_code" | "sign_out";
+export type AgentAction =
+  | "install"
+  | "start_sign_in"
+  | "submit_code"
+  | "sign_out"
+  | "retry_remote_control";
 
 /** Every action on one agent. Each refreshes the agent list when it settles. */
 export function useAgentActions(agent: Agent) {
@@ -72,8 +77,11 @@ export function useAgentActionPending(agent: Agent, action: AgentAction): boolea
   return useIsMutating({ mutationKey: [AGENT_ACTION, agent, action] }) > 0;
 }
 
-/** Why the agent's most recent failed action failed, until that action runs again. */
-export function useAgentActionError(agent: Agent): string | undefined {
+/**
+ * Why the agent's most recent failed action failed, until that action runs again. Failures of
+ * `hidden` are left out.
+ */
+export function useAgentActionError(agent: Agent, hidden?: AgentAction): string | undefined {
   const runs = useMutationState({
     filters: { mutationKey: [AGENT_ACTION, agent] },
     select: (mutation) => ({ action: mutation.options.mutationKey?.[2], state: mutation.state }),
@@ -81,7 +89,7 @@ export function useAgentActionError(agent: Agent): string | undefined {
   const newestPerAction = new Map<unknown, (typeof runs)[number]["state"]>();
   for (const { action, state } of runs) {
     const newest = newestPerAction.get(action);
-    if (!newest || state.submittedAt >= newest.submittedAt) {
+    if (action !== hidden && (!newest || state.submittedAt >= newest.submittedAt)) {
       newestPerAction.set(action, state);
     }
   }

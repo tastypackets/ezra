@@ -1,9 +1,6 @@
-import type { ServerLogTail } from "@ezra/client";
-import {
-  getFolderRemoteControlLogOptions,
-  getRemoteControlLogOptions,
-} from "@ezra/client/react-query.gen";
+import type { ErrorBody, ServerLogTail } from "@ezra/client";
 import { useQuery } from "@tanstack/react-query";
+import type { QueryKey, UseQueryOptions, UseQueryResult } from "@tanstack/react-query";
 import { useLayoutEffect, useRef } from "react";
 
 import {
@@ -22,25 +19,27 @@ const LOG_POLL_MS = 5_000;
 /** How close to the end the reader must be for new lines to scroll into view. */
 const FOLLOW_SLACK_PX = 24;
 
-export interface ServerLogDialogProps {
-  /** The folder whose server's log to show, or none for the /projects server. */
-  folder?: string;
+export interface ServerLogDialogProps<TQueryKey extends QueryKey> {
+  /** Query options for the log to show. */
+  query: UseQueryOptions<ServerLogTail, ErrorBody, ServerLogTail, TQueryKey>;
+  title: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-/** The last lines of a Remote Control server's log, kept current while open. */
-export function ServerLogDialog({ folder, open, onOpenChange }: ServerLogDialogProps) {
-  const log = useServerLog(folder, open);
+/** The last lines of a server's log, kept current while open. */
+export function ServerLogDialog<TQueryKey extends QueryKey>({
+  query,
+  title,
+  open,
+  onOpenChange,
+}: ServerLogDialogProps<TQueryKey>) {
+  const log = useQuery({ ...query, enabled: open, refetchInterval: LOG_POLL_MS });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent closeLabel={REMOTE_CONTROL_DESCRIPTIONS.close} className="sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>
-            {folder === undefined
-              ? REMOTE_CONTROL_DESCRIPTIONS.projects_log_title
-              : REMOTE_CONTROL_DESCRIPTIONS.log_title(folder)}
-          </DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           {log.data ? (
             <DialogDescription className="break-all">
               {REMOTE_CONTROL_DESCRIPTIONS.log_description(log.data.path)}
@@ -53,21 +52,7 @@ export function ServerLogDialog({ folder, open, onOpenChange }: ServerLogDialogP
   );
 }
 
-function useServerLog(folder: string | undefined, open: boolean) {
-  const projects = useQuery({
-    ...getRemoteControlLogOptions(),
-    enabled: open && folder === undefined,
-    refetchInterval: LOG_POLL_MS,
-  });
-  const inFolder = useQuery({
-    ...getFolderRemoteControlLogOptions({ path: { name: folder ?? "" } }),
-    enabled: open && folder !== undefined,
-    refetchInterval: LOG_POLL_MS,
-  });
-  return folder === undefined ? projects : inFolder;
-}
-
-function LogBody({ log }: { log: ReturnType<typeof useServerLog> }) {
+function LogBody({ log }: { log: UseQueryResult<ServerLogTail, ErrorBody> }) {
   if (log.isPending) {
     return (
       <div className="flex justify-center text-muted-foreground">

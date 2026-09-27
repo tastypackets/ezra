@@ -8,6 +8,7 @@ use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
 use super::checks::AgentChecks;
 use super::clones::Clones;
+use super::codex_remote::{CodexRemote, ExpectedPeer, ServerBudget};
 use super::environment::EnvironmentSettings;
 use super::events::Events;
 use super::folders::{PROJECTS_DIRECTORY, ProjectsDirectory};
@@ -15,6 +16,7 @@ use super::git::GitTools;
 use super::login::LoginProcess;
 use super::remote_control::RemoteControl;
 use super::settings::{Settings, SettingsError};
+use super::supervision::ServerLog;
 use super::tls::ServedCertificate;
 use super::updates::LatestRelease;
 
@@ -34,6 +36,7 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
+    pub codex_remote: Arc<CodexRemote>,
     pub clones: Arc<Clones>,
     pub events: Events,
     /// Absent in tests, which serve plain HTTP.
@@ -59,6 +62,12 @@ impl AppState {
             .map_or_else(PathBuf::new, Path::to_path_buf)
             .join("remote-control");
         Self {
+            codex_remote: Arc::new(CodexRemote::new(
+                events.clone(),
+                ServerLog(remote_control_logs.join("codex")),
+                ServerBudget::default(),
+                ExpectedPeer::Child,
+            )),
             remote_control: Arc::new(RemoteControl::new(events.clone(), remote_control_logs)),
             settings_path: Arc::new(settings_path),
             settings: Arc::new(Mutex::new(settings)),

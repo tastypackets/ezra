@@ -29,11 +29,18 @@ describe("pollInterval", () => {
 });
 
 describe("isInstalled", () => {
-  it("follows the agent's own installed version", () => {
-    const codex: AgentStatus = { ...idle, agent: "codex", installed_version: "0.1.0" };
-    expect(isInstalled("claude")([idle, codex])).toBe(false);
-    expect(isInstalled("codex")([idle, codex])).toBe(true);
-    expect(isInstalled("claude")([{ ...idle, installed_version: "2.1.283" }, codex])).toBe(true);
-    expect(isInstalled("codex")([idle])).toBe(false);
+  const codex: AgentStatus = { ...idle, agent: "codex" };
+  const claudeInstalled = { ...idle, installed_version: "2.1.283" };
+  const codexInstalled = { ...codex, installed_version: "0.157.1" };
+
+  it("follows each agent's own installed version", () => {
+    expect(isInstalled("claude")([idle, codexInstalled])).toBe(false);
+    expect(isInstalled("claude")([claudeInstalled, codex])).toBe(true);
+    expect(isInstalled("codex")([claudeInstalled, codex])).toBe(false);
+    expect(isInstalled("codex")([idle, codexInstalled])).toBe(true);
+  });
+
+  it("is false for an agent missing from the list", () => {
+    expect(isInstalled("codex")([claudeInstalled])).toBe(false);
   });
 });

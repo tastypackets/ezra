@@ -1,13 +1,19 @@
 import { expect, test } from "@playwright/test";
 import type { APIResponse, Locator, Page, Request, Route } from "@playwright/test";
 
-import { inContainer, installFakeClaude, removeFakeClaude, writeInContainer } from "./manager.ts";
+import {
+  CODEX_SIGNED_OUT,
+  inContainer,
+  installFakeClaude,
+  installFakeCodex,
+  removeFakeClaude,
+  removeFakeCodex,
+  writeInContainer,
+} from "./manager.ts";
 
 const CLAUDE_FILE = "/config/claude/settings.json";
 const CODEX_DIRECTORY = "/config/codex";
 const CODEX_FILE = `${CODEX_DIRECTORY}/config.toml`;
-const CODEX_PACKAGE = "/home/dev/.local/share/codex/9.9.9-e2e";
-const CODEX_COMMAND = "/home/dev/.local/bin/codex";
 const CLAUDE_API = "**/api/v1/agents/claude/settings-file";
 const CLAUDE_TITLE = "Claude Code settings.json";
 const CODEX_TITLE = "Codex config.toml";
@@ -15,25 +21,6 @@ const CLAUDE_HINT =
   "Running Claude Code sessions apply most changes within seconds, Remote Control servers only when they start.";
 const CHANGED = (path: string) =>
   `${path} changed on disk. Revert loads it, Overwrite replaces it with your text.`;
-
-/** Links a signed-out `codex` script, so the manager counts Codex as installed. */
-function installFakeCodex(): void {
-  writeInContainer(
-    `${CODEX_PACKAGE}/bin/codex`,
-    `#!/bin/sh
-case "$*" in
-  "login status") echo 'Not logged in' >&2; exit 1 ;;
-esac
-`,
-    "755",
-  );
-  inContainer("mkdir", "-p", "/home/dev/.local/bin");
-  inContainer("ln", "-sfn", `${CODEX_PACKAGE}/bin/codex`, CODEX_COMMAND);
-}
-
-function removeFakeCodex(): void {
-  inContainer("rm", "-rf", CODEX_COMMAND, CODEX_PACKAGE, CODEX_DIRECTORY);
-}
 
 /** The file's bytes in the container. */
 function bytesOf(path: string): Buffer {
@@ -68,10 +55,9 @@ function writeLikeCodex(path: string, contents: string): void {
   );
 }
 
+/** The part of an agent's card that edits the file titled `title`. */
 function card(page: Page, title: string) {
-  return page.locator("section[data-slot=card]", {
-    has: page.getByRole("heading", { name: title, exact: true, level: 2 }),
-  });
+  return page.getByRole("region", { name: title, exact: true });
 }
 
 /** Pastes `text` at the cursor, as the clipboard would. */
@@ -147,20 +133,33 @@ async function drawn(page: Page): Promise<void> {
   );
 }
 
-test("each agent's settings file shows only once the agent is installed", async ({ page }) => {
+test("each agent's settings file shows in its card only once the agent is installed", async ({
+  page,
+  request,
+}) => {
   await page.goto("./");
   await page.getByRole("link", { name: "Settings", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Claude Code", exact: true })).toBeVisible();
+  const claude = page.getByRole("region", { name: "Claude Code", exact: true });
+  await expect(claude).toBeVisible();
   await expect(card(page, CLAUDE_TITLE)).toHaveCount(0);
   await expect(card(page, CODEX_TITLE)).toHaveCount(0);
 
-  installFakeCodex();
+  installFakeCodex("9.9.9-e2e", CODEX_SIGNED_OUT);
   try {
     await page.reload();
-    await expect(card(page, CODEX_TITLE).getByRole("textbox", { name: CODEX_TITLE })).toBeVisible();
+    const codex = page.getByRole("region", { name: "Codex", exact: true });
+    await expect(codex.getByRole("textbox", { name: CODEX_TITLE })).toBeVisible();
+    await expect(codex.getByRole("region", { name: CODEX_TITLE })).toBeVisible();
     await expect(card(page, CLAUDE_TITLE)).toHaveCount(0);
+
+    installFakeClaude("2.1.0-e2e");
+    await page.reload();
+    await expect(claude.getByRole("textbox", { name: CLAUDE_TITLE })).toBeVisible();
+    await expect(claude.getByRole("region", { name: CLAUDE_TITLE })).toBeVisible();
   } finally {
-    removeFakeCodex();
+    inContainer("rm", "-rf", CODEX_DIRECTORY);
+    await removeFakeCodex(request);
+    await removeFakeClaude(request);
   }
 });
 
@@ -436,10 +435,12 @@ test.describe("with Claude Code installed", () => {
     const { box, editor } = await openSettings(page, CLAUDE_TITLE);
     await expect(box.getByText(`${CLAUDE_FILE} is not UTF-8 text`)).toBeVisible();
     await expect(editor).toHaveCount(0);
+    await expect(box).toHaveCSS("padding-bottom", "16px");
 
     writeInContainer(CLAUDE_FILE, "{}");
     await box.getByRole("button", { name: "Try again" }).click();
     await expect(editor).toHaveText("{}");
+    await expect(box).toHaveCSS("padding-bottom", "0px");
     await editor.click();
     await page.keyboard.press("Control+A");
     await page.keyboard.type('{"model": "opus"}');
@@ -648,10 +649,13 @@ test.describe("with Claude Code installed", () => {
 
 test.describe("with Codex installed", () => {
   test.beforeEach(() => {
-    removeFakeCodex();
-    installFakeCodex();
+    inContainer("rm", "-rf", CODEX_DIRECTORY);
+    installFakeCodex("9.9.9-e2e", CODEX_SIGNED_OUT);
   });
-  test.afterEach(() => removeFakeCodex());
+  test.afterEach(async ({ request }) => {
+    inContainer("rm", "-rf", CODEX_DIRECTORY);
+    await removeFakeCodex(request);
+  });
 
   test("a missing config.toml and its folder are created on save", async ({ page }) => {
     const { box, editor, save } = await openSettings(page, CODEX_TITLE);

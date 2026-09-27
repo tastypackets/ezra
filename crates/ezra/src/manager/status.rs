@@ -79,7 +79,7 @@ impl AgentStatus {
             configured,
             installed_version,
             logged_in: sign_in.logged_in,
-            account: sign_in.account,
+            account: sign_in.account(),
             sign_in_ends_at,
             login_prompt,
             config_disk_bytes: state.agent_checks.config_bytes(agent),
@@ -108,7 +108,7 @@ mod tests {
             Agent::Claude,
             r#"echo '{"loggedIn":true,"email":"a@example.com"}'"#,
         );
-        manager.install_fake_cli(Agent::Codex, "echo 'Logged in using ChatGPT'");
+        manager.install_fake_cli(Agent::Codex, "echo 'Logged in using ChatGPT' >&2");
         let sign_ins = async || {
             let listing: Vec<AgentStatus> = manager
                 .get("/api/v1/agents", Some(&cookie))

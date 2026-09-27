@@ -16,6 +16,8 @@ const QUEUED_CHANGES: usize = 64;
 pub enum Topic {
     Agents,
     ClaudeSettings,
+    CodexSettings,
+    CodexPhones,
     Folders,
     Clones,
     RemoteControl,
@@ -25,9 +27,11 @@ pub enum Topic {
 }
 
 impl Topic {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Agents,
         Self::ClaudeSettings,
+        Self::CodexSettings,
+        Self::CodexPhones,
         Self::Folders,
         Self::Clones,
         Self::RemoteControl,
@@ -129,6 +133,8 @@ impl Events {
 
 #[cfg(test)]
 mod tests {
+    use utoipa::PartialSchema;
+
     use super::*;
 
     #[tokio::test]
@@ -173,6 +179,14 @@ mod tests {
         assert_eq!(
             changed,
             Topic::ALL.map(|topic| Some(ManagerEvent::Changed { topic, revision }))
+        );
+    }
+
+    #[test]
+    fn all_lists_every_topic() {
+        assert_eq!(
+            serde_json::to_value(Topic::schema()).expect("the schema serializes")["enum"],
+            serde_json::to_value(Topic::ALL).expect("topics serialize")
         );
     }
 

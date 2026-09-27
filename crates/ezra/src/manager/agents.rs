@@ -48,7 +48,15 @@ impl Agent {
         }
     }
 
-    fn config_directory_variable(self) -> &'static str {
+    /// Where a release unpacked at `version_path` keeps the command.
+    pub fn command_in(self, version_path: &Path) -> PathBuf {
+        match self {
+            Self::Claude => version_path.to_path_buf(),
+            Self::Codex => version_path.join("bin/codex"),
+        }
+    }
+
+    pub fn config_directory_variable(self) -> &'static str {
         match self {
             Self::Claude => "CLAUDE_CONFIG_DIR",
             Self::Codex => "CODEX_HOME",
@@ -172,8 +180,8 @@ impl InstallPaths {
         self.bin_directory.join(agent.command_name())
     }
 
-    /// The version the command links to, or `None` when it is not installed.
-    pub fn installed_version(&self, agent: Agent) -> Option<String> {
+    /// The file the command links to and its version, or `None` when it is not installed.
+    pub fn installed_command(&self, agent: Agent) -> Option<(PathBuf, String)> {
         let target = fs::read_link(self.command(agent)).ok()?;
         if !target.exists() {
             return None;
@@ -182,7 +190,13 @@ impl InstallPaths {
             Agent::Claude => target.as_path(),
             Agent::Codex => target.parent()?.parent()?,
         };
-        Some(version_path.file_name()?.to_string_lossy().into_owned())
+        let version = version_path.file_name()?.to_string_lossy().into_owned();
+        Some((target, version))
+    }
+
+    /// The version the command links to, or `None` when it is not installed.
+    pub fn installed_version(&self, agent: Agent) -> Option<String> {
+        self.installed_command(agent).map(|(_, version)| version)
     }
 
     /// Links a missing command to the newest version already kept, and returns that version.
@@ -209,12 +223,10 @@ impl InstallPaths {
         Ok(Some(version))
     }
 
-    fn link(&self, agent: Agent, version_path: &Path) -> io::Result<()> {
-        let command_target = match agent {
-            Agent::Claude => version_path.to_path_buf(),
-            Agent::Codex => version_path.join("bin/codex"),
-        };
-        self.command(agent).replace_symlink(&command_target)
+    /// Points the command at the release unpacked at `version_path`.
+    pub fn link(&self, agent: Agent, version_path: &Path) -> io::Result<()> {
+        self.command(agent)
+            .replace_symlink(&agent.command_in(version_path))
     }
 
     /// Installs the channel's release when it is newer than the installed one. Returns the
@@ -543,6 +555,9 @@ pub struct DownloadProgress {
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::CommandExt;
+    use std::process::Command;
+    use std::thread;
+    use std::time::Instant;
 
     use super::*;
 
@@ -658,6 +673,32 @@ mod tests {
     }
 
     #[test]
+    fn the_installed_command_is_the_linked_file_and_its_version() {
+        let home = tempfile::tempdir().expect("temporary directory");
+        let fakes = tempfile::tempdir().expect("temporary directory");
+        let paths = InstallPaths::under_home(home.path());
+        assert_eq!(paths.installed_command(Agent::Codex), None);
+
+        let claude = paths.versions_directory(Agent::Claude).join("2.1.283");
+        let codex = fakes.path().join("codex/0.157.1/bin/codex");
+        for (agent, target) in [(Agent::Claude, &claude), (Agent::Codex, &codex)] {
+            create_file(target);
+            paths
+                .command(agent)
+                .replace_symlink(target)
+                .expect("command link is created");
+        }
+        assert_eq!(
+            paths.installed_command(Agent::Claude),
+            Some((claude, "2.1.283".to_owned()))
+        );
+        assert_eq!(
+            paths.installed_command(Agent::Codex),
+            Some((codex, "0.157.1".to_owned()))
+        );
+    }
+
+    #[test]
     fn dangling_command_link_means_not_installed() {
         let home = tempfile::tempdir().expect("temporary directory");
         let paths = InstallPaths::under_home(home.path());
@@ -665,6 +706,7 @@ mod tests {
             .command(Agent::Claude)
             .replace_symlink(Path::new("/missing/2.1.0"))
             .expect("command link is created");
+        assert_eq!(paths.installed_command(Agent::Claude), None);
         assert_eq!(paths.installed_version(Agent::Claude), None);
     }
 
@@ -694,17 +736,28 @@ mod tests {
         fs::create_dir_all(&versions).expect("versions directory is created");
         let sleep = fs::canonicalize("/bin/sleep").expect("sleep is installed");
         for version in ["2.1.1", "2.1.2", "2.1.3"] {
-            fs::copy(&sleep, versions.join(version)).expect("version is written");
+            let copied = Command::new("cp")
+                .arg(&sleep)
+                .arg(versions.join(version))
+                .status();
+            assert!(copied.expect("cp runs").success());
         }
         paths
             .command(Agent::Claude)
             .replace_symlink(&versions.join("2.1.3"))
             .expect("command link is created");
-        let mut running = std::process::Command::new(versions.join("2.1.1"))
+        let mut running = Command::new(versions.join("2.1.1"))
             .arg0("sleep")
             .arg("30")
             .spawn()
             .expect("the old version runs");
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .expect("the deadline fits");
+        while Process::running_from(&versions).is_empty() {
+            assert!(Instant::now() < deadline, "the old version did not start");
+            thread::sleep(Duration::from_millis(20));
+        }
         let remaining = || {
             let mut names: Vec<_> = versions
                 .entries_or_empty()

@@ -5,6 +5,7 @@ import {
 } from "@ezra/client/react-query.gen";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { cn } from "cn";
 import { useId } from "react";
 
 import { Autocomplete } from "@/components/ui/autocomplete";
@@ -37,13 +38,15 @@ import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { foldersQueryOptions } from "@/queries/folder-queries";
 
 import { RadioChoice } from "./radio-choice";
+import { SettingsFileSection } from "./settings-file-section";
 
 const CHANNEL_ORDER: readonly ReleaseChannel[] = ["latest", "stable"];
 
-/** How the manager installs, updates and serves Claude Code, with only the release channel until it is installed. */
+/** How the manager installs, updates and serves Claude Code, and Claude Code's own settings.json. Only the release channel shows until it is installed. */
 export function ClaudeSettingsCard() {
   const queryClient = useQueryClient();
   const ids = {
+    title: useId(),
     enabled: useId(),
     enabledLabel: useId(),
     enabledHint: useId(),
@@ -86,9 +89,9 @@ export function ClaudeSettingsCard() {
     },
   });
   return (
-    <Card>
+    <Card aria-labelledby={ids.title}>
       <CardHeader>
-        <CardTitle>{AGENT_NAMES.claude}</CardTitle>
+        <CardTitle id={ids.title}>{AGENT_NAMES.claude}</CardTitle>
       </CardHeader>
       <form
         className="contents"
@@ -290,7 +293,7 @@ export function ClaudeSettingsCard() {
             </form.Field>
           </FieldGroup>
         </CardContent>
-        <CardFooter className="justify-between gap-4">
+        <CardFooter className={cn("justify-between gap-4", installed && "rounded-none border-b")}>
           <p role="alert" className="text-destructive">
             {save.isError ? errorMessage(save.error) : null}
           </p>
@@ -303,6 +306,7 @@ export function ClaudeSettingsCard() {
           </form.Subscribe>
         </CardFooter>
       </form>
+      {installed ? <SettingsFileSection agent="claude" /> : null}
     </Card>
   );
 }

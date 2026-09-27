@@ -1,23 +1,30 @@
 import type { AgentStatus } from "@ezra/client";
 
-export type AgentStep = "install" | "sign_in";
+import type { CodexFix } from "./codex-remote";
+
+export type AgentStep = "install" | "sign_in" | CodexFix;
 
 /**
  * The action an agent's row shows as its button, absent when nothing is due. A sign-in that is
- * about to end asks for a new one.
+ * about to end asks for a new one. A remote control fix comes before an update, which the menu
+ * then offers.
  */
 export function nextAgentStep(
   status: AgentStatus,
   installing: boolean,
   signInEnding = false,
+  fix?: CodexFix,
 ): AgentStep | undefined {
   if (installing || !status.installed_version) {
     return "install";
   }
-  if ((!status.logged_in || signInEnding) && !status.login_prompt) {
+  if (status.login_prompt) {
+    return status.available_update ? "install" : undefined;
+  }
+  if (!status.logged_in || signInEnding) {
     return "sign_in";
   }
-  return status.available_update ? "install" : undefined;
+  return fix ?? (status.available_update ? "install" : undefined);
 }
 
 /**

@@ -2,6 +2,7 @@ import type { RemoteControlStatus, ServerProblem } from "@ezra/client";
 import { cn } from "cn";
 
 import { Button } from "@/components/ui/button";
+import { AGENT_NAMES } from "@/content/agents";
 import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_PROBLEMS } from "@/content/remote-control";
 import { useAgentActionPending, useAgentActions } from "@/hooks/use-agent-actions";
 import { formatDateTime } from "@/lib/utils";
@@ -33,6 +34,7 @@ export function ServerNotes({ status, detailed = false }: ServerNotesProps) {
         <p className="text-muted-foreground">
           {detailed
             ? REMOTE_CONTROL_DESCRIPTIONS.update_waiting(
+                AGENT_NAMES.claude,
                 status.update.version,
                 formatDateTime(status.update.restart_by),
               )

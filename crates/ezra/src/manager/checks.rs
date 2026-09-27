@@ -171,30 +171,20 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    use futures_util::{Stream, StreamExt};
+    use futures_util::StreamExt;
 
     use super::*;
-    use crate::manager::api::test_support::TestManager;
-    use crate::manager::events::ManagerEvent;
+    use crate::manager::api::test_support::{EventStreamExt, TestManager};
+    use crate::manager::login::SignInMethod;
 
     const CLAUDE_SIGNED_IN: &str = r#"echo '{"loggedIn":true}'"#;
-    const CODEX_SIGNED_IN: &str = "echo 'Logged in using ChatGPT'";
+    const CODEX_SIGNED_IN: &str = "echo 'Logged in using ChatGPT' >&2";
 
-    fn signed_in(account: Option<&str>) -> Option<SignInStatus> {
+    fn claude_signed_in() -> Option<SignInStatus> {
         Some(SignInStatus {
             logged_in: true,
-            account: account.map(str::to_owned),
+            ..SignInStatus::default()
         })
-    }
-
-    async fn published(events: &mut (impl Stream<Item = ManagerEvent> + Unpin)) -> Vec<Topic> {
-        let mut topics = Vec::new();
-        while let Ok(Some(event)) = timeout(Duration::from_millis(100), events.next()).await {
-            if let ManagerEvent::Changed { topic, .. } = event {
-                topics.push(topic);
-            }
-        }
-        topics
     }
 
     #[tokio::test]
@@ -223,10 +213,10 @@ mod tests {
         events.next().await;
 
         checks.check_sign_in(Agent::Claude, Duration::MAX).await;
-        assert_eq!(published(&mut events).await, []);
+        assert_eq!(events.published().await, []);
         ending_at(1_790_467_200_000);
         checks.check_sign_in(Agent::Claude, Duration::MAX).await;
-        assert_eq!(published(&mut events).await, [Topic::Agents]);
+        assert_eq!(events.published().await, [Topic::Agents]);
         assert_eq!(
             checks
                 .sign_in_ends_at(Agent::Claude)
@@ -244,7 +234,7 @@ mod tests {
 
         manager.install_fake_cli(Agent::Claude, CLAUDE_SIGNED_IN);
         checks.check_sign_in(Agent::Claude, Duration::MAX).await;
-        assert_eq!(checks.sign_in(Agent::Claude), signed_in(None));
+        assert_eq!(checks.sign_in(Agent::Claude), claude_signed_in());
     }
 
     #[tokio::test]
@@ -253,21 +243,21 @@ mod tests {
         let checks = &manager.state.agent_checks;
         let claude = manager.install_fake_cli(Agent::Claude, CLAUDE_SIGNED_IN);
         checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
-        assert_eq!(checks.sign_in(Agent::Claude), signed_in(None));
+        assert_eq!(checks.sign_in(Agent::Claude), claude_signed_in());
 
         for no_answer in ["echo 'Error: settings are being written'", "kill -KILL $$"] {
             manager.install_fake_cli(Agent::Claude, no_answer);
             checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
             assert_eq!(
                 checks.sign_in(Agent::Claude),
-                signed_in(None),
+                claude_signed_in(),
                 "{no_answer}"
             );
         }
         fs::set_permissions(&claude, fs::Permissions::from_mode(0o644))
             .expect("fake is no longer executable");
         checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
-        assert_eq!(checks.sign_in(Agent::Claude), signed_in(None));
+        assert_eq!(checks.sign_in(Agent::Claude), claude_signed_in());
 
         manager.install_fake_cli(Agent::Claude, r#"echo '{"loggedIn":false}'; exit 1"#);
         checks.check_sign_in(Agent::Claude, Duration::ZERO).await;
@@ -275,7 +265,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_is_signed_out_when_it_exits_with_an_error() {
+    async fn codex_is_signed_out_only_when_it_says_so() {
         let manager = TestManager::new();
         let checks = &manager.state.agent_checks;
         checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
@@ -283,15 +273,39 @@ mod tests {
 
         manager.install_fake_cli(Agent::Codex, CODEX_SIGNED_IN);
         checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
-        assert_eq!(checks.sign_in(Agent::Codex), signed_in(Some("ChatGPT")));
+        let chatgpt = Some(SignInStatus::from(SignInMethod::ChatGpt));
+        assert_eq!(checks.sign_in(Agent::Codex), chatgpt);
 
-        manager.install_fake_cli(Agent::Codex, "kill -KILL $$");
+        for no_answer in [
+            "kill -KILL $$",
+            "echo 'Error checking login status: failed to read auth.json' >&2; exit 1",
+            "echo 'Unexpected error retrieving API key: missing key' >&2; exit 1",
+        ] {
+            manager.install_fake_cli(Agent::Codex, no_answer);
+            checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
+            assert_eq!(checks.sign_in(Agent::Codex), chatgpt, "{no_answer}");
+        }
+
+        manager.install_fake_cli(
+            Agent::Codex,
+            "echo 'Logged in using an API key - sk-proj-***ABCDE' >&2",
+        );
         checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
-        assert_eq!(checks.sign_in(Agent::Codex), signed_in(Some("ChatGPT")));
+        assert_eq!(
+            checks.sign_in(Agent::Codex),
+            Some(SignInStatus::from(SignInMethod::ApiKey))
+        );
 
-        manager.install_fake_cli(Agent::Codex, "echo 'Not logged in'; exit 1");
+        manager.install_fake_cli(Agent::Codex, "echo 'Not logged in' >&2; exit 1");
         checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
         assert_eq!(checks.sign_in(Agent::Codex), Some(SignInStatus::default()));
+
+        manager.install_fake_cli(
+            Agent::Codex,
+            "printf 'notice'; echo 'Logged in using ChatGPT' >&2",
+        );
+        checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
+        assert_eq!(checks.sign_in(Agent::Codex), chatgpt);
     }
 
     #[tokio::test]
@@ -316,13 +330,13 @@ mod tests {
 
         manager.install_fake_cli(Agent::Codex, CODEX_SIGNED_IN);
         checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
-        assert_eq!(published(&mut events).await, [Topic::Agents]);
+        assert_eq!(events.published().await, [Topic::Agents]);
         checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
-        assert_eq!(published(&mut events).await, []);
+        assert_eq!(events.published().await, []);
 
-        manager.install_fake_cli(Agent::Codex, "echo 'Not logged in'; exit 1");
+        manager.install_fake_cli(Agent::Codex, "echo 'Not logged in' >&2; exit 1");
         checks.check_sign_in(Agent::Codex, Duration::ZERO).await;
-        assert_eq!(published(&mut events).await, [Topic::Agents]);
+        assert_eq!(events.published().await, [Topic::Agents]);
     }
 
     #[tokio::test]
@@ -335,7 +349,7 @@ mod tests {
 
         checks.measure_config(Agent::Claude).await;
         assert_eq!(checks.config_bytes(Agent::Claude), Some(0));
-        assert_eq!(published(&mut events).await, [Topic::Agents]);
+        assert_eq!(events.published().await, [Topic::Agents]);
 
         let directory = manager
             .state
@@ -348,6 +362,6 @@ mod tests {
         assert_eq!(checks.config_bytes(Agent::Claude), Some(0));
         checks.measure_config(Agent::Claude).await;
         assert_eq!(checks.config_bytes(Agent::Claude), Some(2));
-        assert_eq!(published(&mut events).await, [Topic::Agents]);
+        assert_eq!(events.published().await, [Topic::Agents]);
     }
 }

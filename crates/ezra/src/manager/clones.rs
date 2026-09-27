@@ -224,7 +224,7 @@ impl AppState {
         match end {
             Ok(()) => {
                 tracing::info!("cloned {url} into /projects/{name}");
-                self.remote_control.reconsider();
+                self.remote_control.supervision.reconsider();
                 self.events.publish(Topic::Folders);
                 self.clones.forget(&name);
             }

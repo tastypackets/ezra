@@ -68,9 +68,7 @@ impl AppState {
             match self.install_paths.link_kept_version(agent) {
                 Ok(Some(version)) => {
                     tracing::info!("{agent} {version} is linked from /cache");
-                    if agent == Agent::Claude {
-                        self.remote_control.reconsider();
-                    }
+                    self.reconsider_remote(agent);
                     self.events.publish(Topic::Agents);
                 }
                 Ok(None) => {
@@ -110,9 +108,7 @@ impl AppState {
             .await
             .insert(agent, LatestRelease { channel, version });
         self.agent_checks.refresh(agent).await;
-        if agent == Agent::Claude {
-            self.remote_control.reconsider();
-        }
+        self.reconsider_remote(agent);
 
         self.update_settings(|settings| {
             settings.agent_mut(agent).configured = true;

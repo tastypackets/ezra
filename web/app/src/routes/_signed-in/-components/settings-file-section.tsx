@@ -22,14 +22,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
@@ -46,14 +39,19 @@ const BROWSER_CHECK_BLOCKS_SAVE: Record<SettingsFileFormat, boolean> = {
   toml: false,
 };
 
-/** An agent's own settings file as text, saved only when it parses and nothing changed it meanwhile. */
-export function SettingsFileCard({ agent }: { agent: Agent }) {
+/** An agent's own settings file as text, at the end of its card, saved only when it parses and nothing changed it meanwhile. */
+export function SettingsFileSection({ agent }: { agent: Agent }) {
   const ids = { title: useId(), applies: useId() };
   const { data: file, error, isFetching, refetch } = useQuery(settingsFileQueryOptions(agent));
   return (
-    <Card>
+    <section
+      aria-labelledby={ids.title}
+      className="flex flex-col gap-(--card-spacing) not-has-data-[slot=card-footer]:pb-(--card-spacing)"
+    >
       <CardHeader>
-        <CardTitle id={ids.title}>{SETTINGS_FILES[agent].title}</CardTitle>
+        <h3 id={ids.title} className="text-base font-medium">
+          {SETTINGS_FILES[agent].title}
+        </h3>
         <CardDescription id={ids.applies}>{SETTINGS_FILES[agent].applies}</CardDescription>
       </CardHeader>
       {file ? (
@@ -78,7 +76,7 @@ export function SettingsFileCard({ agent }: { agent: Agent }) {
           <Spinner className="size-6" />
         </CardContent>
       )}
-    </Card>
+    </section>
   );
 }
 

@@ -47,6 +47,10 @@ pub fn router(state: AppState) -> Router {
             get(settings::claude).put(settings::update_claude),
         )
         .route(
+            "/api/v1/agents/codex/settings",
+            get(settings::codex).put(settings::update_codex),
+        )
+        .route(
             "/api/v1/agents/{agent}/settings-file",
             get(settings_file::read)
                 .put(settings_file::save)
@@ -57,6 +61,30 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/remote-control/log",
             get(remote_control::projects_log),
+        )
+        .route(
+            "/api/v1/remote-control/codex/log",
+            get(remote_control::codex_log),
+        )
+        .route(
+            "/api/v1/remote-control/codex/retry",
+            post(remote_control::retry_codex),
+        )
+        .route(
+            "/api/v1/remote-control/codex/pairing",
+            get(remote_control::codex_pairing).post(remote_control::start_codex_pairing),
+        )
+        .route(
+            "/api/v1/remote-control/codex/pairing/qr.svg",
+            get(remote_control::codex_pairing_qr),
+        )
+        .route(
+            "/api/v1/remote-control/codex/phones",
+            get(remote_control::codex_phones),
+        )
+        .route(
+            "/api/v1/remote-control/codex/phones/{id}",
+            delete(remote_control::remove_codex_phone),
         )
         .route("/api/v1/folders", get(folders::list))
         .route("/api/v1/folders/{name}", delete(folders::delete))
@@ -193,6 +221,8 @@ pub struct ErrorBody {
         login::log_out,
         settings::claude,
         settings::update_claude,
+        settings::codex,
+        settings::update_codex,
         settings_file::read,
         settings_file::save,
         git::status,
@@ -211,6 +241,13 @@ pub struct ErrorBody {
         remote_control::overview,
         remote_control::projects_log,
         remote_control::folder_log,
+        remote_control::codex_log,
+        remote_control::retry_codex,
+        remote_control::start_codex_pairing,
+        remote_control::codex_pairing,
+        remote_control::codex_pairing_qr,
+        remote_control::codex_phones,
+        remote_control::remove_codex_phone,
         events::stream,
         manager::status,
         manager::change_password,
