@@ -1430,6 +1430,238 @@
         }
       }
     },
+    "/api/v1/remote-control/codex/pairing": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get the latest pairing code and whether a phone used it",
+        "operationId": "getCodexPairing",
+        "responses": {
+          "200": {
+            "description": "The latest code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexPairingState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get a code to pair a phone with Codex",
+        "description": "Replaces the earlier code.",
+        "operationId": "startCodexPairing",
+        "responses": {
+          "200": {
+            "description": "The code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexPairing"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running or not connected to ChatGPT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/pairing/qr.svg": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get the latest pairing code's link as a QR code",
+        "operationId": "getCodexPairingQr",
+        "responses": {
+          "200": {
+            "description": "An SVG image",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No code a phone can still use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/phones": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "List the phones paired with Codex",
+        "operationId": "listCodexPhones",
+        "responses": {
+          "200": {
+            "description": "Paired phones",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PairedPhone"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running or not connected to ChatGPT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/phones/{id}": {
+      "delete": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Remove a paired phone",
+        "description": "The phone can no longer reach this box.",
+        "operationId": "removeCodexPhone",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The phone's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running or not connected to ChatGPT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/remote-control/codex/retry": {
       "post": {
         "tags": [
@@ -1805,6 +2037,60 @@
           "on-request",
           "never"
         ]
+      },
+      "CodexPairing": {
+        "type": "object",
+        "description": "A code a phone pairs with Codex through.",
+        "required": [
+          "link",
+          "expires_at",
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why checking the code failed, absent unless it did."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the code stops working."
+          },
+          "link": {
+            "type": "string",
+            "description": "The link the QR code holds."
+          },
+          "manual_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The code to enter in the ChatGPT app, absent when Codex gave none."
+          },
+          "state": {
+            "$ref": "#/components/schemas/PairingState"
+          }
+        }
+      },
+      "CodexPairingState": {
+        "type": "object",
+        "description": "The pairing code asked for last.",
+        "properties": {
+          "pairing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CodexPairing",
+                "description": "Absent before the first code."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "CodexProblem": {
         "type": "string",
@@ -2335,6 +2621,79 @@
           }
         }
       },
+      "PairedPhone": {
+        "type": "object",
+        "description": "A phone paired with Codex.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "app_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ChatGPT app's version, absent when not reported."
+          },
+          "device_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kind of device, absent when not reported."
+          },
+          "id": {
+            "type": "string",
+            "description": "Identifies the phone."
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When ChatGPT last saw the phone, absent when not reported."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device model, absent when not reported."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the phone gives, absent when it gives none."
+          },
+          "os_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operating system's version, absent when not reported."
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operating system, absent when not reported."
+          }
+        }
+      },
+      "PairingState": {
+        "type": "string",
+        "description": "Whether a phone used a pairing code.",
+        "enum": [
+          "open",
+          "claimed",
+          "expired",
+          "failed"
+        ]
+      },
       "PasswordBody": {
         "type": "object",
         "required": [
@@ -2661,6 +3020,7 @@
           "agents",
           "claude_settings",
           "codex_settings",
+          "codex_phones",
           "folders",
           "clones",
           "remote_control",

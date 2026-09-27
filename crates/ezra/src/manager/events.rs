@@ -17,6 +17,7 @@ pub enum Topic {
     Agents,
     ClaudeSettings,
     CodexSettings,
+    CodexPhones,
     Folders,
     Clones,
     RemoteControl,
@@ -25,10 +26,11 @@ pub enum Topic {
 }
 
 impl Topic {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Agents,
         Self::ClaudeSettings,
         Self::CodexSettings,
+        Self::CodexPhones,
         Self::Folders,
         Self::Clones,
         Self::RemoteControl,

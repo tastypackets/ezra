@@ -15,6 +15,7 @@ use futures_util::{Stream, StreamExt};
 use http_body_util::BodyExt;
 use nix::unistd::Pid;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use tokio::time::{Instant, sleep, timeout};
 use tower::ServiceExt;
 
@@ -253,19 +254,36 @@ impl RequestBuilderExt for Builder {
 pub trait ResponseExt {
     async fn json<T: DeserializeOwned>(self) -> T;
 
+    async fn text(self) -> String;
+
+    /// The message of an error response.
+    async fn error(self) -> String;
+
     /// The `name=value` part of the Set-Cookie header, after checking its attributes.
     fn session_cookie(&self) -> String;
 }
 
 impl ResponseExt for Response {
     async fn json<T: DeserializeOwned>(self) -> T {
+        serde_json::from_str(&self.text().await).expect("body is the expected JSON")
+    }
+
+    async fn text(self) -> String {
         let body = self
             .into_body()
             .collect()
             .await
             .expect("body is readable")
             .to_bytes();
-        serde_json::from_slice(&body).expect("body is the expected JSON")
+        String::from_utf8(body.to_vec()).expect("body is text")
+    }
+
+    async fn error(self) -> String {
+        let body: Value = self.json().await;
+        body["error"]
+            .as_str()
+            .expect("the error is text")
+            .to_owned()
     }
 
     fn session_cookie(&self) -> String {

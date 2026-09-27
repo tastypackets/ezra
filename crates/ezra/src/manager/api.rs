@@ -61,6 +61,22 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/remote-control/codex/retry",
             post(remote_control::retry_codex),
         )
+        .route(
+            "/api/v1/remote-control/codex/pairing",
+            get(remote_control::codex_pairing).post(remote_control::start_codex_pairing),
+        )
+        .route(
+            "/api/v1/remote-control/codex/pairing/qr.svg",
+            get(remote_control::codex_pairing_qr),
+        )
+        .route(
+            "/api/v1/remote-control/codex/phones",
+            get(remote_control::codex_phones),
+        )
+        .route(
+            "/api/v1/remote-control/codex/phones/{id}",
+            delete(remote_control::remove_codex_phone),
+        )
         .route("/api/v1/folders", get(folders::list))
         .route("/api/v1/folders/{name}", delete(folders::delete))
         .route(
@@ -206,6 +222,11 @@ pub struct ErrorBody {
         remote_control::folder_log,
         remote_control::codex_log,
         remote_control::retry_codex,
+        remote_control::start_codex_pairing,
+        remote_control::codex_pairing,
+        remote_control::codex_pairing_qr,
+        remote_control::codex_phones,
+        remote_control::remove_codex_phone,
         events::stream,
         manager::status,
         manager::change_password,

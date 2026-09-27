@@ -2,12 +2,14 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderName, StatusCode, header};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
-use crate::manager::codex_remote::ControlError;
+use crate::manager::codex_remote::{
+    CodexPairing, CodexPairingState, ControlError, PairedPhone, PairingError,
+};
 use crate::manager::remote_control::{RemoteControlOverview, Served};
 use crate::manager::supervision::ServerLog;
 
@@ -21,6 +23,15 @@ impl From<ControlError> for ApiError {
             | ControlError::TimedOut
             | ControlError::ForeignServer(_)
             | ControlError::Codex { .. } => Self::AgentFailed(error.to_string()),
+        }
+    }
+}
+
+impl From<PairingError> for ApiError {
+    fn from(error: PairingError) -> Self {
+        match error {
+            PairingError::NotConnected => Self::Conflict(error.to_string()),
+            PairingError::Control(error) => error.into(),
         }
     }
 }
@@ -150,6 +161,119 @@ pub async fn retry_codex(
 ) -> Result<StatusCode, ApiError> {
     let codex_remote = Arc::clone(&state.codex_remote);
     tokio::spawn(async move { codex_remote.retry().await })
+        .await
+        .map_err(internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/remote-control/codex/pairing",
+    operation_id = "startCodexPairing",
+    tag = "remote-control",
+    summary = "Get a code to pair a phone with Codex",
+    description = "Replaces the earlier code.",
+    responses(
+        (status = 200, description = "The code", body = CodexPairing),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "Codex is not running or not connected to ChatGPT", body = ErrorBody),
+        (status = 502, description = "Codex refused or did not answer", body = ErrorBody)
+    )
+)]
+pub async fn start_codex_pairing(
+    _: Session,
+    State(state): State<AppState>,
+) -> Result<Json<CodexPairing>, ApiError> {
+    let codex_remote = Arc::clone(&state.codex_remote);
+    let pairing = tokio::spawn(async move { codex_remote.start_pairing().await })
+        .await
+        .map_err(internal)??;
+    Ok(Json(pairing))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/remote-control/codex/pairing",
+    operation_id = "getCodexPairing",
+    tag = "remote-control",
+    summary = "Get the latest pairing code and whether a phone used it",
+    responses(
+        (status = 200, description = "The latest code", body = CodexPairingState),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody)
+    )
+)]
+pub async fn codex_pairing(_: Session, State(state): State<AppState>) -> Json<CodexPairingState> {
+    Json(CodexPairingState {
+        pairing: state.codex_remote.pairing(),
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/remote-control/codex/pairing/qr.svg",
+    operation_id = "getCodexPairingQr",
+    tag = "remote-control",
+    summary = "Get the latest pairing code's link as a QR code",
+    responses(
+        (status = 200, description = "An SVG image", content_type = "image/svg+xml", body = String),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 404, description = "No code a phone can still use", body = ErrorBody)
+    )
+)]
+pub async fn codex_pairing_qr(
+    _: Session,
+    State(state): State<AppState>,
+) -> Result<([(HeaderName, &'static str); 1], String), ApiError> {
+    let svg = state
+        .codex_remote
+        .open_pairing_qr()
+        .ok_or(ApiError::NotFound("no pairing code a phone can still use"))?
+        .map_err(internal)?;
+    Ok(([(header::CONTENT_TYPE, "image/svg+xml")], svg))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/remote-control/codex/phones",
+    operation_id = "listCodexPhones",
+    tag = "remote-control",
+    summary = "List the phones paired with Codex",
+    responses(
+        (status = 200, description = "Paired phones", body = Vec<PairedPhone>),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "Codex is not running or not connected to ChatGPT", body = ErrorBody),
+        (status = 502, description = "Codex refused or did not answer", body = ErrorBody)
+    )
+)]
+pub async fn codex_phones(
+    _: Session,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PairedPhone>>, ApiError> {
+    Ok(Json(state.codex_remote.phones().await?))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/remote-control/codex/phones/{id}",
+    operation_id = "removeCodexPhone",
+    tag = "remote-control",
+    summary = "Remove a paired phone",
+    description = "The phone can no longer reach this box.",
+    params(("id" = String, Path, description = "The phone's id")),
+    responses(
+        (status = 204, description = "Removed"),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "Codex is not running or not connected to ChatGPT", body = ErrorBody),
+        (status = 502, description = "Codex refused or did not answer", body = ErrorBody)
+    )
+)]
+pub async fn remove_codex_phone(
+    _: Session,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let codex_remote = Arc::clone(&state.codex_remote);
+    tokio::spawn(async move { codex_remote.remove_phone(id).await })
         .await
         .map_err(internal)??;
     Ok(StatusCode::NO_CONTENT)

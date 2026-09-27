@@ -983,6 +983,7 @@ mod tests {
         mfa_retry: Duration::from_secs(10 * 60),
         usage: Duration::from_secs(15),
         update_deadline: UPDATE_RESTART_DEADLINE,
+        pairing_poll: Duration::ZERO,
     };
     const SHORT_READINESS: ServerBudget = ServerBudget {
         readiness: Duration::from_secs(1),

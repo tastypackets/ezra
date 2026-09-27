@@ -1,6 +1,10 @@
 import { streamEvents } from "@ezra/client";
 import type { Topic } from "@ezra/client";
-import { getClaudeSettingsOptions, getCodexSettingsOptions } from "@ezra/client/react-query.gen";
+import {
+  getClaudeSettingsOptions,
+  getCodexSettingsOptions,
+  listCodexPhonesOptions,
+} from "@ezra/client/react-query.gen";
 import type { QueryKey } from "@tanstack/react-query";
 import { useEffect } from "react";
 
@@ -19,6 +23,7 @@ const TOPIC_QUERIES: Record<Topic, readonly QueryKey[]> = {
   agents: [agentsQueryOptions.queryKey],
   claude_settings: [getClaudeSettingsOptions().queryKey],
   codex_settings: [getCodexSettingsOptions().queryKey],
+  codex_phones: [listCodexPhonesOptions().queryKey],
   folders: [foldersQueryOptions.queryKey],
   clones: [clonesQueryOptions.queryKey],
   remote_control: [remoteControlQueryOptions.queryKey],

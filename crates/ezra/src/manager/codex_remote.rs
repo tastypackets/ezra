@@ -4,6 +4,7 @@ mod control;
 mod fake;
 mod foreign;
 mod launch;
+mod pairing;
 mod problem;
 mod run;
 mod supervisor;
@@ -26,6 +27,8 @@ use super::supervision::{
 pub use control::ControlError;
 use control::{ControlClient, Enable, RelayStatusWire, RelayWire};
 use launch::LaunchFlagCache;
+use pairing::Pairing;
+pub use pairing::{CodexPairing, CodexPairingState, PairedPhone, PairingError};
 use problem::{CodexProblem, ProblemLine};
 
 const HOLD_SLACK: Duration = Duration::from_secs(1);
@@ -75,6 +78,8 @@ pub struct ServerBudget {
     pub usage: Duration,
     /// While chats run, before the server restarts on a newer Codex anyway.
     pub update_deadline: Duration,
+    /// Between checks whether a phone used the pairing code.
+    pub pairing_poll: Duration,
 }
 
 impl ServerBudget {
@@ -97,6 +102,7 @@ impl Default for ServerBudget {
             mfa_retry: Duration::from_secs(10 * 60),
             usage: USAGE_INTERVAL,
             update_deadline: UPDATE_RESTART_DEADLINE,
+            pairing_poll: Duration::from_secs(5),
         }
     }
 }
@@ -128,12 +134,15 @@ pub struct CodexRemote {
     pub supervision: Supervision,
     pub log: ServerLog,
     pub budget: ServerBudget,
+    events: Events,
     status: Published<CodexRemoteStatus>,
     flags: LaunchFlagCache,
     expected: ExpectedPeer,
     /// Sign-ins in progress, which keep the server stopped.
     holds: watch::Sender<u32>,
     control: SyncMutex<Control>,
+    /// The pairing code asked for last.
+    pairing: SyncMutex<Option<Pairing>>,
 }
 
 /// The running server's control connection, and whether ezra turned its relay off.
@@ -171,11 +180,13 @@ impl CodexRemote {
             supervision: Supervision::default(),
             log,
             budget,
+            events: events.clone(),
             status: Published::new(CodexRemoteStatus::default(), events, Topic::RemoteControl),
             flags: LaunchFlagCache::default(),
             expected,
             holds: watch::Sender::new(0),
             control: SyncMutex::default(),
+            pairing: SyncMutex::default(),
         }
     }
 

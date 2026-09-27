@@ -148,6 +148,7 @@ pub(super) mod tests {
         mfa_retry: Duration::ZERO,
         usage: Duration::ZERO,
         update_deadline: Duration::ZERO,
+        pairing_poll: Duration::ZERO,
     };
 
     /// A fake `codex` whose `app-server` runs `server`.

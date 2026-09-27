@@ -10,6 +10,7 @@ use nix::unistd::Pid;
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use time::OffsetDateTime;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
@@ -198,35 +199,30 @@ impl ControlRequest for Disable {
 }
 
 /// Asks for a code a phone pairs with.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingStart {
     pub manual_code: bool,
 }
 
-#[cfg(test)]
 impl ControlRequest for PairingStart {
     const METHOD: &'static str = "remoteControl/pairing/start";
     type Response = PairingWire;
 }
 
 /// Asks whether a phone claimed a pairing code.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingStatus {
     pub pairing_code: String,
 }
 
-#[cfg(test)]
 impl ControlRequest for PairingStatus {
     const METHOD: &'static str = "remoteControl/pairing/status";
     type Response = PairingStatusWire;
 }
 
 /// Lists one page of the paired phones.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientList {
@@ -235,14 +231,12 @@ pub struct ClientList {
     pub cursor: Option<String>,
 }
 
-#[cfg(test)]
 impl ControlRequest for ClientList {
     const METHOD: &'static str = "remoteControl/client/list";
     type Response = ClientPageWire;
 }
 
 /// Removes a paired phone.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientRevoke {
@@ -250,7 +244,6 @@ pub struct ClientRevoke {
     pub client_id: String,
 }
 
-#[cfg(test)]
 impl ControlRequest for ClientRevoke {
     const METHOD: &'static str = "remoteControl/client/revoke";
     type Response = IgnoredAny;
@@ -370,24 +363,20 @@ pub enum RelayStatusWire {
     Errored,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingWire {
     pub pairing_code: String,
     pub manual_pairing_code: Option<String>,
-    pub environment_id: String,
-    /// Unix seconds.
-    pub expires_at: i64,
+    #[serde(with = "time::serde::timestamp")]
+    pub expires_at: OffsetDateTime,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct PairingStatusWire {
     pub claimed: bool,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientPageWire {
@@ -396,7 +385,6 @@ pub struct ClientPageWire {
 }
 
 /// A paired phone.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientWire {
@@ -407,8 +395,8 @@ pub struct ClientWire {
     pub os_version: Option<String>,
     pub device_model: Option<String>,
     pub app_version: Option<String>,
-    /// Unix seconds.
-    pub last_seen_at: Option<i64>,
+    #[serde(default, with = "time::serde::timestamp::option")]
+    pub last_seen_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -780,6 +768,7 @@ pub(super) mod tests {
 
     use serde_json::json;
     use tempfile::TempDir;
+    use time::macros::datetime;
     use tokio::net::UnixListener;
     use tokio::time::Instant;
 
@@ -797,6 +786,7 @@ pub(super) mod tests {
         mfa_retry: Duration::ZERO,
         usage: Duration::ZERO,
         update_deadline: Duration::ZERO,
+        pairing_poll: Duration::ZERO,
     };
     const ENABLE_FIRST: &str = "remote control pairing requires remote control to be enabled";
 
@@ -1176,8 +1166,7 @@ pub(super) mod tests {
             PairingWire {
                 pairing_code: "pairing-1".to_owned(),
                 manual_pairing_code: Some("ABCD-2345".to_owned()),
-                environment_id: ENVIRONMENT.to_owned(),
-                expires_at: 1_790_000_600,
+                expires_at: datetime!(2026-09-21 14:23:20 UTC),
             }
         );
         for claimed in [false, true] {
@@ -1260,7 +1249,7 @@ pub(super) mod tests {
                     os_version: Some("26.0".to_owned()),
                     device_model: Some("iPhone".to_owned()),
                     app_version: Some("1.0".to_owned()),
-                    last_seen_at: Some(1_790_000_000),
+                    last_seen_at: Some(datetime!(2026-09-21 14:13:20 UTC)),
                 }],
                 next_cursor: Some("page-2".to_owned()),
             }
