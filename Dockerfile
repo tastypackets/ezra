@@ -250,6 +250,7 @@ ENV MISE_DATA_DIR=/config/mise \
     PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/local/bin/chromium \
     PATH=/home/dev/.local/bin:/config/mise/shims:/usr/local/share/ezra/shims:${PATH}
 
+COPY image/codex/config.toml /etc/codex/config.toml
 COPY --from=ezra-build /out/ezra /usr/local/bin/ezra
 COPY --from=ezra-web /src/web/app/dist /usr/local/share/ezra/web
 

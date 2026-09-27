@@ -194,6 +194,12 @@ check_version_command "Playwright records video with the baked ffmpeg" \
     node "${playwright_directory}/record-video.mjs" "$(command -v chromium)" "${playwright_directory}/videos"
 rm --recursive --force "${playwright_directory}"
 
+echo "Codex:"
+check_equals "root owns /etc/codex/config.toml with mode 644" "root:root 644" "$(stat --format='%U:%G %a' /etc/codex/config.toml 2>&1)"
+check_equals "/etc/codex/config.toml turns off update checks and the daemon, and gives full access" \
+    '{"check_for_update_on_startup":false,"features":{"daemon_auto_start":false},"sandbox_mode":"danger-full-access"}' \
+    "$(python3 -c 'import json, sys, tomllib; print(json.dumps(tomllib.load(sys.stdin.buffer), separators=(",", ":"), sort_keys=True))' </etc/codex/config.toml 2>&1)"
+
 echo "Agent user:"
 check_equals "runs as dev" "1000:1000:dev" "$(id --user):$(id --group):$(id --user --name)"
 check_succeeds "the ubuntu user is gone" bash -c '! getent passwd ubuntu'
