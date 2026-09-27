@@ -700,7 +700,7 @@
             }
           },
           "409": {
-            "description": "Worktrees need a git repository",
+            "description": "Worktree sessions are offered only in git repositories",
             "content": {
               "application/json": {
                 "schema": {

@@ -24,7 +24,7 @@ use crate::path_ext::PathExt;
 pub enum FolderChoiceError {
     #[error("no such folder")]
     NoSuchFolder,
-    #[error("worktrees need a git repository")]
+    #[error("worktree sessions are offered only in git repositories")]
     NotARepository,
     #[error("could not list the folders in /projects: {0}")]
     Scan(io::Error),

@@ -74,7 +74,7 @@ pub async fn choose_to_serve(
         (status = 400, description = "Claude Code cannot take the options", body = ErrorBody),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody),
         (status = 404, description = "No such folder", body = ErrorBody),
-        (status = 409, description = "Worktrees need a git repository", body = ErrorBody)
+        (status = 409, description = "Worktree sessions are offered only in git repositories", body = ErrorBody)
     )
 )]
 pub async fn choose_claude_options(

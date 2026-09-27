@@ -418,7 +418,7 @@ impl RemoteControl {
             .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
 
-    /// The sign-in changed, which running servers only pick up by starting again.
+    /// The sign-in changed, maybe to another account, so servers start again with it.
     pub fn restart(&self) {
         self.restarts
             .send_modify(|generation| *generation = generation.wrapping_add(1));

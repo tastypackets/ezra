@@ -47,7 +47,7 @@ pub struct GitTools {
 }
 
 impl GitTools {
-    /// `GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR`, or the tools' own defaults under `home`.
+    /// `GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR`, or the manager's fallbacks under `home`.
     pub fn from_environment(home: &Path) -> Self {
         let path_from =
             |variable: &str, default: PathBuf| env::var_os(variable).map_or(default, PathBuf::from);
