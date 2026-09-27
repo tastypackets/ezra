@@ -16,7 +16,7 @@ case "$*" in
     echo 'ABCD-12345'
     while [ ! -f ${SIGNED_IN} ]; do sleep 0.2; done ;;
   "login status")
-    if [ -f ${SIGNED_IN} ]; then echo 'Logged in using ChatGPT'; else echo 'Not logged in'; exit 1; fi ;;
+    if [ -f ${SIGNED_IN} ]; then echo 'Logged in using ChatGPT' >&2; else echo 'Not logged in' >&2; exit 1; fi ;;
   logout) rm -f ${SIGNED_IN} ;;
 esac
 `;
