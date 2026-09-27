@@ -250,7 +250,7 @@ esac"#,
     echo 'Enter this one-time code'
     echo 'ABCD-12345'
     while [ ! -f {marker} ]; do sleep 0.05; done ;;
-  "login status") if [ -f {marker} ]; then echo 'Logged in using ChatGPT'; else echo 'Not logged in'; exit 1; fi ;;
+  "login status") if [ -f {marker} ]; then echo 'Logged in using ChatGPT' >&2; else echo 'Not logged in' >&2; exit 1; fi ;;
 esac"#,
                 marker = marker.display()
             ),

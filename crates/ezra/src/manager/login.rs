@@ -56,6 +56,7 @@ pub enum PromptShape {
 pub struct AgentCli {
     agent: Agent,
     command_path: PathBuf,
+    config_directory: Option<PathBuf>,
 }
 
 impl AgentCli {
@@ -67,6 +68,7 @@ impl AgentCli {
         Ok(Self {
             agent,
             command_path,
+            config_directory: paths.config_directory(agent).map(Path::to_path_buf),
         })
     }
 
@@ -99,12 +101,9 @@ impl AgentCli {
             .ok()?;
         match self.agent {
             Agent::Claude => SignInStatus::from_claude_json(&output.stdout),
-            Agent::Codex if output.status.success() => {
-                let mut text = output.stdout_text();
-                text.push_str(&output.stderr_text());
-                Some(SignInStatus::from_codex_text(&text))
-            }
-            Agent::Codex => output.status.code().map(|_| SignInStatus::default()),
+            Agent::Codex => SignInStatus::from_codex_text(
+                &[output.stdout_text(), output.stderr_text()].join("\n"),
+            ),
         }
     }
 
@@ -127,7 +126,11 @@ impl AgentCli {
     }
 
     fn command(&self) -> Command {
-        Command::new(&self.command_path)
+        let mut command = Command::new(&self.command_path);
+        if let Some(directory) = &self.config_directory {
+            command.env(self.agent.config_directory_variable(), directory);
+        }
+        command
     }
 }
 
@@ -344,13 +347,77 @@ impl LoginProcess {
     }
 }
 
+/// How Codex is signed in, as `codex login status` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignInMethod {
+    ChatGpt,
+    ApiKey,
+    AccessToken,
+    PersonalAccessToken,
+    WorkloadIdentity,
+    AmazonBedrockApiKey,
+    AmazonBedrockAccessKeys,
+}
+
+impl SignInMethod {
+    /// The method's name, which never includes a key.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ChatGpt => "ChatGPT",
+            Self::ApiKey => "API key",
+            Self::AccessToken => "Access token",
+            Self::PersonalAccessToken => "Personal access token",
+            Self::WorkloadIdentity => "Workload identity",
+            Self::AmazonBedrockApiKey => "Amazon Bedrock API key",
+            Self::AmazonBedrockAccessKeys => "Amazon Bedrock AWS access keys",
+        }
+    }
+
+    /// Reads what `codex login status` names after "Logged in using", such as "an API key -
+    /// sk-proj-***ABCDE". `None` for a method this build does not know.
+    fn from_status_name(name: &str) -> Option<Self> {
+        let (method, _masked_key) = name.split_once(" - ").unwrap_or((name, ""));
+        match method {
+            "ChatGPT" => Some(Self::ChatGpt),
+            "an API key" => Some(Self::ApiKey),
+            "access token" => Some(Self::AccessToken),
+            "personal access token" => Some(Self::PersonalAccessToken),
+            "workload identity" => Some(Self::WorkloadIdentity),
+            "Amazon Bedrock API key" => Some(Self::AmazonBedrockApiKey),
+            "Amazon Bedrock AWS access keys" => Some(Self::AmazonBedrockAccessKeys),
+            _ => None,
+        }
+    }
+}
+
+/// An agent's sign-in as its CLI last reported it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SignInStatus {
     pub logged_in: bool,
-    pub account: Option<String>,
+    /// Claude Code's email and plan, when it gives them.
+    pub claude_account: Option<String>,
+    /// How Codex is signed in, absent for Claude Code and for a method this build does not know.
+    pub method: Option<SignInMethod>,
+}
+
+impl From<SignInMethod> for SignInStatus {
+    fn from(method: SignInMethod) -> Self {
+        Self {
+            logged_in: true,
+            claude_account: None,
+            method: Some(method),
+        }
+    }
 }
 
 impl SignInStatus {
+    /// Claude Code's account, or how Codex is signed in.
+    pub fn account(&self) -> Option<String> {
+        self.method
+            .map(|method| method.label().to_owned())
+            .or_else(|| self.claude_account.clone())
+    }
+
     /// Parses `claude auth status`, `None` when it is not the status JSON.
     fn from_claude_json(status_json: &[u8]) -> Option<Self> {
         #[derive(Deserialize)]
@@ -367,27 +434,24 @@ impl SignInStatus {
         };
         Some(Self {
             logged_in: status.logged_in,
-            account: account.filter(|_| status.logged_in),
+            claude_account: account.filter(|_| status.logged_in),
+            method: None,
         })
     }
 
-    /// Parses `codex login status`, e.g. "Logged in using ChatGPT", "Logged in using an API key -
-    /// sk-…" or "Not logged in". The account is the sign-in method, never the key.
-    fn from_codex_text(text: &str) -> Self {
-        let logged_in_line = text.lines().find(|line| line.starts_with("Logged in"));
-        Self {
-            logged_in: logged_in_line.is_some(),
-            account: logged_in_line
-                .and_then(|line| line.strip_prefix("Logged in using "))
-                .map(|method| {
-                    let method = method.split(" - ").next().unwrap_or(method).trim();
-                    method
-                        .strip_prefix("an ")
-                        .or_else(|| method.strip_prefix("a "))
-                        .unwrap_or(method)
-                        .to_owned()
-                }),
-        }
+    /// Parses `codex login status`, `None` when it says neither "Logged in using" nor "Not logged
+    /// in", such as when it could not read the sign-in.
+    fn from_codex_text(text: &str) -> Option<Self> {
+        text.lines().map(str::trim).find_map(|line| {
+            if line == "Not logged in" {
+                return Some(Self::default());
+            }
+            line.strip_prefix("Logged in using ").map(|name| Self {
+                logged_in: true,
+                claude_account: None,
+                method: SignInMethod::from_status_name(name),
+            })
+        })
     }
 }
 
@@ -475,6 +539,7 @@ mod tests {
     use nix::unistd::Pid;
 
     use super::*;
+    use crate::manager::api::test_support::TestManager;
 
     const CLAUDE_OUTPUT: &str = "Opening browser to sign in…\n\
         If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=abc&state=xyz\n\
@@ -601,20 +666,18 @@ mod tests {
 
     #[test]
     fn claude_status_gives_sign_in_and_account() {
-        assert_eq!(
-            SignInStatus::from_claude_json(
-                br#"{"loggedIn": true, "email": "a@example.com", "subscriptionType": "max"}"#
-            ),
-            Some(SignInStatus {
-                logged_in: true,
-                account: Some("a@example.com (max)".to_owned())
-            })
-        );
+        let signed_in = SignInStatus::from_claude_json(
+            br#"{"loggedIn": true, "email": "a@example.com", "subscriptionType": "max"}"#,
+        )
+        .expect("the status is read");
+        assert!(signed_in.logged_in);
+        assert_eq!(signed_in.account().as_deref(), Some("a@example.com (max)"));
+        assert_eq!(signed_in.method, None);
         assert_eq!(
             SignInStatus::from_claude_json(br#"{"loggedIn": true, "authMethod": "claude.ai"}"#),
             Some(SignInStatus {
                 logged_in: true,
-                account: None
+                ..SignInStatus::default()
             })
         );
         assert_eq!(
@@ -625,32 +688,127 @@ mod tests {
     }
 
     #[test]
-    fn codex_status_gives_sign_in_and_method() {
+    fn codex_status_gives_the_sign_in_method() {
+        for (output, method, account) in [
+            ("Logged in using ChatGPT", SignInMethod::ChatGpt, "ChatGPT"),
+            (
+                "Logged in using an API key - sk-proj-***ABCDE",
+                SignInMethod::ApiKey,
+                "API key",
+            ),
+            (
+                "Logged in using an API key - ***",
+                SignInMethod::ApiKey,
+                "API key",
+            ),
+            (
+                "Logged in using access token",
+                SignInMethod::AccessToken,
+                "Access token",
+            ),
+            (
+                "Logged in using personal access token",
+                SignInMethod::PersonalAccessToken,
+                "Personal access token",
+            ),
+            (
+                "Logged in using workload identity",
+                SignInMethod::WorkloadIdentity,
+                "Workload identity",
+            ),
+            (
+                "Logged in using Amazon Bedrock API key",
+                SignInMethod::AmazonBedrockApiKey,
+                "Amazon Bedrock API key",
+            ),
+            (
+                "Logged in using Amazon Bedrock AWS access keys",
+                SignInMethod::AmazonBedrockAccessKeys,
+                "Amazon Bedrock AWS access keys",
+            ),
+        ] {
+            let status =
+                SignInStatus::from_codex_text(&format!("\n{output}\n")).expect("a method is read");
+            assert_eq!(status, SignInStatus::from(method), "{output}");
+            assert_eq!(status.account().as_deref(), Some(account), "{output}");
+        }
+    }
+
+    #[test]
+    fn codex_status_never_shows_the_key() {
+        let status = SignInStatus::from_codex_text("Logged in using an API key - sk-proj-***ABCDE")
+            .expect("a method is read");
+        let account = status.account().expect("the method is the account");
+        assert!(
+            !account.contains("sk-") && !account.contains("***"),
+            "{account}"
+        );
+    }
+
+    #[test]
+    fn codex_is_signed_out_only_when_it_says_so() {
         assert_eq!(
-            SignInStatus::from_codex_text("Logged in using ChatGPT\n"),
+            SignInStatus::from_codex_text("\nNot logged in\n"),
+            Some(SignInStatus::default())
+        );
+        for no_answer in [
+            "Error checking login status: failed to read auth.json",
+            "Unexpected error retrieving API key: missing key",
+            "Error loading configuration: invalid type: string \"x\", expected a boolean",
+            "Error parsing -c overrides: Invalid override (missing '='): sandbox_mode",
+            "Logged in",
+            "",
+        ] {
+            assert_eq!(
+                SignInStatus::from_codex_text(no_answer),
+                None,
+                "{no_answer}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_codex_method_from_a_later_release_is_signed_in_without_an_account() {
+        let status =
+            SignInStatus::from_codex_text("Logged in using a method from a later release - ***")
+                .expect("the sign-in is read");
+        assert_eq!(
+            status,
             SignInStatus {
                 logged_in: true,
-                account: Some("ChatGPT".to_owned())
+                ..SignInStatus::default()
             }
         );
-        assert_eq!(
-            SignInStatus::from_codex_text("Logged in using an API key - sk-proj-***ABCD\n"),
-            SignInStatus {
-                logged_in: true,
-                account: Some("API key".to_owned())
-            }
-        );
-        assert_eq!(
-            SignInStatus::from_codex_text("Logged in using Amazon Bedrock AWS access keys\n"),
-            SignInStatus {
-                logged_in: true,
-                account: Some("Amazon Bedrock AWS access keys".to_owned())
-            }
-        );
-        assert_eq!(
-            SignInStatus::from_codex_text("Not logged in\n"),
-            SignInStatus::default()
-        );
+        assert_eq!(status.account(), None);
+    }
+
+    #[tokio::test]
+    async fn each_cli_runs_with_its_config_directory() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        for agent in Agent::ALL {
+            let seen = directory.path().join(agent.command_name());
+            let variable = agent.config_directory_variable();
+            manager.install_fake_cli(
+                agent,
+                &format!(r#"printf '%s\n' "${variable}" >> '{}'"#, seen.display()),
+            );
+            let cli = AgentCli::installed(agent, &manager.state.install_paths)
+                .expect("the fake is installed");
+            cli.sign_in_status().await;
+            cli.log_out().await.expect("the fake signs out");
+            let _no_prompt = cli.start_login().await;
+            let config_directory = manager
+                .state
+                .install_paths
+                .config_directory(agent)
+                .expect("the test manager has config directories");
+            assert_eq!(
+                fs::read_to_string(&seen).expect("the fake ran"),
+                format!("{}\n", config_directory.display()).repeat(3),
+                "{variable}"
+            );
+        }
     }
 
     fn credentials(json: &str) -> ClaudeCredentials {

@@ -55,7 +55,7 @@ impl Agent {
         }
     }
 
-    fn config_directory_variable(self) -> &'static str {
+    pub fn config_directory_variable(self) -> &'static str {
         match self {
             Self::Claude => "CLAUDE_CONFIG_DIR",
             Self::Codex => "CODEX_HOME",
