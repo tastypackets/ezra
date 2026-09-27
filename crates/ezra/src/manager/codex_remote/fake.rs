@@ -284,19 +284,20 @@ impl FakeControlServer {
         .await
     }
 
-    /// Whether a `method` request was answered.
-    pub fn answered(&self, method: &str) -> bool {
+    /// How many `method` requests were answered.
+    pub fn answered(&self, method: &str) -> usize {
         let seen = self.seen();
         seen.iter()
             .filter_map(|frame| match frame {
                 Seen::Received(request) if request["method"] == method => Some(&request["id"]),
                 Seen::Received(_) | Seen::Sent(_) => None,
             })
-            .any(|id| {
+            .filter(|id| {
                 seen.iter().any(|frame| {
-                    matches!(frame, Seen::Sent(answer) if answer["id"] == *id && answer.get("method").is_none())
+                    matches!(frame, Seen::Sent(answer) if answer["id"] == **id && answer.get("method").is_none())
                 })
             })
+            .count()
     }
 
     /// The requests after the first, which must be `initialize`.

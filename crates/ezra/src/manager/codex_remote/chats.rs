@@ -15,8 +15,9 @@ pub struct Chats {
 struct Chat {
     /// Absent until Codex says.
     status: Option<ThreadStatusWire>,
-    /// Codex asked ezra about it, so ezra follows it.
-    joined: bool,
+    /// Codex started it while ezra was connected or asked ezra about it, so ezra follows it or
+    /// soon will.
+    followed: bool,
     leaving: Leaving,
 }
 
@@ -58,6 +59,7 @@ impl Chats {
     pub fn started(&mut self, thread: ThreadWire) -> Option<ThreadId> {
         let chat = self.loaded.entry(thread.id.clone()).or_default();
         chat.status = Some(thread.status);
+        chat.followed = true;
         chat.leave(thread.id)
     }
 
@@ -100,7 +102,7 @@ impl Chats {
     /// unsubscribe from.
     pub fn asked_about(&mut self, id: ThreadId) -> Option<ThreadId> {
         let chat = self.loaded.entry(id.clone()).or_default();
-        chat.joined = true;
+        chat.followed = true;
         chat.leave(id)
     }
 
@@ -111,7 +113,7 @@ impl Chats {
         };
         chat.leaving = match status {
             Some(UnsubscribeStatus::Unsubscribed | UnsubscribeStatus::NotLoaded) => Leaving::Done,
-            Some(UnsubscribeStatus::NotSubscribed) if !chat.joined => Leaving::Done,
+            Some(UnsubscribeStatus::NotSubscribed) if !chat.followed => Leaving::Done,
             Some(UnsubscribeStatus::NotSubscribed) | None => Leaving::Due,
         };
     }
@@ -227,7 +229,6 @@ mod tests {
     #[test]
     fn a_started_chat_is_left_once() {
         for answer in [
-            UnsubscribeStatus::NotSubscribed,
             UnsubscribeStatus::Unsubscribed,
             UnsubscribeStatus::NotLoaded,
         ] {
@@ -247,6 +248,29 @@ mod tests {
             assert_eq!(chats.asked_about(id("a")), Some(id("a")), "{answer:?}");
             assert_eq!(counts(&chats), (1, 0));
         }
+    }
+
+    #[test]
+    fn a_started_chat_is_left_again_on_its_next_change_until_codex_settles_it() {
+        let mut chats = Chats::default();
+        assert_eq!(
+            chats.started(thread("a", ThreadStatusWire::Idle)),
+            Some(id("a"))
+        );
+
+        chats.left(&id("a"), Some(UnsubscribeStatus::NotSubscribed));
+        assert_eq!(
+            chats.changed(id("a"), ThreadStatusWire::Active),
+            Some(id("a"))
+        );
+        chats.left(&id("a"), Some(UnsubscribeStatus::NotSubscribed));
+        assert_eq!(
+            chats.changed(id("a"), ThreadStatusWire::Idle),
+            Some(id("a"))
+        );
+
+        chats.left(&id("a"), Some(UnsubscribeStatus::Unsubscribed));
+        assert_eq!(chats.changed(id("a"), ThreadStatusWire::Active), None);
     }
 
     #[test]

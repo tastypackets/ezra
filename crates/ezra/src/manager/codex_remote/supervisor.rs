@@ -1672,8 +1672,8 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert_eq!(cleared.last_error, None);
-        assert!(!answered_then);
-        assert!(fake.answered(TURN_ON));
+        assert_eq!(answered_then, 0);
+        assert_eq!(fake.answered(TURN_ON), 1);
         assert_eq!(fake.requests_of(TURN_ON), [json!({"ephemeral": true})]);
         let connecting = status_until(&manager, |status| {
             status.relay == Some(RelayState::Connecting)
@@ -2166,28 +2166,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ezra_unsubscribes_from_a_chat_another_client_started_once() {
+    async fn ezra_unsubscribes_from_a_chat_another_client_started_until_codex_says_it_did() {
         let manager = manager(BUDGET);
-        let (supervisor, fake) = with_chats(&manager, &[], Vec::new(), &["notSubscribed"]).await;
+        let (supervisor, fake) = with_chats(
+            &manager,
+            &[],
+            Vec::new(),
+            &["notSubscribed", "unsubscribed"],
+        )
+        .await;
 
         fake.push(json!({
             "method": "thread/started",
             "params": {"thread": FakeControlServer::thread("thread-1", json!({"type": "idle"}))},
         }));
         status_until(&manager, |status| chats(status) == Some((1, 0))).await;
-        fake.until_requested(UNSUBSCRIBE, 1).await;
-        wait_until(WAIT, || fake.answered(UNSUBSCRIBE), |answered| *answered).await;
+        wait_until(
+            WAIT,
+            || fake.answered(UNSUBSCRIBE),
+            |answered| *answered == 1,
+        )
+        .await;
 
         fake.push(FakeControlServer::thread_status_changed(
             "thread-1", "active",
         ));
         status_until(&manager, |status| chats(status) == Some((1, 1))).await;
+        wait_until(
+            WAIT,
+            || fake.answered(UNSUBSCRIBE),
+            |answered| *answered == 2,
+        )
+        .await;
         fake.push(FakeControlServer::thread_status_changed("thread-1", "idle"));
         status_until(&manager, |status| chats(status) == Some((1, 0))).await;
         sleep(Duration::from_millis(200)).await;
         assert_eq!(
             fake.requests_of(UNSUBSCRIBE),
-            [json!({"threadId": "thread-1"})]
+            [
+                json!({"threadId": "thread-1"}),
+                json!({"threadId": "thread-1"})
+            ]
         );
 
         shut_down(&manager, supervisor).await;
@@ -2860,7 +2879,12 @@ mod tests {
             "thread-1", "active",
         ));
         fake.until_requested(UNSUBSCRIBE, 1).await;
-        wait_until(WAIT, || fake.answered(UNSUBSCRIBE), |answered| *answered).await;
+        wait_until(
+            WAIT,
+            || fake.answered(UNSUBSCRIBE),
+            |answered| *answered == 1,
+        )
+        .await;
 
         let update = an_update_waits(&manager, &cookie).await;
         let now = OffsetDateTime::now_utc();
@@ -2982,10 +3006,10 @@ mod tests {
 
         an_update_waits(&manager, &cookie).await;
         assert_eq!(servers(&manager).len(), 1);
-        assert!(!fake.answered("thread/loaded/list"));
+        assert_eq!(fake.answered("thread/loaded/list"), 0);
 
         servers_started(&manager, 2).await;
-        assert!(fake.answered("thread/loaded/list"));
+        assert!(fake.answered("thread/loaded/list") > 0);
         status_until(&manager, connected_on("0.157.2")).await;
 
         shut_down(&manager, supervisor).await;
