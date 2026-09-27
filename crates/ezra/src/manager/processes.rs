@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use nix::sys::resource::{Resource, getrlimit, rlim_t, setrlimit};
+#[cfg(test)]
+use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
 const DELETED_SUFFIX: &str = " (deleted)";
@@ -144,6 +146,27 @@ impl ProcessFamily {
 
     /// Memory the members still running use, with shared memory counted once. Blocks.
     pub fn memory_bytes(&self) -> u64 {
+        self.survivors()
+            .filter_map(Process::proportional_memory)
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Kills the members still running with the start time they had when read, never this
+    /// process. Blocks.
+    #[cfg(test)]
+    pub fn kill_survivors(&self) {
+        let own = Pid::this();
+        for id in self
+            .survivors()
+            .filter_map(Process::id)
+            .filter(|id| *id != own)
+        {
+            let _already_gone = kill(id, Signal::SIGKILL);
+        }
+    }
+
+    /// The members still running with the start time they had when read.
+    fn survivors(&self) -> impl Iterator<Item = &Process> {
         self.members
             .iter()
             .filter(|(process, stat)| {
@@ -151,8 +174,7 @@ impl ProcessFamily {
                     .stat()
                     .is_some_and(|now| now.started == stat.started)
             })
-            .filter_map(|(process, _)| process.proportional_memory())
-            .fold(0, u64::saturating_add)
+            .map(|(process, _)| process)
     }
 }
 
@@ -192,7 +214,7 @@ impl OpenFileLimit {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::process::CommandExt;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::process::{self, Command, Stdio};
     use std::thread::sleep;
     use std::time::{Duration, Instant};
@@ -327,6 +349,43 @@ mod tests {
         };
         assert!(remembered(started).memory_bytes() > 0);
         assert_eq!(remembered(started.saturating_add(1)).memory_bytes(), 0);
+    }
+
+    #[test]
+    fn only_members_with_their_remembered_start_time_are_killed() {
+        let sleep = || {
+            Command::new("sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .spawn()
+                .expect("sleep starts")
+        };
+        let (mut remembered, mut reused) = (sleep(), sleep());
+        let member = |id: u32, ticks_later: u64| {
+            let process = Process(PathBuf::from(format!("/proc/{id}")));
+            let stat = process.stat().expect("the process has a stat");
+            let stat = ProcessStat {
+                started: stat.started.saturating_add(ticks_later),
+                ..stat
+            };
+            (process, stat)
+        };
+        let family = ProcessFamily {
+            leader: Pid::this(),
+            members: vec![
+                member(process::id(), 0),
+                member(remembered.id(), 0),
+                member(reused.id(), 1),
+            ],
+        };
+
+        family.kill_survivors();
+
+        let killed = remembered.wait().expect("sleep is reaped");
+        assert_eq!(killed.signal(), Some(Signal::SIGKILL as i32));
+        assert!(reused.try_wait().expect("sleep is readable").is_none());
+        reused.kill().expect("sleep is killed");
+        reused.wait().expect("sleep is reaped");
     }
 
     #[test]
