@@ -1,4 +1,4 @@
-import type { ReleaseChannel } from "@ezra/client";
+import type { CodexApprovals, CodexSandbox, ReleaseChannel } from "@ezra/client";
 
 export const SETTINGS_DESCRIPTIONS = {
   release_channel: "Release channel",
@@ -22,6 +22,15 @@ export const SETTINGS_DESCRIPTIONS = {
   capacity_range: "Enter a whole number of 1 or more, or leave it empty.",
   save: "Save",
   saved: "Claude Code settings saved.",
+  codex_remote_control: "Remote control",
+  codex_remote_enabled: "Serve to the ChatGPT app",
+  codex_remote_enabled_hint: "Serves this box while Codex is signed in with ChatGPT.",
+  codex_sandbox: "Sandbox",
+  codex_sandbox_hint: "Read only and Workspace write need a container that allows user namespaces.",
+  codex_sandbox_blocked_hint: "Read only and Workspace write fail in this container.",
+  codex_approvals: "Approvals",
+  codex_approvals_hint: "Codex's questions go to the ChatGPT app.",
+  codex_saved: "Codex settings saved.",
 } as const;
 
 export const RELEASE_CHANNELS: Record<ReleaseChannel, { title: string; description: string }> = {
@@ -49,3 +58,41 @@ export const PERMISSION_MODE_NAMES: ReadonlySet<string> = new Set([
   ...PERMISSION_MODES.map(({ value }) => value),
   "manual",
 ]);
+
+export const SANDBOX_MODE_ORDER = [
+  "danger-full-access",
+  "workspace-write",
+  "read-only",
+] as const satisfies readonly CodexSandbox[];
+
+export const SANDBOX_MODES: Record<CodexSandbox, { title: string; description: string }> = {
+  "danger-full-access": {
+    title: "No sandbox",
+    description: "The container is the only boundary.",
+  },
+  "workspace-write": {
+    title: "Workspace write",
+    description:
+      "Commands can write in the chat's folder, except .git, and in /tmp, with no network.",
+  },
+  "read-only": {
+    title: "Read only",
+    description: "Commands can read files but not change them.",
+  },
+};
+
+export const APPROVAL_POLICY_ORDER = [
+  "on-request",
+  "never",
+] as const satisfies readonly CodexApprovals[];
+
+export const APPROVAL_POLICIES: Record<CodexApprovals, { title: string; description: string }> = {
+  "on-request": {
+    title: "On request",
+    description: "Codex asks when it needs to, such as before rm\u00a0-\u2060rf.",
+  },
+  never: {
+    title: "Never",
+    description: "Codex never asks and refuses commands like rm\u00a0-\u2060rf.",
+  },
+};
