@@ -64,7 +64,7 @@ jobs:
           sudo usermod --append --groups docker "$tester"
           binaries="$(mktemp --directory)"
           cargo test --locked --test '*' --no-run --message-format=json \
-            | jq -r 'select(.executable != null) | .executable' \
+            | jq -r 'select(.executable != null and .profile.test) | .executable' \
             | xargs install --mode=755 --target-directory="$binaries"
           chmod 755 "$binaries"
           for tests in "$binaries"/*; do
