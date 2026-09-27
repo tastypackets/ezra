@@ -37,6 +37,8 @@ volumes:
 | `/home/dev/projects` | Your repositories |
 | `/cache` | Installed agent versions and tools |
 
+Host folders work in place of volumes. At every start, an empty folder mounted at one of these paths and owned by root is given to uid 1000, so the folder Docker creates for a missing bind mount path is ready to use. A folder with files in it must already be writable by uid 1000. Under rootless Docker or Podman, the new owner shows on the host as one of your subordinate uids.
+
 > [!IMPORTANT]
 > On an Ubuntu 24.04 host, Codex's sandbox also needs Ubuntu's AppArmor profile for bubblewrap. Ubuntu 26.04 loads it by default.
 >
@@ -67,6 +69,7 @@ Clone repositories from the Folders card, or ask an agent started in `~/projects
 | `EZRA_PORT` | `8443` | The port the manager listens on inside the container |
 | `EZRA_SUDO` | `off` | `full` lets agents use sudo |
 | `EZRA_APT_PACKAGES` | | Packages to install at every start, separated by spaces or commas |
+| `EZRA_CHOWN_EMPTY_MOUNTS` | `on` | `off` leaves empty root-owned mounts of `/config`, `/home/dev/projects` and `/cache` owned by root |
 | `EZRA_TLS_VERIFY` | `on` | `off` skips certificate checks on agent downloads, for networks that intercept TLS |
 | `GH_TOKEN` or `GITHUB_TOKEN` | | A GitHub token to use in place of signing in |
 
