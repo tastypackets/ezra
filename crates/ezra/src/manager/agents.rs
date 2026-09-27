@@ -579,7 +579,7 @@ pub struct DownloadProgress {
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::CommandExt;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     use std::thread;
     use std::time::Instant;
 
@@ -760,10 +760,11 @@ mod tests {
         let paths = InstallPaths::under_home(home.path());
         let versions = paths.versions_directory(Agent::Claude);
         fs::create_dir_all(&versions).expect("versions directory is created");
-        let sleep = fs::canonicalize("/bin/sleep").expect("sleep is installed");
+        // Ubuntu's uutils sleep exits when its file is not named after a utility.
+        let shell = fs::canonicalize("/bin/sh").expect("a shell is installed");
         for version in ["2.1.1", "2.1.2", "2.1.3"] {
             let copied = Command::new("cp")
-                .arg(&sleep)
+                .arg(&shell)
                 .arg(versions.join(version))
                 .status();
             assert!(copied.expect("cp runs").success());
@@ -773,8 +774,9 @@ mod tests {
             .replace_symlink(&versions.join("2.1.3"))
             .expect("command link is created");
         let mut running = Command::new(versions.join("2.1.1"))
-            .arg0("sleep")
-            .arg("30")
+            .arg0("sh")
+            .args(["-c", "read line"])
+            .stdin(Stdio::piped())
             .spawn()
             .expect("the old version runs");
         let deadline = Instant::now()

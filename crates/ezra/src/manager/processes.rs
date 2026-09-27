@@ -418,14 +418,15 @@ mod tests {
     #[test]
     fn a_copied_program_counts_as_running_from_its_directory() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let installed = fs::canonicalize("/bin/sleep").expect("sleep is installed");
+        // Ubuntu's uutils sleep exits when its file is not named after a utility.
+        let installed = fs::canonicalize("/bin/sh").expect("a shell is installed");
         let copy = directory.path().join("2.1.1");
         let copied = Command::new("cp").arg(&installed).arg(&copy).status();
         assert!(copied.expect("cp runs").success());
         let mut running = Command::new(&copy)
-            .arg0("sleep")
-            .arg("30")
-            .stdin(Stdio::null())
+            .arg0("sh")
+            .args(["-c", "read line"])
+            .stdin(Stdio::piped())
             .spawn()
             .expect("the copy starts");
         fs::remove_file(&copy).expect("the copy is deleted while it runs");
