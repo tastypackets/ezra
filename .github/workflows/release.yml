@@ -63,9 +63,7 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           load: true
           tags: ezra:release
-          cache-from: |
-            type=gha
-            type=gha,scope=release-${{ matrix.arch }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
           cache-to: type=gha,scope=release-${{ matrix.arch }},mode=max
       - name: Container tests
         run: .github/scripts/container-tests.sh
