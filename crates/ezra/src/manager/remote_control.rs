@@ -21,7 +21,7 @@ use super::agents::Agent;
 use super::events::{Events, Topic};
 use super::folders::Folder;
 use super::login::AgentCli;
-use super::processes::{Process, ProcessStat};
+use super::processes::ProcessFamily;
 use super::state::AppState;
 use super::supervision::{
     Failure, Failures, FlagExt, LineWatcher, OUTPUT_DRAIN_TIMEOUT, PendingUpdate, Published,
@@ -942,26 +942,21 @@ impl ProcessGroup {
     /// Sessions are the leader's live `--sdk-url` children. Memory counts every process it
     /// started.
     fn usage(&self, capacity: Option<u32>) -> ServerUsage {
-        let mut usage = ServerUsage {
-            sessions: 0,
-            capacity,
-            memory_bytes: 0,
-        };
-        for (process, ProcessStat { parent, zombie, .. }) in Process::family_of(self.0) {
-            if parent == self.0
-                && !zombie
-                && process
+        let family = ProcessFamily::of(self.0);
+        let sessions = family
+            .children()
+            .filter(|process| {
+                process
                     .arguments()
                     .iter()
                     .any(|argument| argument == SESSION_ARGUMENT)
-            {
-                usage.sessions = usage.sessions.saturating_add(1);
-            }
-            if let Some(memory) = process.proportional_memory() {
-                usage.memory_bytes = usage.memory_bytes.saturating_add(memory);
-            }
+            })
+            .count();
+        ServerUsage {
+            sessions: u32::try_from(sessions).unwrap_or(u32::MAX),
+            capacity,
+            memory_bytes: family.memory_bytes(),
         }
-        usage
     }
 }
 
