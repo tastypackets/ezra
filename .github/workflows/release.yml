@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
+    paths: [crates/ezra/Cargo.toml]
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +33,10 @@ jobs:
           fi
           version="$(cargo metadata --no-deps --format-version 1 | jq --raw-output '.packages[] | select(.name == "ezra") | .version')"
           if git ls-remote --exit-code --tags origin "refs/tags/v${version}"; then
+            if [[ ${GITHUB_EVENT_NAME} == push ]]; then
+              echo "v${version} is already released, so this change to crates/ezra/Cargo.toml releases nothing."
+              exit 0
+            fi
             echo "::error::v${version} is already released. Bump the version in crates/ezra/Cargo.toml first."
             exit 1
           fi
@@ -37,6 +44,7 @@ jobs:
 
   build:
     needs: version
+    if: needs.version.outputs.version != ''
     strategy:
       matrix:
         include:
