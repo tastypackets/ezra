@@ -38,7 +38,7 @@
 
 :root {
   color-scheme: light dark;
-  --background: oklch(0.985 0 0);
+  --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -57,7 +57,7 @@
   --warning: oklch(0.473 0.137 46.201);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.556 0 0);
+  --ring: oklch(0.708 0 0);
   --radius: 0.625rem;
 }
 
@@ -88,7 +88,7 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring;
+    @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-sm text-foreground antialiased;

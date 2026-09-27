@@ -82,7 +82,7 @@ function Autocomplete({
                   key={option.value}
                   value={option}
                   index={index}
-                  className="flex cursor-default items-start gap-2 rounded-md px-2 py-1.5 outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-highlighted:ring-2 data-highlighted:ring-ring data-highlighted:ring-inset"
+                  className="flex cursor-default items-start gap-2 rounded-md px-2 py-1.5 outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
                 >
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="font-mono">{option.value}</span>
