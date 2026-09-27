@@ -141,6 +141,7 @@ mod tests {
         probe: Duration::from_secs(1),
         drain: Duration::from_millis(500),
         force: Duration::from_millis(500),
+        request: Duration::from_secs(1),
     };
 
     /// A fake `codex` whose `app-server` runs `server`.

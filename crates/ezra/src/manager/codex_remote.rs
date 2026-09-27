@@ -1,4 +1,8 @@
 #[cfg(test)]
+mod control;
+#[cfg(test)]
+mod fake;
+#[cfg(test)]
 mod launch;
 #[cfg(test)]
 mod problem;
@@ -46,6 +50,8 @@ pub struct ServerBudget {
     pub drain: Duration,
     /// After the second SIGTERM, before SIGKILL.
     pub force: Duration,
+    /// For each answer on the control socket, and for its WebSocket handshake.
+    pub request: Duration,
 }
 
 #[cfg(test)]
@@ -55,6 +61,7 @@ impl Default for ServerBudget {
             probe: Duration::from_secs(5),
             drain: Duration::from_secs(20),
             force: Duration::from_secs(10),
+            request: Duration::from_secs(45),
         }
     }
 }

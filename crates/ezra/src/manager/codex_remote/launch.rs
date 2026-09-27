@@ -246,6 +246,7 @@ mod tests {
         probe: Duration::from_millis(300),
         drain: Duration::ZERO,
         force: Duration::ZERO,
+        request: Duration::ZERO,
     };
 
     fn arguments(command: &Command) -> Vec<&str> {
