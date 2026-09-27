@@ -11,6 +11,7 @@ mod login;
 mod processes;
 mod remote_control;
 mod settings;
+mod settings_file;
 mod state;
 mod status;
 mod tls;
@@ -33,6 +34,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::environment_config::FromEnvironment;
 use agents::TlsVerification;
+use settings_file::SettingsFileWatcher;
 use state::AppState;
 
 const STATE_DIRECTORY: &str = "/config/ezra";
@@ -122,6 +124,13 @@ async fn serve() -> Result<(), ManagerError> {
     tokio::spawn(state.clone().prepare_git_at_start());
     tokio::spawn(state.clone().supervise_remote_control());
     tokio::spawn(state.clone().describe_folders_regularly());
+    let (install_paths, events) = (Arc::clone(&state.install_paths), state.events.clone());
+    tokio::spawn(async move {
+        SettingsFileWatcher::start(&install_paths)
+            .await
+            .publish_changes(events)
+            .await;
+    });
     tokio::spawn(handle.clone().shut_down_on_signal(state.clone()));
     let remote_control = Arc::clone(&state.remote_control);
     let app = state.into_router(web_directory);

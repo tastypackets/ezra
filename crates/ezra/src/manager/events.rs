@@ -21,10 +21,11 @@ pub enum Topic {
     RemoteControl,
     Git,
     Manager,
+    SettingsFile,
 }
 
 impl Topic {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Agents,
         Self::ClaudeSettings,
         Self::Folders,
@@ -32,6 +33,7 @@ impl Topic {
         Self::RemoteControl,
         Self::Git,
         Self::Manager,
+        Self::SettingsFile,
     ];
 }
 

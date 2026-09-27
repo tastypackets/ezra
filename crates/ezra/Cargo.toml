@@ -26,6 +26,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 tar = "0.4.46"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }
 tokio = { version = "1.53.1", features = ["rt", "macros", "signal", "net", "time", "sync", "fs", "process", "io-util"] }
@@ -41,6 +42,5 @@ workspace = true
 
 [dev-dependencies]
 http-body-util = "0.1.5"
-tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["rt", "macros"] }
 tower = { version = "0.5.3", features = ["util"] }

@@ -374,6 +374,160 @@
         }
       }
     },
+    "/api/v1/agents/{agent}/settings-file": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get an agent's settings file",
+        "description": "Returns the agent's own settings file as text, empty when it does not exist.",
+        "operationId": "getSettingsFile",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "description": "The agent",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsFileText"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The agent's config directory is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The file is not UTF-8 text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Save an agent's settings file",
+        "description": "Writes the text byte for byte when it parses and the file is still at `version`.",
+        "operationId": "updateSettingsFile",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "description": "The agent",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsFileSaveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsFileText"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The text does not parse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParseProblem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The agent's config directory is not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The file changed since that version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The text is larger than 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clones": {
       "get": {
         "tags": [
@@ -2006,6 +2160,30 @@
           }
         }
       },
+      "ParseProblem": {
+        "type": "object",
+        "description": "Where a settings file's text stops parsing.",
+        "required": [
+          "error",
+          "line",
+          "column"
+        ],
+        "properties": {
+          "column": {
+            "type": "integer",
+            "description": "One-based, in characters.",
+            "minimum": 0
+          },
+          "error": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "description": "One-based.",
+            "minimum": 0
+          }
+        }
+      },
       "PasswordBody": {
         "type": "object",
         "required": [
@@ -2303,6 +2481,57 @@
           }
         }
       },
+      "SettingsFileFormat": {
+        "type": "string",
+        "description": "How a settings file is written.",
+        "enum": [
+          "json",
+          "toml"
+        ]
+      },
+      "SettingsFileSaveBody": {
+        "type": "object",
+        "description": "Text to save over the version it was edited from.",
+        "required": [
+          "text",
+          "version"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string",
+            "description": "The version of the file the text was edited from."
+          }
+        }
+      },
+      "SettingsFileText": {
+        "type": "object",
+        "description": "An agent's own settings file.",
+        "required": [
+          "path",
+          "format",
+          "text",
+          "version"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/SettingsFileFormat"
+          },
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "Empty when the file does not exist."
+          },
+          "version": {
+            "type": "string",
+            "description": "Identifies this text for saving."
+          }
+        }
+      },
       "SpawnMode": {
         "type": "string",
         "description": "Where sessions started from the Claude app work.",
@@ -2321,7 +2550,8 @@
           "clones",
           "remote_control",
           "git",
-          "manager"
+          "manager",
+          "settings_file"
         ]
       },
       "UnsavedWork": {

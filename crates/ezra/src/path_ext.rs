@@ -4,6 +4,9 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
+use nix::errno::Errno;
+
+const MAX_LINKS: usize = 40;
 
 pub trait PathExt {
     /// Entries of this directory, or none when it does not exist.
@@ -23,6 +26,9 @@ pub trait PathExt {
 
     /// The whole lines in the last `bytes` of this file, empty when it does not exist. Blocks.
     fn read_last_lines(&self, bytes: u64) -> io::Result<String>;
+
+    /// The path this path's links finally lead to, which may not exist yet. Blocks.
+    fn link_target(&self) -> io::Result<PathBuf>;
 }
 
 impl PathExt for Path {
@@ -96,6 +102,27 @@ impl PathExt for Path {
             &text
         };
         Ok(whole_lines.to_owned())
+    }
+
+    fn link_target(&self) -> io::Result<PathBuf> {
+        let mut target = self.to_path_buf();
+        for _ in 0..MAX_LINKS {
+            match fs::read_link(&target) {
+                Ok(link) => {
+                    target = target.parent().unwrap_or(Path::new("/")).join(link);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::InvalidInput | io::ErrorKind::NotFound
+                    ) =>
+                {
+                    return Ok(target);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Errno::ELOOP.into())
     }
 }
 
@@ -189,6 +216,41 @@ mod tests {
             "first\nsecond\nthird\n"
         );
         assert_eq!(log.read_last_lines(8).expect("readable"), "third\n");
+    }
+
+    #[test]
+    fn links_are_followed_to_the_file_they_name() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let file = directory.path().join("file");
+        assert_eq!(file.link_target().expect("a plain path resolves"), file);
+
+        let first = directory.path().join("links/first");
+        let second = directory.path().join("second");
+        write(&directory.path().join("real/settings.json"), "{}");
+        first
+            .replace_symlink(Path::new("../second"))
+            .expect("relative link is created");
+        second
+            .replace_symlink(Path::new("real/settings.json"))
+            .expect("second link is created");
+        assert_eq!(
+            fs::canonicalize(first.link_target().expect("the chain resolves"))
+                .expect("the target exists"),
+            fs::canonicalize(directory.path().join("real/settings.json")).expect("the file exists")
+        );
+
+        let dangling = directory.path().join("dangling");
+        dangling
+            .replace_symlink(&directory.path().join("missing/settings.json"))
+            .expect("dangling link is created");
+        assert_eq!(
+            dangling.link_target().expect("a dangling link resolves"),
+            directory.path().join("missing/settings.json")
+        );
+
+        let looped = directory.path().join("looped");
+        looped.replace_symlink(&looped).expect("loop is created");
+        assert!(looped.link_target().is_err());
     }
 
     #[test]

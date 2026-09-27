@@ -1,6 +1,6 @@
 import { streamEvents } from "@ezra/client";
 import type { Topic } from "@ezra/client";
-import { getClaudeSettingsOptions } from "@ezra/client/react-query.gen";
+import { getClaudeSettingsOptions, getSettingsFileOptions } from "@ezra/client/react-query.gen";
 import type { QueryKey } from "@tanstack/react-query";
 import { useEffect } from "react";
 
@@ -23,6 +23,10 @@ const TOPIC_QUERIES: Record<Topic, readonly QueryKey[]> = {
   remote_control: [remoteControlQueryOptions.queryKey],
   git: [gitStatusQueryOptions.queryKey, gitHubRepositoriesQueryOptions.queryKey],
   manager: [managerQueryOptions.queryKey],
+  settings_file: [
+    getSettingsFileOptions({ path: { agent: "claude" } }).queryKey,
+    getSettingsFileOptions({ path: { agent: "codex" } }).queryKey,
+  ],
 };
 
 /** Refetches what the manager says changed, and everything when a connection finds a newer revision. */

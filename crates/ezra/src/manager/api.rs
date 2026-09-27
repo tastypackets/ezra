@@ -8,10 +8,12 @@ mod manager;
 mod remote_control;
 pub mod session;
 mod settings;
+mod settings_file;
 #[cfg(test)]
 pub mod test_support;
 
-use axum::extract::FromRequestParts;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{DefaultBodyLimit, FromRequestParts};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
@@ -23,6 +25,7 @@ use utoipa::{OpenApi, ToSchema};
 
 use super::auth::SESSION_COOKIE;
 use super::settings::SettingsError;
+use super::settings_file::ParseProblem;
 use super::state::AppState;
 
 pub fn router(state: AppState) -> Router {
@@ -42,6 +45,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/agents/claude/settings",
             get(settings::claude).put(settings::update_claude),
+        )
+        .route(
+            "/api/v1/agents/{agent}/settings-file",
+            get(settings_file::read)
+                .put(settings_file::save)
+                .layer(DefaultBodyLimit::max(settings_file::MAX_BODY_BYTES)),
         )
         .route("/api/v1/events", get(events::stream))
         .route("/api/v1/remote-control", get(remote_control::overview))
@@ -107,10 +116,14 @@ impl FromRequestParts<AppState> for Session {
 #[derive(Debug)]
 pub enum ApiError {
     BadRequest(&'static str),
+    Invalid(ParseProblem),
+    Rejected(JsonRejection),
     Unauthorized(&'static str),
     Forbidden(&'static str),
     NotFound(&'static str),
     Conflict(String),
+    TooLarge(String),
+    Unprocessable(String),
     AgentFailed(String),
     Internal(String),
 }
@@ -119,10 +132,16 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.to_owned()),
+            Self::Invalid(problem) => {
+                return (StatusCode::BAD_REQUEST, Json(problem)).into_response();
+            }
+            Self::Rejected(rejection) => return rejection.into_response(),
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.to_owned()),
             Self::Forbidden(message) => (StatusCode::FORBIDDEN, message.to_owned()),
             Self::NotFound(message) => (StatusCode::NOT_FOUND, message.to_owned()),
             Self::Conflict(message) => (StatusCode::CONFLICT, message),
+            Self::TooLarge(message) => (StatusCode::PAYLOAD_TOO_LARGE, message),
+            Self::Unprocessable(message) => (StatusCode::UNPROCESSABLE_ENTITY, message),
             Self::AgentFailed(message) => {
                 tracing::warn!("{message}");
                 (StatusCode::BAD_GATEWAY, message)
@@ -174,6 +193,8 @@ pub struct ErrorBody {
         login::log_out,
         settings::claude,
         settings::update_claude,
+        settings_file::read,
+        settings_file::save,
         git::status,
         git::start_github_login,
         git::log_out_of_github,
