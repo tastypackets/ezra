@@ -51,7 +51,7 @@ import { DeleteFolderDialog } from "./delete-folder-dialog";
 import { ServerLogDialog } from "./server-log-dialog";
 import { ServerNotes } from "./server-notes";
 
-/** /projects and the projects in it, the clones on their way, and which ones the Claude app lists. */
+/** ~/projects and the projects in it, the clones on their way, and which ones the Claude app lists. */
 export function FoldersCard() {
   const folders = useQuery(foldersQueryOptions);
   const clones = useQuery(clonesQueryOptions);
@@ -111,7 +111,7 @@ export function FoldersCard() {
   );
 }
 
-/** The server for /projects, which Settings turns on and off. */
+/** The server for ~/projects, which Settings turns on and off. */
 function ProjectsRow({ overview }: { overview: RemoteControlOverview }) {
   const status = overview.projects;
   const [logOpen, setLogOpen] = useState(false);

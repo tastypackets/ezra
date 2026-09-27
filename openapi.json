@@ -646,7 +646,7 @@
         "tags": [
           "folders"
         ],
-        "summary": "Clone a repository into a new folder in /projects",
+        "summary": "Clone a repository into a new folder in /home/dev/projects",
         "description": "Starts the clone and returns at once.",
         "operationId": "cloneRepository",
         "requestBody": {
@@ -786,7 +786,7 @@
         "tags": [
           "folders"
         ],
-        "summary": "List the folders in /projects",
+        "summary": "List the folders in /home/dev/projects",
         "operationId": "listFolders",
         "responses": {
           "200": {
@@ -827,7 +827,7 @@
           {
             "name": "name",
             "in": "path",
-            "description": "The folder's name in /projects",
+            "description": "The folder's name in /home/dev/projects",
             "required": true,
             "schema": {
               "type": "string"
@@ -883,7 +883,7 @@
           {
             "name": "name",
             "in": "path",
-            "description": "The folder's name in /projects",
+            "description": "The folder's name in /home/dev/projects",
             "required": true,
             "schema": {
               "type": "string"
@@ -959,7 +959,7 @@
           {
             "name": "name",
             "in": "path",
-            "description": "The folder's name in /projects",
+            "description": "The folder's name in /home/dev/projects",
             "required": true,
             "schema": {
               "type": "string"
@@ -1015,7 +1015,7 @@
           {
             "name": "name",
             "in": "path",
-            "description": "The folder's name in /projects",
+            "description": "The folder's name in /home/dev/projects",
             "required": true,
             "schema": {
               "type": "string"
@@ -1068,7 +1068,7 @@
           {
             "name": "name",
             "in": "path",
-            "description": "The folder's name in /projects",
+            "description": "The folder's name in /home/dev/projects",
             "required": true,
             "schema": {
               "type": "string"
@@ -1540,7 +1540,7 @@
         "operationId": "getRemoteControl",
         "responses": {
           "200": {
-            "description": "Claude Code's servers for /projects and its folders, and Codex's server",
+            "description": "Claude Code's servers for /home/dev/projects and its folders, and Codex's server",
             "content": {
               "application/json": {
                 "schema": {
@@ -1876,7 +1876,7 @@
         "tags": [
           "remote-control"
         ],
-        "summary": "Get the end of the /projects server's log",
+        "summary": "Get the end of the /home/dev/projects server's log",
         "description": "Returns up to the last 200 lines of Claude Code's debug log and the server's output.",
         "operationId": "getRemoteControlLog",
         "responses": {
@@ -2127,7 +2127,7 @@
       },
       "CloneRequest": {
         "type": "object",
-        "description": "A repository to clone into a new folder in /projects.",
+        "description": "A repository to clone into a new folder in /home/dev/projects.",
         "required": [
           "repository",
           "name"
@@ -2547,7 +2547,7 @@
       },
       "Folder": {
         "type": "object",
-        "description": "One top-level folder in /projects.",
+        "description": "One top-level folder in /home/dev/projects.",
         "required": [
           "name"
         ],
@@ -2565,7 +2565,7 @@
           },
           "name": {
             "type": "string",
-            "description": "The folder's name in /projects."
+            "description": "The folder's name in /home/dev/projects."
           }
         }
       },
@@ -2986,7 +2986,7 @@
           },
           "folders": {
             "type": "object",
-            "description": "The servers for folders in /projects, by folder name.",
+            "description": "The servers for folders in /home/dev/projects, by folder name.",
             "additionalProperties": {
               "$ref": "#/components/schemas/RemoteControlStatus"
             },
@@ -2996,7 +2996,7 @@
           },
           "projects": {
             "$ref": "#/components/schemas/RemoteControlStatus",
-            "description": "The server for /projects, waiting when it has not started yet."
+            "description": "The server for /home/dev/projects, waiting when it has not started yet."
           }
         }
       },
@@ -3023,7 +3023,7 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "Serve /projects, and the folders chosen, to the Claude app while Claude Code is signed in.",
+            "description": "Serve /home/dev/projects, and the folders chosen, to the Claude app while Claude Code is\nsigned in.",
             "default": true
           },
           "permission_mode": {
@@ -3033,7 +3033,7 @@
           },
           "serve_repositories": {
             "type": "boolean",
-            "description": "Whether repositories that appear in /projects start with their switch on.",
+            "description": "Whether repositories that appear in /home/dev/projects start with their switch on.",
             "default": true
           },
           "spawn": {

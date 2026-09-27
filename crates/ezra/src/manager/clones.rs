@@ -35,7 +35,7 @@ pub enum CloneError {
     Running(String),
 }
 
-/// A repository to clone into a new folder in /projects.
+/// A repository to clone into a new folder in /home/dev/projects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CloneRequest {
     /// A git URL or path, or `owner/repo` for GitHub.
@@ -175,14 +175,14 @@ enum CloneEnd {
 
 #[derive(Debug, thiserror::Error)]
 enum PlaceError {
-    #[error("could not move the clone into /projects: {0}")]
+    #[error("could not move the clone into ~/projects: {0}")]
     Rename(io::Error),
     #[error(transparent)]
     Settings(#[from] SettingsError),
 }
 
 impl AppState {
-    /// Starts cloning into a new folder in /projects and returns at once.
+    /// Starts cloning into a new folder in the projects directory and returns at once.
     pub fn start_clone(&self, request: CloneRequest) -> Result<CloneStatus, CloneError> {
         let repository = request.repository.trim();
         if repository.is_empty() {
@@ -223,7 +223,10 @@ impl AppState {
         }
         match end {
             Ok(()) => {
-                tracing::info!("cloned {url} into /projects/{name}");
+                tracing::info!(
+                    "cloned {url} into {}",
+                    self.projects.folder(&name).display()
+                );
                 self.remote_control.supervision.reconsider();
                 self.events.publish(Topic::Folders);
                 self.clones.forget(&name);
@@ -514,7 +517,7 @@ mod tests {
     #[test]
     fn output_keeps_the_percentage_rising_and_the_last_other_lines() {
         let mut output = CloneOutput::default();
-        assert!(!output.take("Cloning into '/projects/.ezra-clone-app'..."));
+        assert!(!output.take("Cloning into '/home/dev/projects/.ezra-clone-app'..."));
         assert!(output.take("Receiving objects:  50% (6/12)"));
         assert!(!output.take("remote: Compressing objects: 100% (8/8), done."));
         assert_eq!(output.percent, 45);

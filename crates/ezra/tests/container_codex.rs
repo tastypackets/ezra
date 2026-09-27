@@ -53,7 +53,7 @@ impl DockerResource {
         String::from_utf8_lossy(&found.stdout).trim().to_owned()
     }
 
-    /// Runs a Codex command as dev in /projects with Codex's home set, as the manager does.
+    /// Runs a Codex command as dev in /home/dev/projects with Codex's home set, as the manager does.
     fn run_codex(&self, docker_options: &[&str], command: &[&str]) -> Output {
         let codex_home = format!("CODEX_HOME={CODEX_HOME}");
         let mut arguments = vec![
@@ -61,7 +61,7 @@ impl DockerResource {
             "--user",
             "dev",
             "--workdir",
-            "/projects",
+            "/home/dev/projects",
             "--env",
             &codex_home,
         ];

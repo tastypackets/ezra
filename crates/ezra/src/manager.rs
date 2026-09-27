@@ -36,6 +36,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::environment_config::FromEnvironment;
 use agents::TlsVerification;
+pub use folders::PROJECTS_DIRECTORY;
 use processes::OpenFileLimit;
 use remote_control::RemoteControl;
 use settings_file::SettingsFileWatcher;

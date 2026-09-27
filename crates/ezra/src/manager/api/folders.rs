@@ -14,7 +14,7 @@ use crate::manager::remote_control::ClaudeOptions;
     path = "/api/v1/folders",
     operation_id = "listFolders",
     tag = "folders",
-    summary = "List the folders in /projects",
+    summary = "List the folders in /home/dev/projects",
     responses(
         (status = 200, description = "Folders sorted by name", body = Vec<FolderStatus>),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody)
@@ -40,7 +40,7 @@ pub struct ServeBody {
     tag = "folders",
     summary = "Choose whether the Claude app lists a folder",
     description = "Starts or stops the folder's Remote Control server.",
-    params(("name" = String, Path, description = "The folder's name in /projects")),
+    params(("name" = String, Path, description = "The folder's name in /home/dev/projects")),
     request_body = ServeBody,
     responses(
         (status = 204, description = "Saved"),
@@ -67,7 +67,7 @@ pub async fn choose_to_serve(
     tag = "folders",
     summary = "Choose a folder's own Claude Code options",
     description = "Restarts the folder's Remote Control server if it is running.",
-    params(("name" = String, Path, description = "The folder's name in /projects")),
+    params(("name" = String, Path, description = "The folder's name in /home/dev/projects")),
     request_body = ClaudeOptions,
     responses(
         (status = 204, description = "Saved"),
@@ -110,7 +110,7 @@ impl From<FolderChoiceError> for ApiError {
     tag = "folders",
     summary = "Count the work in a folder's repository that no remote has",
     description = "A folder that is not a repository has none.",
-    params(("name" = String, Path, description = "The folder's name in /projects")),
+    params(("name" = String, Path, description = "The folder's name in /home/dev/projects")),
     responses(
         (status = 200, description = "Unsaved work", body = UnsavedWork),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody),
@@ -137,7 +137,7 @@ pub async fn unsaved_work(
     tag = "folders",
     summary = "Delete a folder and everything in it",
     description = "Stops the folder's Remote Control server first.",
-    params(("name" = String, Path, description = "The folder's name in /projects")),
+    params(("name" = String, Path, description = "The folder's name in /home/dev/projects")),
     responses(
         (status = 204, description = "Deleted"),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody),

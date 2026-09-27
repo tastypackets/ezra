@@ -8,6 +8,12 @@ use std::time::{Duration, Instant};
 
 use common::{DockerResource, docker, process_status_field, run_in_image, stderr_of, stdout_of};
 
+const AGENT_DIRECTORIES: [(&str, &str); 3] = [
+    ("config", "/config"),
+    ("projects", "/home/dev/projects"),
+    ("cache", "/cache"),
+];
+
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
 fn runs_as_uid_and_gid_1000() {
@@ -37,10 +43,10 @@ fn environment_describes_the_agent_user() {
 #[ignore = "needs Docker and a built ezra image"]
 fn operator_home_is_respected() {
     let home = stdout_of(&run_in_image(
-        &["--env", "HOME=/projects"],
+        &["--env", "HOME=/work"],
         &["printenv", "HOME"],
     ));
-    assert_eq!(home, "/projects");
+    assert_eq!(home, "/work");
 }
 
 #[test]
@@ -164,25 +170,31 @@ fn read_only_root_filesystem_starts() {
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
-fn fresh_named_volume_at_config_is_writable() {
-    let volume = DockerResource::volume("config");
-    let mount = format!("{}:/config", volume.name);
-    assert!(
-        run_in_image(&["--volume", &mount], &["test", "-w", "/config"])
-            .status
-            .success()
-    );
+fn fresh_named_volumes_belong_to_dev() {
+    for (purpose, directory) in AGENT_DIRECTORIES {
+        let volume = DockerResource::volume(purpose);
+        let mount = format!("{}:{directory}", volume.name);
+        let output = run_in_image(
+            &["--volume", &mount],
+            &["stat", "--format=%u:%g", directory],
+        );
+        assert_eq!(stdout_of(&output), "1000:1000", "{directory}");
+        assert_eq!(stderr_of(&output), "", "{directory}");
+    }
 }
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
-fn root_owned_config_is_reported() {
-    let output = run_in_image(&["--tmpfs", "/config:mode=0755"], &["true"]);
-    assert!(
-        stderr_of(&output).contains("/config is not writable"),
-        "{}",
-        stderr_of(&output)
-    );
+fn root_owned_directories_are_reported() {
+    for (_, directory) in AGENT_DIRECTORIES {
+        let tmpfs = format!("{directory}:mode=0755");
+        let output = run_in_image(&["--tmpfs", &tmpfs], &["true"]);
+        assert!(
+            stderr_of(&output).contains(&format!("{directory} is not writable by uid 1000")),
+            "{}",
+            stderr_of(&output)
+        );
+    }
 }
 
 #[test]

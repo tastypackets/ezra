@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn operator_home_is_kept() {
-        let overrides = dev_account().agent_overrides(Some(OsStr::new("/projects")));
+        let overrides = dev_account().agent_overrides(Some(OsStr::new("/work")));
 
         assert_eq!(value_of(&overrides, "HOME"), None);
     }

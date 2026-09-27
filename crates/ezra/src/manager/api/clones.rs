@@ -12,7 +12,7 @@ impl From<CloneError> for ApiError {
             CloneError::InvalidName => Self::BadRequest(
                 "the folder name must not be empty, start with a dot or contain a slash",
             ),
-            CloneError::Exists(name) => Self::Conflict(format!("/projects/{name} already exists")),
+            CloneError::Exists(name) => Self::Conflict(format!("~/projects/{name} already exists")),
             CloneError::Running(name) => Self::Conflict(format!("{name} is already being cloned")),
         }
     }
@@ -38,7 +38,7 @@ pub async fn list(_: Session, State(state): State<AppState>) -> Json<Vec<CloneSt
     path = "/api/v1/clones",
     operation_id = "cloneRepository",
     tag = "folders",
-    summary = "Clone a repository into a new folder in /projects",
+    summary = "Clone a repository into a new folder in /home/dev/projects",
     description = "Starts the clone and returns at once.",
     request_body = CloneRequest,
     responses(

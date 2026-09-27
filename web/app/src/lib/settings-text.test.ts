@@ -163,7 +163,7 @@ describe("TOML 1.1, the way Codex reads config.toml", () => {
       "  \n\n",
       '\uFEFFmodel = "gpt"\r\n[features]\r\n\tx = true\r\n',
       'a = {\n  b = 1,\n  c = 2,\n}\ns = "\\e\\x41"\nt = 07:32\nd = 1979-05-27T07:32Z\n',
-      '[projects."/projects/a"]\ntrust_level = "trusted"',
+      '[projects."/home/dev/projects/a"]\ntrust_level = "trusted"',
       "a = 9223372036854775807\nb = -9223372036854775808\nc = 9007199254740992\n",
       "a = 0x7FFFFFFFFFFFFFFF\n",
     ]) {

@@ -676,7 +676,7 @@ mod tests {
             "  \n\n",
             "\u{feff}model = \"gpt\"\r\n[features]\r\n\tx = true\r\n",
             "a = {\n  b = 1,\n  c = 2,\n}\ns = \"\\e\\x41\"\nt = 07:32\nd = 1979-05-27T07:32Z\n",
-            "[projects.\"/projects/a\"]\ntrust_level = \"trusted\"",
+            "[projects.\"/home/dev/projects/a\"]\ntrust_level = \"trusted\"",
             "t = 07:32:60\n",
             "d = 1979-05-27T23:59:60Z\n",
             "t = 07:32:60.5\nd = 1979-12-31T23:59:60+01:00\n",
@@ -1056,7 +1056,10 @@ mod tests {
         .expect("the file is replaced");
         noticed(&mut watcher, "Claude's own save").await;
 
-        files.write("config/codex/.tmpAbC123", b"[projects.\"/projects/a\"]\n");
+        files.write(
+            "config/codex/.tmpAbC123",
+            b"[projects.\"/home/dev/projects/a\"]\n",
+        );
         fs::rename(
             files.path("config/codex/.tmpAbC123"),
             files.path("config/codex/config.toml"),

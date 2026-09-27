@@ -17,8 +17,7 @@ const WATCHED_CHANGE_TIMEOUT: Duration = Duration::from_secs(2);
 const REREAD_TIMEOUT: Duration = Duration::from_secs(12);
 const SETTINGS_FILE_CHANGED: &str = r#""topic":"settings_file""#;
 const CLAUDE_TEXT: &str = "{\r\n  \"model\": \"opus\"\r\n}\r\n";
-const CODEX_TEXT: &str =
-    "\u{feff}# ezra\r\n[projects]\r\n\"/projects/a\" = {\r\n  trust_level = \"trusted\",\r\n}\r\n";
+const CODEX_TEXT: &str = "\u{feff}# ezra\r\n[projects]\r\n\"/home/dev/projects/a\" = {\r\n  trust_level = \"trusted\",\r\n}\r\n";
 
 impl Manager {
     /// The agent's settings file as the manager reads it now.
@@ -139,7 +138,7 @@ fn files_mounted_on_their_own_are_saved_in_place() {
         problem,
         json!({ "error": "duplicate key", "line": 2, "column": 1 })
     );
-    let text = "\u{feff}model =\t\"gpt-5\"\r\nescape = \"\\e\\x41\"\r\nstart = 07:32\r\n[projects]\r\n\"/projects/a\" = {\r\n  trust_level = \"trusted\",\r\n}";
+    let text = "\u{feff}model =\t\"gpt-5\"\r\nescape = \"\\e\\x41\"\r\nstart = 07:32\r\n[projects]\r\n\"/home/dev/projects/a\" = {\r\n  trust_level = \"trusted\",\r\n}";
     let (status, saved) = manager.save("codex", text, &codex["version"]);
     assert_eq!(status, "200", "{saved}");
     assert_eq!(
@@ -197,7 +196,7 @@ fn files_in_mounted_directories_are_replaced_and_keep_their_mode() {
         "Claude's save through the link",
         WATCHED_CHANGE_TIMEOUT,
     );
-    let by_codex = "[projects.\"/projects/a\"]\ntrust_level = \"trusted\"\n";
+    let by_codex = "[projects.\"/home/dev/projects/a\"]\ntrust_level = \"trusted\"\n";
     let codex_staging = codex_directory.join(".tmpAbC123");
     codex_staging.write_with_mode(by_codex.as_bytes(), 0o600);
     fs::rename(&codex_staging, &codex_config).expect("Codex's save lands");

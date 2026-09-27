@@ -8,6 +8,7 @@ export const PASSWORD = "correct horse";
 const CLAUDE_VERSIONS = "/home/dev/.local/share/claude/versions";
 const CLAUDE_COMMAND = "/home/dev/.local/bin/claude";
 export const CLAUDE_CREDENTIALS = "/config/claude/.credentials.json";
+export const PROJECTS_DIRECTORY = "/home/dev/projects";
 const CODEX_VERSIONS = "/home/dev/.local/share/codex";
 const CODEX_COMMAND = "/home/dev/.local/bin/codex";
 
@@ -19,7 +20,7 @@ function container(): string {
   return name;
 }
 
-/** Runs a command as the container's user, such as making a folder in /projects, and returns its output. */
+/** Runs a command as the container's user, such as making a folder in ~/projects, and returns its output. */
 export function inContainer(...command: string[]): string {
   return execFileSync("docker", ["exec", "-u", "dev", container(), ...command], {
     encoding: "utf8",

@@ -11,7 +11,7 @@ services:
       - "8443:8443"
     volumes:
       - config:/config
-      - projects:/projects
+      - projects:/home/dev/projects
       - cache:/cache
     stop_grace_period: 60s
 

@@ -60,11 +60,11 @@ test.describe("with Claude Code installed", () => {
     await expect(
       claude.getByRole("switch", { name: "Serve to the Claude app" }),
     ).toHaveAccessibleDescription(
-      "Serves /projects, and the folders you choose, while Claude Code is signed in.",
+      "Serves ~/projects, and the folders you choose, while Claude Code is signed in.",
     );
     await expect(
       claude.getByRole("switch", { name: "Serve new repositories" }),
-    ).toHaveAccessibleDescription("Repositories added to /projects start with their switch on.");
+    ).toHaveAccessibleDescription("Repositories added to ~/projects start with their switch on.");
     await expect(
       claude.getByRole("radiogroup", { name: "New sessions in repositories work in" }),
     ).toHaveAccessibleDescription("A folder's Claude Code options can choose otherwise.");

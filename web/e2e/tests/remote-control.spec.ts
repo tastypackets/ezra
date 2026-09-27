@@ -6,6 +6,7 @@ import {
   inContainer,
   installFakeClaude,
   nudgeRemoteControl,
+  PROJECTS_DIRECTORY,
   removeFakeClaude,
   writeInContainer,
 } from "./manager.ts";
@@ -31,7 +32,7 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
   const folder = `rejected-${testInfo.retry}`;
   installFakeClaude("2.1.0-e2e", REJECTED);
   await nudgeRemoteControl(request);
-  inContainer("git", "init", "--quiet", `/projects/${folder}`);
+  inContainer("git", "init", "--quiet", `${PROJECTS_DIRECTORY}/${folder}`);
   try {
     await page.goto("./");
     const projects = projectsRow(page);
@@ -39,9 +40,9 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
       projects.getByText("Claude Code's sign-in does not work for Remote Control."),
     ).toBeVisible();
 
-    await projects.getByRole("button", { name: "More /projects actions" }).click();
+    await projects.getByRole("button", { name: "More ~/projects actions" }).click();
     await page.getByRole("menuitem", { name: "Show log" }).click();
-    const log = page.getByRole("dialog", { name: "/projects log" });
+    const log = page.getByRole("dialog", { name: "~/projects log" });
     await expect(log).toContainText("/config/ezra/remote-control/projects/server.log");
     await expect(log.getByLabel("Log lines")).toContainText(
       "[OUTPUT] Error: You must be logged in to use Remote Control.",
@@ -70,7 +71,7 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
     await projects.getByRole("button", { name: "Sign in again" }).click();
     await expect(page.getByRole("heading", { name: "Sign in to Claude Code" })).toBeVisible();
   } finally {
-    inContainer("rm", "-rf", `/projects/${folder}`);
+    inContainer("rm", "-rf", `${PROJECTS_DIRECTORY}/${folder}`);
   }
 });
 
@@ -148,7 +149,7 @@ test("Claude Code's parts are hidden until it is installed", async ({
   request,
 }, testInfo) => {
   const folder = `parts-${testInfo.retry}`;
-  inContainer("mkdir", `/projects/${folder}`);
+  inContainer("mkdir", `${PROJECTS_DIRECTORY}/${folder}`);
   try {
     await page.goto("./settings");
     const settings = page.locator("section[data-slot=card]", {
@@ -201,7 +202,7 @@ test("Claude Code's parts are hidden until it is installed", async ({
     await page.getByRole("link", { name: "Settings", exact: true }).click();
     await expect(serveAll).toBeVisible();
   } finally {
-    inContainer("rmdir", `/projects/${folder}`);
+    inContainer("rmdir", `${PROJECTS_DIRECTORY}/${folder}`);
   }
 });
 
@@ -215,7 +216,7 @@ test.describe("on a phone", () => {
     const folder = `problem-${testInfo.retry}`;
     installFakeClaude("2.1.0-e2e", REJECTED);
     await nudgeRemoteControl(request);
-    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    inContainer("git", "init", "--quiet", `${PROJECTS_DIRECTORY}/${folder}`);
     try {
       await page.goto("./");
       const row = page.getByRole("listitem").filter({ hasText: folder });
@@ -229,7 +230,7 @@ test.describe("on a phone", () => {
           .evaluate((group) => group.getBoundingClientRect().bottom),
       );
     } finally {
-      inContainer("rm", "-rf", `/projects/${folder}`);
+      inContainer("rm", "-rf", `${PROJECTS_DIRECTORY}/${folder}`);
     }
   });
 });

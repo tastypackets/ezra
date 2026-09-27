@@ -170,7 +170,7 @@ fn repositories_ignore_claude_worktrees() {
         "-u",
         "dev",
         "--workdir",
-        "/projects",
+        "/home/dev/projects",
         &container.name,
         "sh",
         "-ec",
@@ -187,7 +187,7 @@ fn repositories_ignore_claude_worktrees() {
 fn agents_find_the_project_list_in_projects() {
     let container = DockerResource::start_container("manager-folders", &[], &[]);
     container.wait_for_manager(8443);
-    docker(&["exec", &container.name, "mkdir", "/projects/app"]);
+    docker(&["exec", &container.name, "mkdir", "/home/dev/projects/app"]);
 
     let deadline = Instant::now() + Duration::from_secs(45);
     loop {
@@ -195,7 +195,7 @@ fn agents_find_the_project_list_in_projects() {
             "exec",
             &container.name,
             "cat",
-            "/projects/AGENTS.md",
+            "/home/dev/projects/AGENTS.md",
         ]));
         if agents_file.contains("Folders:\n- app\n") {
             assert!(

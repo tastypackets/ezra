@@ -220,7 +220,7 @@ if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null; then
 fi
 groupadd --gid 1000 dev
 useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev
-install --directory --owner=dev --group=dev /config /projects /cache
+install --directory --owner=dev --group=dev /config /home/dev/projects /cache
 install --directory /etc/ezra/setup.d
 EOF
 
@@ -240,7 +240,7 @@ EOF
 ENV MISE_DATA_DIR=/config/mise \
     MISE_CONFIG_DIR=/config/mise \
     MISE_STATE_DIR=/config/mise/state \
-    MISE_TRUSTED_CONFIG_PATHS=/projects \
+    MISE_TRUSTED_CONFIG_PATHS=/home/dev/projects \
     CLAUDE_CONFIG_DIR=/config/claude \
     CODEX_HOME=/config/codex \
     GH_CONFIG_DIR=/config/gh \

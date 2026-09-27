@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { inContainer, installFakeClaude, removeFakeClaude } from "./manager.ts";
+import { inContainer, installFakeClaude, PROJECTS_DIRECTORY, removeFakeClaude } from "./manager.ts";
 
 test.describe("with Claude Code installed", () => {
   test.beforeEach(() => installFakeClaude("2.1.0-e2e"));
@@ -8,7 +8,7 @@ test.describe("with Claude Code installed", () => {
 
   test("a repository keeps its own Claude Code options", async ({ page }, testInfo) => {
     const folder = `options-${testInfo.retry}`;
-    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    inContainer("git", "init", "--quiet", `${PROJECTS_DIRECTORY}/${folder}`);
     try {
       await page.goto("./");
       const row = page.getByRole("listitem").filter({ hasText: folder });
@@ -54,13 +54,13 @@ test.describe("with Claude Code installed", () => {
         }),
       );
     } finally {
-      inContainer("rm", "-rf", `/projects/${folder}`);
+      inContainer("rm", "-rf", `${PROJECTS_DIRECTORY}/${folder}`);
     }
   });
 
   test("a plain folder's sessions work in the folder", async ({ page }, testInfo) => {
     const folder = `plain-${testInfo.retry}`;
-    inContainer("mkdir", `/projects/${folder}`);
+    inContainer("mkdir", `${PROJECTS_DIRECTORY}/${folder}`);
     try {
       await page.goto("./");
       const row = page.getByRole("listitem").filter({ hasText: folder });
@@ -77,14 +77,14 @@ test.describe("with Claude Code installed", () => {
       });
       expect(refused.status()).toBe(409);
     } finally {
-      inContainer("rmdir", `/projects/${folder}`);
+      inContainer("rmdir", `${PROJECTS_DIRECTORY}/${folder}`);
     }
   });
 });
 
 test("a repository's worktrees are counted and git ignores them", async ({ page }, testInfo) => {
   const folder = `worktrees-${testInfo.retry}`;
-  const repository = `/projects/${folder}`;
+  const repository = `${PROJECTS_DIRECTORY}/${folder}`;
   inContainer("git", "init", "--quiet", repository);
   inContainer(
     "git",

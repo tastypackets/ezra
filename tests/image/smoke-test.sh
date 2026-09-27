@@ -133,7 +133,7 @@ check_succeeds "pnpx is not on PATH" bash -c '! command -v pnpx'
 check_succeeds "install.sh is not on PATH" bash -c '! command -v install.sh'
 check_succeeds "git-lfs filters registered system-wide" git config --system --get filter.lfs.process
 
-project_directory="$(mktemp --directory --tmpdir=/projects)"
+project_directory="$(mktemp --directory --tmpdir=/home/dev/projects)"
 printf '[env]\nEXAMPLE = "1"\n' >"${project_directory}/mise.toml"
 check_succeeds "tools work inside a project with its own mise.toml" \
     bash -c "cd '${project_directory}' && node --version && pnpm --version && jq --version && git lfs version"
@@ -203,9 +203,12 @@ check_equals "/etc/codex/config.toml turns off update checks and the daemon, and
 echo "Agent user:"
 check_equals "runs as dev" "1000:1000:dev" "$(id --user):$(id --group):$(id --user --name)"
 check_succeeds "the ubuntu user is gone" bash -c '! getent passwd ubuntu'
+check_equals "dev owns /home/dev/projects" "dev:dev" "$(stat --format=%U:%G /home/dev/projects)"
+check_succeeds "projects is a real folder in HOME" bash -c '[[ -d "${HOME}/projects" && ! -L "${HOME}/projects" ]]'
+check_succeeds "there is no /projects" bash -c '[[ ! -e /projects && ! -L /projects ]]'
 tests_directory="$(dirname "${BASH_SOURCE[0]}")"
-files_owned_by_agent_elsewhere="$(find / -xdev \( -path /proc -o -path /tmp -o -path /home/dev -o -path /config -o -path /projects -o -path /cache -o -path "${tests_directory}" \) -prune -o -uid 1000 -print 2>/dev/null || true)"
+files_owned_by_agent_elsewhere="$(find / -xdev \( -path /proc -o -path /tmp -o -path /home/dev -o -path /config -o -path /cache -o -path "${tests_directory}" \) -prune -o -uid 1000 -print 2>/dev/null || true)"
 check_succeeds "dev cannot add setup scripts" bash -c '! touch /etc/ezra/setup.d/probe'
-check_equals "nothing outside /home/dev, /config, /projects and /cache is owned by uid 1000" "" "${files_owned_by_agent_elsewhere}"
+check_equals "nothing outside /home/dev, /config and /cache is owned by uid 1000" "" "${files_owned_by_agent_elsewhere}"
 
 finish

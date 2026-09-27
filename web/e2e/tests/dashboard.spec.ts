@@ -4,6 +4,7 @@ import {
   inContainer,
   installFakeClaude,
   nudgeRemoteControl,
+  PROJECTS_DIRECTORY,
   recordApiCalls,
   removeFakeClaude,
 } from "./manager.ts";
@@ -23,7 +24,9 @@ test("the dashboard arrives with its data, then fetches only what changes", asyn
     await expect(row.getByRole("button", { name: "Install" })).toHaveAccessibleDescription(agent);
   }
   await expect(
-    page.getByText("No projects yet. Clone a repository, or ask an agent started in /projects to."),
+    page.getByText(
+      "No projects yet. Clone a repository, or ask an agent started in ~/projects to.",
+    ),
   ).toBeVisible();
   await listening;
 
@@ -31,13 +34,13 @@ test("the dashboard arrives with its data, then fetches only what changes", asyn
   const refetched = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/v1/folders",
   );
-  inContainer("mkdir", `/projects/${folder}`);
+  inContainer("mkdir", `${PROJECTS_DIRECTORY}/${folder}`);
   try {
     await refetched;
     await expect(page.getByRole("listitem").filter({ hasText: folder })).toBeVisible();
     expect(apiCalls).toEqual(["GET /api/v1/events", "GET /api/v1/folders"]);
   } finally {
-    inContainer("rmdir", `/projects/${folder}`);
+    inContainer("rmdir", `${PROJECTS_DIRECTORY}/${folder}`);
   }
 });
 
@@ -106,7 +109,7 @@ test.describe("with Claude Code installed", () => {
 
   test("a folder's switch and server follow changes made elsewhere", async ({ page }, testInfo) => {
     const folder = `notes-${testInfo.retry}`;
-    inContainer("mkdir", `/projects/${folder}`);
+    inContainer("mkdir", `${PROJECTS_DIRECTORY}/${folder}`);
     try {
       await page.goto("./");
       const row = page.getByRole("listitem").filter({ hasText: folder });
@@ -122,7 +125,7 @@ test.describe("with Claude Code installed", () => {
       await expect(serve).not.toBeChecked();
       await expect(row.getByText("Waiting")).toBeHidden();
     } finally {
-      inContainer("rmdir", `/projects/${folder}`);
+      inContainer("rmdir", `${PROJECTS_DIRECTORY}/${folder}`);
     }
   });
 
@@ -135,7 +138,7 @@ test.describe("with Claude Code installed", () => {
       overview.folders[folder] = { state: "running", restarts: 0, url };
       await route.fulfill({ json: overview });
     });
-    inContainer("mkdir", `/projects/${folder}`);
+    inContainer("mkdir", `${PROJECTS_DIRECTORY}/${folder}`);
     try {
       await page.goto("./");
       const row = page.getByRole("listitem").filter({ hasText: folder });
@@ -147,7 +150,7 @@ test.describe("with Claude Code installed", () => {
       await serve.click();
       await expect(serve).not.toBeChecked();
     } finally {
-      inContainer("rmdir", `/projects/${folder}`);
+      inContainer("rmdir", `${PROJECTS_DIRECTORY}/${folder}`);
     }
   });
 
@@ -155,7 +158,7 @@ test.describe("with Claude Code installed", () => {
     const folder = `repository-${testInfo.retry}`;
     await page.goto("./");
     await expect(page.getByRole("heading", { name: "Folders" })).toBeVisible();
-    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    inContainer("git", "init", "--quiet", `${PROJECTS_DIRECTORY}/${folder}`);
     try {
       const row = page.getByRole("listitem").filter({ hasText: folder });
       await expect(
@@ -163,7 +166,7 @@ test.describe("with Claude Code installed", () => {
       ).toBeChecked();
       await expect(row.getByText("Waiting")).toBeVisible();
     } finally {
-      inContainer("rm", "-rf", `/projects/${folder}`);
+      inContainer("rm", "-rf", `${PROJECTS_DIRECTORY}/${folder}`);
     }
   });
 
@@ -231,7 +234,7 @@ test.describe("in a narrow window", () => {
       "-c",
       'git init --quiet --initial-branch=feature/a-long-branch-name-for-testing "$1" && git -C "$1" remote add origin "$2"',
       "sh",
-      `/projects/${folder}`,
+      `${PROJECTS_DIRECTORY}/${folder}`,
       repository,
     );
     try {
@@ -255,7 +258,7 @@ test.describe("in a narrow window", () => {
           .evaluate((element) => element.scrollWidth > element.clientWidth),
       ).toBe(true);
     } finally {
-      inContainer("rm", "-rf", `/projects/${folder}`);
+      inContainer("rm", "-rf", `${PROJECTS_DIRECTORY}/${folder}`);
       await removeFakeClaude(request);
     }
   });
@@ -283,7 +286,7 @@ test.describe("on a phone", () => {
       "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600",
     );
     await nudgeRemoteControl(request);
-    inContainer("git", "init", "--quiet", `/projects/${folder}`);
+    inContainer("git", "init", "--quiet", `${PROJECTS_DIRECTORY}/${folder}`);
     try {
       await page.goto("./");
       const row = page.getByRole("listitem").filter({ hasText: folder });
@@ -300,7 +303,7 @@ test.describe("on a phone", () => {
       );
       expect(overflow).toBe(0);
     } finally {
-      inContainer("rm", "-rf", `/projects/${folder}`);
+      inContainer("rm", "-rf", `${PROJECTS_DIRECTORY}/${folder}`);
       await removeFakeClaude(request);
     }
   });

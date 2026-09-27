@@ -33,7 +33,7 @@ export const REMOTE_CONTROL_DESCRIPTIONS = {
   update_waiting: (agent: string, version: string, time: string) =>
     `Restarts on ${agent} ${version} by ${time}.`,
   update_waiting_short: (version: string) => `Waits to restart on Claude Code ${version}.`,
-  projects_log_title: "/projects log",
+  projects_log_title: "~/projects log",
   log_title: (name: string) => `${name} log`,
   log_description: (path: string) => `The last lines of ${path}.`,
   log_empty: "Nothing logged yet.",

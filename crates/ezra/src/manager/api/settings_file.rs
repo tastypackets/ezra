@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(opened.text, "model = \"gpt\"\n");
         write(
             &dotfiles.join(".tmpX4b9Qz"),
-            b"model = \"gpt\"\n\n[projects.\"/projects/app\"]\ntrust_level = \"trusted\"\n",
+            b"model = \"gpt\"\n\n[projects.\"/home/dev/projects/app\"]\ntrust_level = \"trusted\"\n",
         );
         fs::rename(dotfiles.join(".tmpX4b9Qz"), dotfiles.join("config.toml"))
             .expect("Codex's save is renamed into place");

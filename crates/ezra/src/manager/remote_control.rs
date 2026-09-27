@@ -77,7 +77,8 @@ const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 15] = [
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct RemoteControlSettings {
-    /// Serve /projects, and the folders chosen, to the Claude app while Claude Code is signed in.
+    /// Serve /home/dev/projects, and the folders chosen, to the Claude app while Claude Code is
+    /// signed in.
     #[schema(required = true)]
     pub enabled: bool,
     /// The permission mode for sessions started from the Claude app, such as `auto`.
@@ -87,7 +88,7 @@ pub struct RemoteControlSettings {
     /// default.
     #[schema(required = true, minimum = 1)]
     pub capacity: Option<u32>,
-    /// Whether repositories that appear in /projects start with their switch on.
+    /// Whether repositories that appear in /home/dev/projects start with their switch on.
     #[schema(required = true)]
     pub serve_repositories: bool,
     /// Where new sessions in repositories work, unless a folder chooses.
@@ -335,9 +336,9 @@ pub struct ServerUsage {
 pub struct RemoteControlOverview {
     /// The device the Claude app lists the servers under, the container's hostname.
     pub device: Option<String>,
-    /// The server for /projects, waiting when it has not started yet.
+    /// The server for /home/dev/projects, waiting when it has not started yet.
     pub projects: RemoteControlStatus,
-    /// The servers for folders in /projects, by folder name.
+    /// The servers for folders in /home/dev/projects, by folder name.
     pub folders: BTreeMap<String, RemoteControlStatus>,
     /// The server that serves this box to the ChatGPT app.
     pub codex: CodexRemoteStatus,
@@ -412,7 +413,7 @@ impl RemoteControl {
             .update(|servers| change(servers.entry(directory.to_path_buf()).or_default()));
     }
 
-    /// Removes the logs of folders that are not in /projects any more.
+    /// Removes the logs of folders that are not in the projects directory any more.
     fn remove_logs_of_gone_folders(&self, present: &[Folder]) -> io::Result<()> {
         for log in self.logs.join("folders").entries_or_empty()? {
             let gone = log
@@ -430,7 +431,7 @@ impl RemoteControl {
     }
 }
 
-/// Which directory a server serves: all of /projects, or one folder in it.
+/// Which directory a server serves: the whole projects directory, or one folder in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Served {
     Projects,
@@ -584,7 +585,7 @@ impl Drop for ConfigLock {
 }
 
 impl AppState {
-    /// Runs the /projects server, and one server for each folder chosen, until shutdown.
+    /// Runs the projects directory's server, and one server for each folder chosen, until shutdown.
     pub async fn supervise_remote_control(self) {
         let mut signals = self
             .remote_control
@@ -1553,7 +1554,7 @@ mod tests {
         )
         .expect("config is written");
         ClaudeGlobalConfig(config.clone())
-            .accept_remote_control_in(Path::new("/projects"))
+            .accept_remote_control_in(Path::new("/home/dev/projects"))
             .await
             .expect("prompts are accepted");
         let written: Value =
@@ -1562,7 +1563,7 @@ mod tests {
         assert_eq!(written["hasCompletedOnboarding"], true);
         assert_eq!(written["remoteDialogSeen"], true);
         assert_eq!(
-            written["projects"]["/projects"]["hasTrustDialogAccepted"],
+            written["projects"]["/home/dev/projects"]["hasTrustDialogAccepted"],
             true
         );
         assert_eq!(
@@ -1583,10 +1584,10 @@ mod tests {
     async fn accepted_config_is_not_rewritten() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = directory.path().join(".claude.json");
-        let accepted = r#"{"hasCompletedOnboarding":true,"remoteDialogSeen":true,"projects":{"/projects":{"hasTrustDialogAccepted":true}}}"#;
+        let accepted = r#"{"hasCompletedOnboarding":true,"remoteDialogSeen":true,"projects":{"/home/dev/projects":{"hasTrustDialogAccepted":true}}}"#;
         fs::write(&config, accepted).expect("config is written");
         ClaudeGlobalConfig(config.clone())
-            .accept_remote_control_in(Path::new("/projects"))
+            .accept_remote_control_in(Path::new("/home/dev/projects"))
             .await
             .expect("prompts are accepted");
         assert_eq!(
@@ -1609,7 +1610,7 @@ mod tests {
             }
         });
         ClaudeGlobalConfig(config.clone())
-            .accept_remote_control_in(Path::new("/projects"))
+            .accept_remote_control_in(Path::new("/home/dev/projects"))
             .await
             .expect("prompts are accepted");
         assert!(
@@ -1641,7 +1642,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = directory.path().join(".claude.json");
         ClaudeGlobalConfig(config.clone())
-            .accept_remote_control_in(Path::new("/projects"))
+            .accept_remote_control_in(Path::new("/home/dev/projects"))
             .await
             .expect("prompts are accepted");
         assert!(config.exists());
@@ -1649,7 +1650,7 @@ mod tests {
         fs::write(&config, "{not json").expect("config is written");
         assert!(
             ClaudeGlobalConfig(config.clone())
-                .accept_remote_control_in(Path::new("/projects"))
+                .accept_remote_control_in(Path::new("/home/dev/projects"))
                 .await
                 .is_err()
         );
@@ -1833,7 +1834,7 @@ mod tests {
                 "Opus with 1M context is not available for your account. Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m",
                 None,
             ),
-            ("Error: Workspace not trusted: /projects.", None),
+            ("Error: Workspace not trusted: /home/dev/projects.", None),
         ] {
             assert_eq!(
                 ServerProblem::in_output(&["Starting", line]),

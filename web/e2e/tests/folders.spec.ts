@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { inContainer, installFakeClaude, removeFakeClaude } from "./manager.ts";
+import { inContainer, installFakeClaude, PROJECTS_DIRECTORY, removeFakeClaude } from "./manager.ts";
 
 const COMMIT = ["-c", "user.name=E2E", "-c", "user.email=e2e@example.com", "commit", "--quiet"];
 
@@ -46,21 +46,21 @@ test("a repository is cloned from its URL and deleted after confirming", async (
     await row.getByRole("button", { name: `More ${folder} actions` }).click();
     await page.getByRole("menuitem", { name: "Delete" }).click();
     const confirm = page.getByRole("alertdialog", { name: `Delete ${folder}?` });
-    await expect(confirm).toContainText(`Deletes /projects/${folder} and everything in it.`);
+    await expect(confirm).toContainText(`Deletes ~/projects/${folder} and everything in it.`);
     await expect(confirm.getByText("Checking for unsaved work")).toBeHidden();
     await expect(confirm.getByText("Only in this folder:")).toBeHidden();
     await confirm.getByRole("button", { name: "Delete" }).click();
     await expect(page.getByText(`Deleted ${folder}.`)).toBeVisible();
     await expect(row).toBeHidden();
   } finally {
-    inContainer("rm", "-rf", source, `/projects/${folder}`);
+    inContainer("rm", "-rf", source, `${PROJECTS_DIRECTORY}/${folder}`);
     await removeFakeClaude(request);
   }
 });
 
 test("deleting a repository names the work only it has", async ({ page }) => {
   const folder = `unsaved-${randomUUID().slice(0, 8)}`;
-  const path = `/projects/${folder}`;
+  const path = `${PROJECTS_DIRECTORY}/${folder}`;
   makeRepository(path);
   inContainer("touch", `${path}/notes.txt`);
   try {

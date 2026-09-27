@@ -7,7 +7,7 @@ use common::{DockerResource, SetupDirectory, run_in_image, stdout_of};
 #[test]
 #[ignore = "needs Docker, network access and a built ezra image"]
 fn project_pin_overrides_the_image_version() {
-    let pin_jq_then_run_it = "mkdir /projects/app && cd /projects/app \
+    let pin_jq_then_run_it = "mkdir /home/dev/projects/app && cd /home/dev/projects/app \
         && printf '[tools]\\njq = \"1.7.1\"\\n' > mise.toml \
         && jq --version";
     let output = run_in_image(&[], &["bash", "-c", pin_jq_then_run_it]);

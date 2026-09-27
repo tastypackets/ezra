@@ -30,7 +30,7 @@ struct InitialData {
     session: SessionStatus,
     /// Present only when the request is signed in.
     agents: Option<Vec<AgentStatus>>,
-    /// Present only when the request is signed in and /projects can be read.
+    /// Present only when the request is signed in and the projects directory can be read.
     folders: Option<Vec<FolderStatus>>,
     /// Present only when the request is signed in.
     clones: Option<Vec<CloneStatus>>,

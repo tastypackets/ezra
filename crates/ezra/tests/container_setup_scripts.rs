@@ -132,7 +132,7 @@ fn root_never_runs_what_the_agent_puts_on_its_path() {
             "--env",
             "EZRA_APT_PACKAGES=bash",
             "--workdir",
-            "/projects",
+            "/home/dev/projects",
         ],
         &["sh", "-c", plant],
     );

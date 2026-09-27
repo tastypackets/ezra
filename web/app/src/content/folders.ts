@@ -2,12 +2,12 @@ import type { SpawnMode } from "@ezra/client";
 
 export const FOLDERS_DESCRIPTIONS = {
   title: "Folders",
-  description: "An agent started in /projects can also clone and set up repositories.",
+  description: "An agent started in ~/projects can also clone and set up repositories.",
   claude_switches:
     "The Claude app lists each folder switched on here, so sessions can start right in it.",
-  empty: "No projects yet. Clone a repository, or ask an agent started in /projects to.",
+  empty: "No projects yet. Clone a repository, or ask an agent started in ~/projects to.",
   projects: "All projects",
-  projects_path: "/projects",
+  projects_path: "~/projects",
   not_git: "Not a git repository",
   serve_label: (folder: string) => `Serve ${folder} in the Claude app`,
   worktrees: (count: number) => (count === 1 ? "1 worktree" : `${count} worktrees`),
@@ -31,7 +31,7 @@ export const CLONE_DESCRIPTIONS = {
   repository_required: "Enter a repository.",
   show_repositories: "Show your GitHub repositories",
   folder: "Folder",
-  folder_hint: "The new folder in /projects.",
+  folder_hint: "The new folder in ~/projects.",
   folder_required: "Enter a folder name.",
   folder_invalid: "Use a name without slashes that does not start with a dot.",
   folder_exists: "A folder with this name exists.",
@@ -74,7 +74,7 @@ export const CLAUDE_OPTIONS_DESCRIPTIONS = {
 
 export const DELETE_FOLDER_DESCRIPTIONS = {
   title: (folder: string) => `Delete ${folder}?`,
-  description: (folder: string) => `Deletes /projects/${folder} and everything in it.`,
+  description: (folder: string) => `Deletes ~/projects/${folder} and everything in it.`,
   server: "Stops its Remote Control server, leaving its sessions offline in the Claude app.",
   checking: "Checking for unsaved work",
   check_failed: "Could not check for unsaved work",

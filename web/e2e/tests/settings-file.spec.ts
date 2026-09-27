@@ -687,7 +687,7 @@ test.describe("with Codex installed", () => {
     await page.keyboard.press("Control+End");
     await page.keyboard.type(" # yes");
     await page.keyboard.press("Enter");
-    await page.keyboard.type('[projects."/projects/a"]');
+    await page.keyboard.type('[projects."/home/dev/projects/a"]');
     await page.keyboard.press("Control+Home");
     await page.keyboard.press("End");
     await page.keyboard.press("Enter");
@@ -696,12 +696,12 @@ test.describe("with Codex installed", () => {
     await expect(page.getByText(`${CODEX_FILE} saved.`).last()).toBeVisible();
     expect(bytesOf(CODEX_FILE)).toEqual(
       Buffer.from(
-        `${opened.replace("# mine\r\n", "# mine\r\n# top\r\n")} # yes\r\n[projects."/projects/a"]`,
+        `${opened.replace("# mine\r\n", "# mine\r\n# top\r\n")} # yes\r\n[projects."/home/dev/projects/a"]`,
       ),
     );
     expect(modeOf(CODEX_FILE)).toBe("644");
 
-    writeLikeCodex(CODEX_FILE, '[projects."/projects/a"]\ntrust_level = "trusted"\n');
+    writeLikeCodex(CODEX_FILE, '[projects."/home/dev/projects/a"]\ntrust_level = "trusted"\n');
     await expect(editor).toContainText('trust_level = "trusted"', { timeout: 10_000 });
   });
 
@@ -800,7 +800,7 @@ test.describe("with Codex installed", () => {
     const { box, editor, save, revert } = await openSettings(page, CODEX_TITLE);
     await editor.click();
     await page.keyboard.type('model = "mine"');
-    writeLikeCodex(CODEX_FILE, '[projects."/projects/a"]\ntrust_level = "trusted"\n');
+    writeLikeCodex(CODEX_FILE, '[projects."/home/dev/projects/a"]\ntrust_level = "trusted"\n');
 
     const refused = savedFile(page);
     await save.click();

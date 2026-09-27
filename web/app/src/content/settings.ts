@@ -7,9 +7,9 @@ export const SETTINGS_DESCRIPTIONS = {
   remote_control: "Remote Control",
   remote_control_enabled: "Serve to the Claude app",
   remote_control_enabled_hint:
-    "Serves /projects, and the folders you choose, while Claude Code is signed in.",
+    "Serves ~/projects, and the folders you choose, while Claude Code is signed in.",
   serve_repositories: "Serve new repositories",
-  serve_repositories_hint: "Repositories added to /projects start with their switch on.",
+  serve_repositories_hint: "Repositories added to ~/projects start with their switch on.",
   spawn: "New sessions in repositories work in",
   spawn_hint: "A folder's Claude Code options can choose otherwise.",
   permission_mode: "Permission mode",

@@ -43,7 +43,7 @@ impl From<PairingError> for ApiError {
     tag = "remote-control",
     summary = "Get every Remote Control server's state",
     responses(
-        (status = 200, description = "Claude Code's servers for /projects and its folders, and Codex's server", body = RemoteControlOverview),
+        (status = 200, description = "Claude Code's servers for /home/dev/projects and its folders, and Codex's server", body = RemoteControlOverview),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody)
     )
 )]
@@ -73,7 +73,7 @@ pub struct ServerLogTail {
     path = "/api/v1/remote-control/log",
     operation_id = "getRemoteControlLog",
     tag = "remote-control",
-    summary = "Get the end of the /projects server's log",
+    summary = "Get the end of the /home/dev/projects server's log",
     description = "Returns up to the last 200 lines of Claude Code's debug log and the server's output.",
     responses(
         (status = 200, description = "The last lines", body = ServerLogTail),
@@ -96,7 +96,7 @@ pub async fn projects_log(
     tag = "folders",
     summary = "Get the end of a folder server's log",
     description = "Returns up to the last 200 lines of Claude Code's debug log and the server's output.",
-    params(("name" = String, Path, description = "The folder's name in /projects")),
+    params(("name" = String, Path, description = "The folder's name in /home/dev/projects")),
     responses(
         (status = 200, description = "The last lines", body = ServerLogTail),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody),

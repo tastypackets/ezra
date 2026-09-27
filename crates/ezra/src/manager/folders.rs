@@ -24,7 +24,7 @@ pub enum FolderChoiceError {
     NoSuchFolder,
     #[error("worktree sessions are offered only in git repositories")]
     NotARepository,
-    #[error("could not list the folders in /projects: {0}")]
+    #[error("could not list the folders in ~/projects: {0}")]
     Scan(io::Error),
     #[error(transparent)]
     Settings(#[from] SettingsError),
@@ -36,13 +36,13 @@ pub enum FolderDeleteError {
     NoSuchFolder,
     #[error("the folder's Remote Control server did not stop")]
     ServerStillRunning,
-    #[error("could not delete /projects/{name}: {source}")]
+    #[error("could not delete ~/projects/{name}: {source}")]
     Remove { name: String, source: io::Error },
     #[error(transparent)]
     Settings(#[from] SettingsError),
 }
 
-pub const PROJECTS_DIRECTORY: &str = "/projects";
+pub const PROJECTS_DIRECTORY: &str = "/home/dev/projects";
 const SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const RESCAN_INTERVAL: Duration = Duration::from_secs(30);
 const RESCAN_INTERVAL_WHILE_WATCHING: Duration = Duration::from_secs(300);
@@ -52,10 +52,10 @@ const BLOCK_START: &str = "<!-- ezra:folders:start -->";
 const BLOCK_END: &str = "<!-- ezra:folders:end -->";
 const UNBORN_REFTABLE_BRANCH: &str = ".invalid";
 
-/// One top-level folder in /projects.
+/// One top-level folder in /home/dev/projects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Folder {
-    /// The folder's name in /projects.
+    /// The folder's name in /home/dev/projects.
     pub name: String,
     /// Present when the folder is a git repository.
     pub git: Option<GitDetails>,
@@ -106,7 +106,7 @@ pub struct FolderStatus {
     pub claude: ClaudeOptions,
 }
 
-/// The directory whose folders agents work in, usually /projects.
+/// The directory whose folders agents work in, usually /home/dev/projects.
 #[derive(Debug, Clone)]
 pub struct ProjectsDirectory(pub PathBuf);
 
@@ -193,7 +193,7 @@ impl FolderNameExt for str {
     }
 }
 
-/// The part of `/projects/AGENTS.md` the manager owns.
+/// The part of `/home/dev/projects/AGENTS.md` the manager owns.
 struct FoldersBlock<'block> {
     folders: &'block [Folder],
     github_account: Option<&'block str>,
@@ -203,12 +203,13 @@ impl FoldersBlock<'_> {
     fn to_markdown(&self) -> String {
         let mut markdown = format!(
             "{BLOCK_START}\n\
-             This file applies only when the working directory is /projects. Inside a project \
-             folder, ignore it.\n\
-             /projects holds the projects in this box, one per folder.\n\
+             This file applies only when the working directory is {PROJECTS_DIRECTORY}. Inside a \
+             project folder, ignore it.\n\
+             {PROJECTS_DIRECTORY} holds the projects in this box, one per folder.\n\
              mise is set up. Install missing tools with `mise use -g <tool>`, which keeps them on \
              /config when the container is recreated.\n\
-             Tools installed with apt or into /home/dev are lost when the container is recreated.\n"
+             Tools installed with apt, or into /home/dev outside {PROJECTS_DIRECTORY}, are lost when \
+             the container is recreated.\n"
         );
         match self.github_account {
             Some("") => markdown.push_str("gh is signed in to GitHub.\n"),
@@ -423,7 +424,7 @@ impl ConfigValueExt for str {
 }
 
 impl AppState {
-    /// The folders in /projects, none when it does not exist.
+    /// The folders in the projects directory, none when it does not exist.
     pub async fn folders(&self) -> io::Result<Vec<Folder>> {
         let projects = self.projects.clone();
         match tokio::task::spawn_blocking(move || projects.folders()).await {
@@ -564,8 +565,8 @@ impl AppState {
         Ok(changed)
     }
 
-    /// Rescans /projects on every change and every few minutes, then updates `AGENTS.md`, the folder
-    /// switches and the servers.
+    /// Rescans the projects directory on every change and every few minutes, then updates
+    /// `AGENTS.md`, the folder switches and the servers.
     pub async fn describe_folders_regularly(self) {
         let mut watcher = FolderWatcher::start(&self.projects.0);
         let mut rescan = interval(watcher.rescan_interval());
@@ -585,7 +586,10 @@ impl AppState {
                 if let Err(error) =
                     projects.describe_folders_for_agents(&folders, account.as_deref())
                 {
-                    tracing::warn!("could not write /projects/AGENTS.md: {error}");
+                    tracing::warn!(
+                        "could not write AGENTS.md in {}: {error}",
+                        projects.0.display()
+                    );
                 }
                 Ok::<_, io::Error>(folders)
             })
@@ -607,7 +611,10 @@ impl AppState {
                     }
                 }
                 Ok(Err(error)) => {
-                    tracing::warn!("could not list the folders in /projects: {error}");
+                    tracing::warn!(
+                        "could not list the folders in {}: {error}",
+                        self.projects.0.display()
+                    );
                 }
                 Err(error) => tracing::warn!("folder scan stopped: {error}"),
             }
@@ -615,8 +622,8 @@ impl AppState {
     }
 }
 
-/// Watches /projects, each folder in it, and each repository's `.git`. Without inotify, rescans
-/// run every 30 s instead.
+/// Watches the projects directory, each folder in it, and each repository's `.git`. Without
+/// inotify, rescans run every 30 s instead.
 struct FolderWatcher(SettledWatcher);
 
 impl FolderWatcher {
@@ -888,6 +895,10 @@ mod tests {
         assert!(!first.contains("gh is signed in"), "{first}");
         assert!(
             first.contains("Install missing tools with `mise use -g <tool>`"),
+            "{first}"
+        );
+        assert!(
+            first.contains("applies only when the working directory is /home/dev/projects."),
             "{first}"
         );
         assert!(!second.contains("- app"), "{second}");

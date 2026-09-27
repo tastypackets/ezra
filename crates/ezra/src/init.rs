@@ -19,6 +19,7 @@ use nix::errno::Errno;
 use nix::unistd::{AccessFlags, Uid, User, access};
 
 use crate::environment_config::FromEnvironment;
+use crate::manager::PROJECTS_DIRECTORY;
 use apt_packages::{APT_PACKAGES_VARIABLE, RequestedPackages};
 use config::InitConfig;
 use environment::{AccountDetails, EnvironmentOverride, TemporaryHome};
@@ -32,7 +33,7 @@ use stdio::StandardStreams;
 use sudo::{SUDO_POLICY_VARIABLE, SudoPolicy};
 
 const AGENT_USER_NAME: &str = "dev";
-const DIRECTORIES_AGENT_MUST_WRITE: [&str; 3] = ["/config", "/projects", "/cache"];
+const DIRECTORIES_AGENT_MUST_WRITE: [&str; 3] = ["/config", PROJECTS_DIRECTORY, "/cache"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {

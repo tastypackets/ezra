@@ -166,7 +166,7 @@ impl FakeControlServer {
             "createdAt": 1_790_000_000,
             "updatedAt": 1_790_000_000,
             "status": status,
-            "cwd": "/projects",
+            "cwd": "/home/dev/projects",
             "cliVersion": "0.157.1",
             "projectId": null,
             "source": "appServer",
