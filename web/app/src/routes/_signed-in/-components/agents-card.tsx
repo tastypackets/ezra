@@ -1,8 +1,9 @@
 import type { AgentStatus, RemoteControlOverview } from "@ezra/client";
+import { getCodexRemoteControlLogOptions } from "@ezra/client/react-query.gen";
 import { cn } from "cn";
 import { EllipsisIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
-import { useCallback, useId, useRef } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import type { BadgeVariant } from "@/components/ui/badge";
@@ -24,18 +25,26 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
+import { REMOTE_CONTROL_DESCRIPTIONS } from "@/content/remote-control";
 import {
   useAgentActionError,
   useAgentActionPending,
   useAgentActions,
 } from "@/hooks/use-agent-actions";
+import { useCodexActions } from "@/hooks/use-codex-actions";
 import { useNow } from "@/hooks/use-now";
 import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
+import type { AgentStep } from "@/lib/agent-steps";
+import { codexRemoteView } from "@/lib/codex-remote";
+import type { CodexFix, RemoteView } from "@/lib/codex-remote";
 import { handOffFocus } from "@/lib/focus";
 import { remoteControlSummary } from "@/lib/remote-control";
 import { signInEnd } from "@/lib/sign-in";
 import type { SignInEnd } from "@/lib/sign-in";
 import { downloadPercent, formatDateTime } from "@/lib/utils";
+
+import { CodexSignInDialog } from "./codex-sign-in-dialog";
+import { ServerLogDialog } from "./server-log-dialog";
 
 /** How often the sign-in warning is checked against the clock. */
 const CLOCK_MS = 60_000;
@@ -49,15 +58,17 @@ interface AgentProps {
   status: AgentStatus;
   /** Set once the sign-in end is close enough to warn about. */
   end: SignInEnd | undefined;
-  /** Remote Control in a few words, for the agents that have it. */
-  remote: string;
+  /** The agent's Remote cell. */
+  remote: RemoteView;
 }
 
 /** Every agent with its install and sign-in actions: a table on wide screens, a list on phones. */
 export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
   const now = useNow(CLOCK_MS);
-  const remote = (status: AgentStatus) =>
-    status.agent === "claude" ? remoteControlSummary(remoteControl) : "—";
+  const remote = (status: AgentStatus): RemoteView =>
+    status.agent === "claude"
+      ? { label: remoteControlSummary(remoteControl) }
+      : codexRemoteView(remoteControl.codex, status.installed_version);
   return (
     <Card>
       <CardHeader>
@@ -127,10 +138,18 @@ function AgentRow({ status, end, remote }: AgentProps) {
         {facts.account}
         <SignInEndNote end={end} />
       </TableCell>
-      <TableCell className="tabular-nums">{remote}</TableCell>
+      <TableCell className="tabular-nums">
+        <Remote view={remote} />
+      </TableCell>
       <TableCell className="text-right tabular-nums">{facts.savedData}</TableCell>
       <TableCell>
-        <AgentActions status={status} nameId={nameId} ending={Boolean(end)} className="items-end" />
+        <AgentActions
+          status={status}
+          nameId={nameId}
+          ending={Boolean(end)}
+          fix={remote.fix}
+          className="items-end"
+        />
       </TableCell>
     </TableRow>
   );
@@ -159,13 +178,21 @@ function AgentListItem({ status, end, remote }: AgentProps) {
         <dt className="text-muted-foreground">
           <RemoteLabel />
         </dt>
-        <dd className="tabular-nums">{remote}</dd>
+        <dd className="tabular-nums">
+          <Remote view={remote} />
+        </dd>
         <dt className="text-muted-foreground">
           <SavedDataLabel />
         </dt>
         <dd className="tabular-nums">{facts.savedData}</dd>
       </dl>
-      <AgentActions status={status} nameId={nameId} ending={Boolean(end)} className="items-start" />
+      <AgentActions
+        status={status}
+        nameId={nameId}
+        ending={Boolean(end)}
+        fix={remote.fix}
+        className="items-start"
+      />
     </li>
   );
 }
@@ -179,6 +206,24 @@ function SignInEndNote({ end }: { end: SignInEnd | undefined }) {
     <span className={cn("block text-xs", end.ended ? "text-destructive" : "text-warning")}>
       {end.ended ? AGENTS_DESCRIPTIONS.sign_in_ended(when) : AGENTS_DESCRIPTIONS.sign_in_ends(when)}
     </span>
+  );
+}
+
+function Remote({ view }: { view: RemoteView }) {
+  return (
+    <>
+      {view.label}
+      {view.note ? (
+        <span
+          className={cn(
+            "block max-w-64 text-xs whitespace-normal",
+            view.note.tone === "destructive" ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
+          {view.note.text}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -199,18 +244,22 @@ function AgentActions({
   status,
   nameId,
   ending,
+  fix,
   className,
 }: {
   status: AgentStatus;
   nameId: string;
   ending: boolean;
+  fix: CodexFix | undefined;
   className: string;
 }) {
   const { install, startSignIn, signOut } = useAgentActions(status.agent);
+  const codex = useCodexActions();
+  const [logOpen, setLogOpen] = useState(false);
   const installPending = useAgentActionPending(status.agent, "install");
   const signInPending = useAgentActionPending(status.agent, "start_sign_in");
   const signOutPending = useAgentActionPending(status.agent, "sign_out");
-  const failure = useAgentActionError(status.agent);
+  const retryPending = useAgentActionPending(status.agent, "retry_remote_control");
   const menuTrigger = useRef<HTMLButtonElement>(null);
   const keepFocusInRow = useCallback(
     (button: HTMLButtonElement | null) => handOffFocus(button, () => menuTrigger.current),
@@ -219,10 +268,41 @@ function AgentActions({
   const name = AGENT_NAMES[status.agent];
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
-  const step = nextAgentStep(status, installing, ending);
+  const step = nextAgentStep(status, installing, ending, fix);
+  const failure = useAgentActionError(
+    status.agent,
+    step === "try_again" ? undefined : "retry_remote_control",
+  );
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
   const path = { agent: status.agent };
   const installNow = () => install.mutate({ path });
+  const signIn = () =>
+    status.agent === "codex" ? codex.signIn(status.logged_in) : startSignIn.mutate({ path });
+  const steps: Record<AgentStep, { label: string; run: () => void; pending: boolean }> = {
+    install: {
+      label:
+        installing && percent !== undefined
+          ? AGENTS_DESCRIPTIONS.installing(percent)
+          : installLabel(status),
+      run: installNow,
+      pending: installing,
+    },
+    sign_in: {
+      label: status.logged_in ? AGENTS_DESCRIPTIONS.sign_in_again : AGENTS_DESCRIPTIONS.sign_in,
+      run: signIn,
+      pending: signInPending,
+    },
+    sign_in_with_chatgpt: {
+      label: REMOTE_CONTROL_DESCRIPTIONS.sign_in_with_chatgpt,
+      run: signIn,
+      pending: signInPending,
+    },
+    try_again: {
+      label: REMOTE_CONTROL_DESCRIPTIONS.try_again,
+      run: () => codex.retry.mutate({}),
+      pending: retryPending,
+    },
+  };
   const menuInstall = menuOffersInstall(status, step);
   return (
     <div className={cn("flex flex-col gap-1", className)}>
@@ -231,17 +311,11 @@ function AgentActions({
           <Button
             ref={keepFocusInRow}
             size="sm"
-            loading={step === "install" ? installing : signInPending}
+            loading={steps[step].pending}
             aria-describedby={nameId}
-            onClick={step === "install" ? installNow : () => startSignIn.mutate({ path })}
+            onClick={steps[step].run}
           >
-            {step === "sign_in"
-              ? status.logged_in
-                ? AGENTS_DESCRIPTIONS.sign_in_again
-                : AGENTS_DESCRIPTIONS.sign_in
-              : installing && percent !== undefined
-                ? AGENTS_DESCRIPTIONS.installing(percent)
-                : installLabel(status)}
+            {steps[step].label}
           </Button>
         ) : null}
         {installed ? (
@@ -270,6 +344,11 @@ function AgentActions({
                   {AGENTS_DESCRIPTIONS.sign_out}
                 </DropdownMenuItem>
               ) : null}
+              {status.agent === "codex" ? (
+                <DropdownMenuItem onClick={() => setLogOpen(true)}>
+                  {REMOTE_CONTROL_DESCRIPTIONS.show_log}
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
@@ -278,6 +357,21 @@ function AgentActions({
         <p role="alert" className="max-w-sm whitespace-normal text-destructive">
           {failure}
         </p>
+      ) : null}
+      {status.agent === "codex" ? (
+        <>
+          <CodexSignInDialog
+            open={codex.confirmingSignIn}
+            onOpenChange={codex.setConfirmingSignIn}
+            onConfirm={codex.confirmSignIn}
+          />
+          <ServerLogDialog
+            query={getCodexRemoteControlLogOptions()}
+            title={REMOTE_CONTROL_DESCRIPTIONS.log_title(AGENT_NAMES.codex)}
+            open={logOpen}
+            onOpenChange={setLogOpen}
+          />
+        </>
       ) : null}
     </div>
   );
