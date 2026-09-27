@@ -51,12 +51,14 @@ jobs:
       - id: diff
         name: Changes that can reach the image
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [[ -z ${BASE} ]] || git diff --name-only "${BASE}...HEAD" | grep --quiet --invert-match '\.md$'; then
-            echo "image=true" >> "$GITHUB_OUTPUT"
-          else
+          if [[ -n ${BASE} ]] && git diff --quiet "${BASE}...HEAD" -- \
+            crates Cargo.toml Cargo.lock web openapi.json Dockerfile .dockerignore image mise.toml \
+            .github/workflows/ci.yml .github/scripts; then
             echo "image=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=true" >> "$GITHUB_OUTPUT"
           fi
 
   image:
