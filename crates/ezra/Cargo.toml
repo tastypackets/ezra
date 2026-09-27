@@ -16,6 +16,7 @@ config = { version = "0.15", default-features = false, features = ["toml"] }
 flate2 = "1.1.10"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 getrandom = "0.4"
+httparse = "1.10.1"
 nix = { version = "0.31.3", features = ["user", "fs", "process", "hostname", "signal", "resource"] }
 notify = "8.2.0"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
