@@ -558,10 +558,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
           return route.fulfill({ json: { pairing: latest } });
         }
         posts += 1;
-        if (posts > 1) {
-          await held;
-          latest = pairingCode("E2E-0002");
-        }
+        await held;
+        latest = pairingCode("E2E-0002");
         return route.fulfill({ json: latest });
       },
     );
@@ -572,6 +570,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await chooseCodexAction(page, row, "Pair a phone");
     const dialog = page.getByRole("dialog", { name: "Pair a phone" });
     await expect(dialog.getByText("E2E-0001", { exact: true })).toBeVisible();
+    expect(posts).toBe(0);
     latest = { ...latest, state: "expired" };
     await dialog.getByRole("button", { name: "New code" }).click();
 
@@ -585,7 +584,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
 
     await chooseCodexAction(page, row, "Pair a phone");
     await expect(dialog.getByText("E2E-0002", { exact: true })).toBeVisible();
-    expect(posts).toBe(2);
+    expect(posts).toBe(1);
   });
 
   test("a failed check offers a new code, and reopening after a used-up code asks for one", async ({
