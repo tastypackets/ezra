@@ -61,7 +61,7 @@ function Unavailable({ remote }: { remote: RemoteView }) {
 }
 
 /** The code with what the phone needs, or the expired or failed code with a way to a new one. */
-function PairingCode({ flow: { start, pairing, newCode } }: PairPhoneDialogProps) {
+function PairingCode({ flow: { start, pairing } }: PairPhoneDialogProps) {
   const { data: codex } = useQuery({
     ...remoteControlQueryOptions,
     select: (overview) => overview.codex,
@@ -109,7 +109,7 @@ function PairingCode({ flow: { start, pairing, newCode } }: PairPhoneDialogProps
           ref={keepFocusInDialog}
           className="self-start"
           loading={start.isPending}
-          onClick={newCode}
+          onClick={() => start.mutate({})}
         >
           {PAIRING_DESCRIPTIONS.new_code}
         </Button>

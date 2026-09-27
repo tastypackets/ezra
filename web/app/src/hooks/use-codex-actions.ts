@@ -75,7 +75,6 @@ export function useCodexPairing() {
   const pairing = data?.pairing ?? undefined;
   const claimed =
     unavailable === undefined && (start.isIdle || start.isSuccess) && pairing?.state === "claimed";
-  const newCode = () => start.mutate({}, { onSettled: () => setOpen(true) });
   /** Opens the dialog on the open code or a new one, or on `remote` when Codex cannot pair. */
   const pairPhone = async (remote: RemoteView, pairable: boolean) => {
     start.reset();
@@ -90,7 +89,7 @@ export function useCodexPairing() {
       watch(latest.pairing);
       setOpen(true);
     } else {
-      newCode();
+      start.mutate({}, { onSettled: () => setOpen(true) });
     }
   };
   return {
@@ -100,7 +99,6 @@ export function useCodexPairing() {
     pairing,
     start,
     pairPhone,
-    newCode,
   };
 }
 
