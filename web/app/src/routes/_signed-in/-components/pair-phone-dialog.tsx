@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDownIcon, ExternalLinkIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import { CodeToEnter, Step, Waiting } from "@/components/sign-in-steps";
+import { CodeToEnter, Waiting } from "@/components/sign-in-steps";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -84,15 +84,15 @@ function PairingCode({ flow: { start, pairing } }: { flow: CodexPairingFlow }) {
   const expired = failure === undefined && pairing?.state === "expired";
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {usable?.manual_code ? (
-        <ol>
-          <Step number={1} title={PAIRING_DESCRIPTIONS.pair_steps}>
-            <CodeToEnter code={usable.manual_code} />
-          </Step>
-        </ol>
-      ) : null}
       {usable ? (
         <>
+          <PairingQr pairing={usable} />
+          {usable.manual_code ? (
+            <div className="flex flex-col gap-2">
+              <p className="font-medium">{PAIRING_DESCRIPTIONS.enter_code}</p>
+              <CodeToEnter code={usable.manual_code} />
+            </div>
+          ) : null}
           <Countdown expiresAt={usable.expires_at} />
           <Waiting label={PAIRING_DESCRIPTIONS.waiting_for_phone} />
         </>
@@ -125,7 +125,6 @@ function PairingCode({ flow: { start, pairing } }: { flow: CodexPairingFlow }) {
           {codex?.folder_picker === "blocked" ? (
             <p className="text-muted-foreground">{PAIRING_DESCRIPTIONS.picker_blocked}</p>
           ) : null}
-          <PairingQr pairing={usable} />
         </>
       ) : null}
     </div>
@@ -141,9 +140,9 @@ function Countdown({ expiresAt }: { expiresAt: string }) {
   );
 }
 
-/** The QR code behind a toggle next to a manual code, else on its own. */
+/** The QR code, with a toggle that hides it when there is a manual code to type instead. */
 function PairingQr({ pairing }: { pairing: CodexPairing }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   if (!pairing.manual_code) {
     return (
       <div className="flex flex-col items-start gap-3">

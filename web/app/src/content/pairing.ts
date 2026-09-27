@@ -2,7 +2,7 @@ export const PAIRING_DESCRIPTIONS = {
   pair: "Pair a phone",
   pair_unavailable: "Pairing needs Codex connected to ChatGPT.",
   getting_code: "Getting a pairing code",
-  pair_steps: "Enter this code in the ChatGPT app",
+  enter_code: "Or enter this code in the ChatGPT app",
   listed_as: (name: string) => `Name: ${name}`,
   expires_in: (time: string) => `Expires in ${time}`,
   expired: "This code expired.",

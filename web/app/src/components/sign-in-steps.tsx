@@ -67,7 +67,7 @@ export function Waiting({ label }: { label: string }) {
 }
 
 /** One numbered step: its title, then what to do. */
-export function Step({
+function Step({
   number,
   title,
   children,

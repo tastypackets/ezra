@@ -431,33 +431,74 @@ test.describe("with Codex signed in with ChatGPT", () => {
 
     await chooseCodexAction(page, row, "Pair a phone");
     const dialog = page.getByRole("dialog", { name: "Pair a phone" });
-    await expect(dialog.getByText("Enter this code in the ChatGPT app")).toBeVisible();
-    await expect(dialog.getByText("E2E-4821", { exact: true })).toBeVisible();
-    await expect(dialog.getByRole("button", { name: "Copy" })).toBeFocused();
-    await expect(dialog.getByText(/^Expires in (10:00|9:\d\d)$/)).toBeVisible();
-    await expect(dialog.getByText("Waiting for the phone")).toBeVisible();
-    await expect(dialog.getByText("Name: ezra-e2e")).toBeVisible();
-    await expect(dialog.getByText(PICKER_BLOCKED)).toBeHidden();
-    await expect(dialog.getByRole("img", { name: "QR code for pairing" })).toBeHidden();
-
-    await dialog.getByRole("button", { name: "Show QR code" }).click();
     const qr = dialog.getByRole("img", { name: "QR code for pairing" });
     await expect(qr).toBeVisible();
     await expect(qr).toHaveAttribute("src", new RegExp(`^${PAIRING_QR}\\?v=`));
-    await expect(dialog.getByRole("button", { name: "Hide QR code" })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    const hideQr = dialog.getByRole("button", { name: "Hide QR code" });
+    await expect(hideQr).toBeFocused();
+    await expect(hideQr).toHaveAttribute("aria-expanded", "true");
     await expect(dialog.getByRole("link", { name: "Open in the ChatGPT app" })).toHaveAttribute(
       "href",
       "https://chatgpt.com/codex/pair?pairing_code=E2E-4821",
     );
+    await expect(dialog.getByText("Or enter this code in the ChatGPT app")).toBeVisible();
+    const code = dialog.getByText("E2E-4821", { exact: true });
+    await expect(code).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Copy" })).toBeVisible();
+    expect((await code.boundingBox())?.y).toBeGreaterThan((await qr.boundingBox())?.y ?? Infinity);
+    await expect(dialog.getByText(/^Expires in (10:00|9:\d\d)$/)).toBeVisible();
+    await expect(dialog.getByText("Waiting for the phone")).toBeVisible();
+    await expect(dialog.getByText("Name: ezra-e2e")).toBeVisible();
+    await expect(dialog.getByText(PICKER_BLOCKED)).toBeHidden();
 
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toBeHidden();
     await chooseCodexAction(page, row, "Pair a phone");
     await expect(dialog.getByText("E2E-4821", { exact: true })).toBeVisible();
     expect(pairing.posts).toBe(1);
+  });
+
+  test("the QR code hides and shows again while the code stays, and shows on each opening", async ({
+    page,
+    request,
+  }) => {
+    await stubPairing(page, () => pairingCode("E2E-4821"));
+    await page.goto("./");
+    const row = codexRow(page);
+    await stubCodexStatus(page, request, () => CONNECTED);
+    await expect(remoteCell(row)).toContainText("Connected");
+    await chooseCodexAction(page, row, "Pair a phone");
+    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    const qr = dialog.getByRole("img", { name: "QR code for pairing" });
+    const code = dialog.getByText("E2E-4821", { exact: true });
+    const hideQr = dialog.getByRole("button", { name: "Hide QR code" });
+    const showQr = dialog.getByRole("button", { name: "Show QR code" });
+    await expect(qr).toBeVisible();
+    await expect(hideQr).toBeFocused();
+
+    await page.keyboard.press("Enter");
+    await expect(qr).toBeHidden();
+    await expect(dialog.getByRole("link", { name: "Open in the ChatGPT app" })).toBeHidden();
+    await expect(showQr).toBeFocused();
+    await expect(showQr).toHaveAttribute("aria-expanded", "false");
+    await expect(code).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Copy" })).toBeVisible();
+
+    await showQr.click();
+    await expect(qr).toBeVisible();
+    await expect(dialog.getByRole("link", { name: "Open in the ChatGPT app" })).toBeVisible();
+    await expect(hideQr).toBeFocused();
+    await expect(hideQr).toHaveAttribute("aria-expanded", "true");
+    await expect(code).toBeVisible();
+
+    await hideQr.click();
+    await expect(qr).toBeHidden();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
+    await chooseCodexAction(page, row, "Pair a phone");
+    await expect(qr).toBeVisible();
+    await expect(hideQr).toBeFocused();
+    await expect(code).toBeVisible();
   });
 
   test("a phone using the code closes the dialog with one toast", async ({ page, request }) => {
@@ -497,7 +538,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(dialog).toBeHidden();
   });
 
-  test("a code with no manual code shows its QR code at once", async ({ page, request }) => {
+  test("a code with no manual code shows its QR code with no toggle", async ({ page, request }) => {
     await stubPairing(page, () => ({ ...pairingCode("E2E-QR"), manual_code: null }));
     await page.goto("./");
     const row = codexRow(page);
@@ -510,8 +551,9 @@ test.describe("with Codex signed in with ChatGPT", () => {
       "href",
       "https://chatgpt.com/codex/pair?pairing_code=E2E-QR",
     );
-    await expect(dialog.getByRole("button", { name: "Show QR code" })).toBeHidden();
+    await expect(dialog.getByRole("button", { name: /QR code$/ })).toHaveCount(0);
     await expect(dialog.getByRole("button", { name: "Copy" })).toBeHidden();
+    await expect(dialog.getByText("Or enter this code in the ChatGPT app")).toBeHidden();
     await expect(dialog.getByText(/^Expires in (10:00|9:\d\d)$/)).toBeVisible();
     await expect(dialog.getByText("Waiting for the phone")).toBeVisible();
   });
@@ -526,7 +568,6 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await chooseCodexAction(page, row, "Pair a phone");
     const dialog = page.getByRole("dialog", { name: "Pair a phone" });
     await expect(dialog.getByText("E2E-0001", { exact: true })).toBeVisible();
-    await dialog.getByRole("button", { name: "Show QR code" }).click();
     const qr = dialog.getByRole("img", { name: "QR code for pairing" });
     await expect(qr).toBeVisible();
     const firstQr = await qr.getAttribute("src");
@@ -536,17 +577,17 @@ test.describe("with Codex signed in with ChatGPT", () => {
       dialog.getByRole("status").filter({ hasText: "This code expired." }),
     ).toBeVisible();
     await expect(dialog.getByText("E2E-0001", { exact: true })).toBeHidden();
+    await expect(qr).toBeHidden();
     code = "E2E-0002";
     await dialog.getByRole("button", { name: "New code" }).click();
     await expect(dialog.getByText("E2E-0002", { exact: true })).toBeVisible();
-    await expect(dialog.getByRole("button", { name: "Copy" })).toBeFocused();
+    await expect(dialog.getByRole("button", { name: "Hide QR code" })).toBeFocused();
     await expect(dialog.getByText("Waiting for the phone")).toBeVisible();
     await expect(
       dialog.getByRole("status").filter({ hasText: "Waiting for the phone" }),
     ).toHaveCount(0);
     expect(pairing.posts).toBe(2);
 
-    await dialog.getByRole("button", { name: "Show QR code" }).click();
     await expect(qr).toBeVisible();
     expect(firstQr).toMatch(new RegExp(`^${PAIRING_QR}\\?v=`));
     expect(await qr.getAttribute("src")).not.toBe(firstQr);
@@ -776,11 +817,13 @@ test.describe("with Codex signed in with ChatGPT", () => {
 
       await chooseCodexAction(page, codex, "Pair a phone");
       const pair = page.getByRole("dialog", { name: "Pair a phone" });
-      await pair.getByRole("button", { name: "Show QR code" }).click();
       const openInApp = pair.getByRole("link", { name: "Open in the ChatGPT app" });
       await openInApp.scrollIntoViewIfNeeded();
       await expect(openInApp).toBeInViewport({ ratio: 1 });
       await expect(pair.getByRole("img", { name: "QR code for pairing" })).toBeVisible();
+      const copy = pair.getByRole("button", { name: "Copy" });
+      await copy.scrollIntoViewIfNeeded();
+      await expect(copy).toBeInViewport({ ratio: 1 });
       expect(await pair.evaluate((dialog) => dialog.scrollWidth - dialog.clientWidth)).toBe(0);
       expect(await pageOverflow(page)).toBe(0);
       await pair.getByRole("button", { name: "Close" }).click();
