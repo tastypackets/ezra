@@ -182,7 +182,10 @@ function SettingsFileEditor({
           <Button
             variant="outline"
             disabled={!dirty || save.isPending}
-            onClick={() => load(file, true)}
+            onClick={() => {
+              save.reset();
+              load(file, true);
+            }}
           >
             {SETTINGS_FILE_DESCRIPTIONS.revert}
           </Button>

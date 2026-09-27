@@ -682,5 +682,7 @@ test.describe("with Codex installed", () => {
     await revert.click();
     await expect(editor).toContainText('trust_level = "trusted"');
     await expect(editor).not.toContainText("mine");
+    await expect(box.getByText(CHANGED(CODEX_FILE))).toHaveCount(0);
+    await expect(box.getByText(/changed since it was opened/)).toHaveCount(0);
   });
 });
