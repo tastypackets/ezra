@@ -126,12 +126,6 @@ export const FIND_PROBLEM: Record<SettingsFileFormat, (doc: Text) => TextProblem
   toml: tomlProblem,
 };
 
-/** Whether a problem found in the browser blocks Save, only where its check is the agent's own parser. */
-export const BROWSER_CHECK_BLOCKS_SAVE: Record<SettingsFileFormat, boolean> = {
-  json: true,
-  toml: false,
-};
-
 /** `problem` with a one-based line and a column in characters, as the server reports it. */
 export function parseProblemAt(doc: Text, problem: TextProblem): ParseProblem {
   const line = doc.lineAt(problem.at);

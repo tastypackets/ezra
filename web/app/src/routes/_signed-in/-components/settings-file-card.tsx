@@ -1,4 +1,10 @@
-import type { Agent, GetSettingsFileError, ParseProblem, SettingsFileText } from "@ezra/client";
+import type {
+  Agent,
+  GetSettingsFileError,
+  ParseProblem,
+  SettingsFileFormat,
+  SettingsFileText,
+} from "@ezra/client";
 import { updateSettingsFileMutation } from "@ezra/client/react-query.gen";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useId, useRef, useState } from "react";
@@ -18,11 +24,16 @@ import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { APP_DESCRIPTIONS } from "@/content/app";
 import { SETTINGS_FILE_DESCRIPTIONS, SETTINGS_FILES } from "@/content/settings-file";
-import { BROWSER_CHECK_BLOCKS_SAVE } from "@/lib/settings-text";
 import { capitalized, errorMessage } from "@/lib/utils";
 import { settingsFileQueryOptions } from "@/queries/settings-file-queries";
 
 const CodeEditor = lazy(() => import("@/components/code-editor"));
+
+/** Whether a problem found in the browser blocks Save, only where its check is the agent's own parser. */
+const BROWSER_CHECK_BLOCKS_SAVE: Record<SettingsFileFormat, boolean> = {
+  json: true,
+  toml: false,
+};
 
 /** An agent's own settings file as text, saved only when it parses and nothing changed it meanwhile. */
 export function SettingsFileCard({ agent }: { agent: Agent }) {
