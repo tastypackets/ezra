@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use super::apt_packages::RequestedPackages;
+use super::empty_mounts::EmptyMountOwnership;
 use super::sudo::SudoPolicy;
 use crate::environment_config::FromEnvironment;
 
@@ -13,6 +14,8 @@ pub struct InitConfig {
     #[serde(rename = "sudo")]
     pub sudo_policy: SudoPolicy,
     pub apt_packages: RequestedPackages,
+    #[serde(rename = "chown_empty_mounts")]
+    pub empty_mount_ownership: EmptyMountOwnership,
 }
 
 impl FromEnvironment for InitConfig {}
@@ -49,6 +52,21 @@ mod tests {
     fn apt_packages_are_split_into_arguments() {
         let requested = config(&[("EZRA_APT_PACKAGES", "hello, jq=1.7")]).expect("packages load");
         assert_eq!(requested.apt_packages.names(), ["hello", "jq=1.7"]);
+    }
+
+    #[test]
+    fn empty_mount_ownership_is_on_or_off() {
+        assert_eq!(
+            config(&[]).expect("defaults load").empty_mount_ownership,
+            EmptyMountOwnership::On
+        );
+        let off = config(&[("EZRA_CHOWN_EMPTY_MOUNTS", "off")]).expect("off loads");
+        assert_eq!(off.empty_mount_ownership, EmptyMountOwnership::Off);
+        let error = config(&[("EZRA_CHOWN_EMPTY_MOUNTS", "false")]).expect_err("value is rejected");
+        assert!(
+            error.to_string().contains("`chown_empty_mounts`"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -214,16 +214,99 @@ fn fresh_named_volumes_belong_to_dev() {
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
-fn root_owned_directories_are_reported() {
+fn empty_root_owned_mounts_are_handed_to_dev() {
     for (_, directory) in AGENT_DIRECTORIES {
         let tmpfs = format!("{directory}:mode=0755");
-        let output = run_in_image(&["--tmpfs", &tmpfs], &["true"]);
+        let output = run_in_image(&["--tmpfs", &tmpfs], &["stat", "--format=%u:%g", directory]);
+        assert_eq!(stdout_of(&output), "1000:1000", "{directory}");
+        let stderr = stderr_of(&output);
+        assert!(
+            stderr.contains(&format!(
+                "{directory} was an empty mount owned by root, so it now belongs to dev"
+            )),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("is not writable"), "{stderr}");
+    }
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn root_owned_mounts_init_cannot_hand_over_are_reported() {
+    for (_, directory) in AGENT_DIRECTORIES {
+        let tmpfs = format!("{directory}:mode=0755");
+        for extra_options in [
+            ["--cap-drop", "CHOWN"],
+            ["--env", "EZRA_CHOWN_EMPTY_MOUNTS=off"],
+        ] {
+            let mut options = vec!["--tmpfs", &tmpfs];
+            options.extend(extra_options);
+            let output = run_in_image(&options, &["stat", "--format=%u:%g", directory]);
+            assert_eq!(stdout_of(&output), "0:0", "{directory} {extra_options:?}");
+            assert!(
+                stderr_of(&output).contains(&format!("{directory} is not writable by uid 1000")),
+                "{}",
+                stderr_of(&output)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn root_owned_mounts_with_contents_are_left_alone() {
+    let volume = DockerResource::volume("filled");
+    let filling_mount = format!("{}:/filled", volume.name);
+    stdout_of(&run_in_image(
+        &[
+            "--volume",
+            &filling_mount,
+            "--user",
+            "0:0",
+            "--entrypoint",
+            "touch",
+        ],
+        &["/filled/file"],
+    ));
+    for (_, directory) in AGENT_DIRECTORIES {
+        let mount = format!("{}:{directory}", volume.name);
+        let output = run_in_image(
+            &["--volume", &mount],
+            &["stat", "--format=%u:%g", directory],
+        );
+        assert_eq!(stdout_of(&output), "0:0", "{directory}");
         assert!(
             stderr_of(&output).contains(&format!("{directory} is not writable by uid 1000")),
             "{}",
             stderr_of(&output)
         );
     }
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn a_symlink_in_place_of_projects_is_not_followed_after_a_restart() {
+    let container = DockerResource::start_container(
+        "symlink",
+        &["--tmpfs", "/srv/target:mode=0755"],
+        &["sleep", "infinity"],
+    );
+    let swapped = container.run_as_agent(&[
+        "bash",
+        "-c",
+        "rmdir /home/dev/projects && ln --symbolic /srv/target /home/dev/projects",
+    ]);
+    assert!(swapped.status.success(), "{}", stderr_of(&swapped));
+    let restarted = docker(&["restart", &container.name]);
+    assert!(restarted.status.success(), "{}", stderr_of(&restarted));
+    let owner = docker(&[
+        "exec",
+        &container.name,
+        "stat",
+        "--format=%u:%g",
+        "/srv/target",
+    ]);
+    assert_eq!(stdout_of(&owner), "0:0");
 }
 
 #[test]
