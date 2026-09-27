@@ -454,6 +454,18 @@ test.describe("with Claude Code installed", () => {
     expect(bytesOf(CLAUDE_FILE)).toEqual(Buffer.from([0xff, 0xfe, 0x7b, 0x00, 0x7d, 0x00]));
   });
 
+  test("a pipe in place of settings.json does not hold up the page", async ({ page }) => {
+    inContainer("sh", "-c", 'mkdir -p "$(dirname "$1")" && mkfifo "$1"', "sh", CLAUDE_FILE);
+    const { box, editor } = await openSettings(page, CLAUDE_TITLE);
+    await expect(box.getByText(`${CLAUDE_FILE} is not a regular file`)).toBeVisible();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Claude Code", exact: true })).toBeVisible();
+
+    inContainer("rm", CLAUDE_FILE);
+    writeInContainer(CLAUDE_FILE, "{}");
+    await expect(editor).toHaveText("{}", { timeout: 10_000 });
+  });
+
   test("a save the manager refuses for its size keeps the text and says why", async ({ page }) => {
     writeInContainer(CLAUDE_FILE, "{}");
     const { box, editor, save } = await openSettings(page, CLAUDE_TITLE);
