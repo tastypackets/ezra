@@ -787,6 +787,7 @@ pub(super) mod tests {
         usage: Duration::ZERO,
         update_deadline: Duration::ZERO,
         pairing_poll: Duration::ZERO,
+        folder_picker: Duration::ZERO,
     };
     const ENABLE_FIRST: &str = "remote control pairing requires remote control to be enabled";
 

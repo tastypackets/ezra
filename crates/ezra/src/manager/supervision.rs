@@ -317,8 +317,8 @@ impl ServerLog {
         self.0.join(LOG_FILE)
     }
 
-    /// Adds a line the server printed, stamped like Claude Code's own lines.
-    async fn append_output(&self, line: &str) -> io::Result<()> {
+    /// Adds a line of output, stamped like Claude Code's own lines.
+    pub async fn append_output(&self, line: &str) -> io::Result<()> {
         let stamp = OffsetDateTime::now_utc()
             .format(LOG_TIME)
             .map_err(io::Error::other)?;

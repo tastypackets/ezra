@@ -64,10 +64,7 @@ impl CodexLaunch {
             .args(["app-server", "--remote-control"])
             .args(self.managed_daemon.then_some("--managed-daemon"))
             .args(["--listen", "unix://"])
-            .arg("-c")
-            .arg(self.sandbox.config_override())
-            .arg("-c")
-            .arg(self.approvals.config_override())
+            .args(self.config_overrides())
             .env(Agent::Codex.config_directory_variable(), &self.codex_home)
             .env("RUST_LOG", SERVER_LOG_FILTER)
             .stdin(Stdio::null())
@@ -79,6 +76,16 @@ impl CodexLaunch {
             command.env_remove(variable);
         }
         command
+    }
+
+    /// The server's settings, as `-c` arguments.
+    pub fn config_overrides(&self) -> [String; 4] {
+        [
+            "-c".to_owned(),
+            self.sandbox.config_override(),
+            "-c".to_owned(),
+            self.approvals.config_override(),
+        ]
     }
 
     /// Where a server started with `--managed-daemon` saves its loaded threads when it stops.
@@ -249,6 +256,7 @@ mod tests {
         usage: Duration::ZERO,
         update_deadline: Duration::ZERO,
         pairing_poll: Duration::ZERO,
+        folder_picker: Duration::ZERO,
     };
 
     fn arguments(command: &Command) -> Vec<&str> {

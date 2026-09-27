@@ -353,6 +353,7 @@ mod tests {
         usage: Duration::ZERO,
         update_deadline: Duration::ZERO,
         pairing_poll: Duration::from_millis(50),
+        folder_picker: Duration::ZERO,
     };
     const PAIRING: &str = "/api/v1/remote-control/codex/pairing";
     const QR: &str = "/api/v1/remote-control/codex/pairing/qr.svg";

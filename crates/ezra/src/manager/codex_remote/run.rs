@@ -149,6 +149,7 @@ pub(super) mod tests {
         usage: Duration::ZERO,
         update_deadline: Duration::ZERO,
         pairing_poll: Duration::ZERO,
+        folder_picker: Duration::ZERO,
     };
 
     /// A fake `codex` whose `app-server` runs `server`.

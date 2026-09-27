@@ -5,6 +5,7 @@ mod fake;
 mod foreign;
 mod launch;
 mod pairing;
+mod picker;
 mod problem;
 mod run;
 mod supervisor;
@@ -29,6 +30,7 @@ use control::{ControlClient, Enable, RelayStatusWire, RelayWire};
 use launch::LaunchFlagCache;
 use pairing::Pairing;
 pub use pairing::{CodexPairing, CodexPairingState, PairedPhone, PairingError};
+use picker::{FolderPicker, FolderPickers};
 use problem::{CodexProblem, ProblemLine};
 
 const HOLD_SLACK: Duration = Duration::from_secs(1);
@@ -80,6 +82,8 @@ pub struct ServerBudget {
     pub update_deadline: Duration,
     /// Between checks whether a phone used the pairing code.
     pub pairing_poll: Duration,
+    /// For Codex's sandbox to say whether the ChatGPT app's folder picker works.
+    pub folder_picker: Duration,
 }
 
 impl ServerBudget {
@@ -103,6 +107,7 @@ impl Default for ServerBudget {
             usage: USAGE_INTERVAL,
             update_deadline: UPDATE_RESTART_DEADLINE,
             pairing_poll: Duration::from_secs(5),
+            folder_picker: Duration::from_secs(30),
         }
     }
 }
@@ -137,6 +142,7 @@ pub struct CodexRemote {
     events: Events,
     status: Published<CodexRemoteStatus>,
     flags: LaunchFlagCache,
+    folder_pickers: FolderPickers,
     expected: ExpectedPeer,
     /// Sign-ins in progress, which keep the server stopped.
     holds: watch::Sender<u32>,
@@ -183,6 +189,7 @@ impl CodexRemote {
             events: events.clone(),
             status: Published::new(CodexRemoteStatus::default(), events, Topic::RemoteControl),
             flags: LaunchFlagCache::default(),
+            folder_pickers: FolderPickers::default(),
             expected,
             holds: watch::Sender::new(0),
             control: SyncMutex::default(),
@@ -219,7 +226,7 @@ impl CodexRemote {
         self.status.update(|status| {
             let held = self.is_held();
             if !held {
-                status.start(version);
+                status.start(version, self.folder_pickers.answer(version));
             }
             !held
         })
@@ -301,6 +308,8 @@ pub struct CodexRemoteStatus {
     pub usage: Option<CodexUsage>,
     /// A newer Codex the server restarts on once no chat runs, absent while none waits.
     pub update: Option<PendingUpdate>,
+    /// Whether the ChatGPT app's folder picker is expected to work, absent until Codex was checked.
+    pub folder_picker: Option<FolderPicker>,
 }
 
 /// What a running Codex server and its chats use.
@@ -346,9 +355,18 @@ impl CodexRemoteStatus {
         }
     }
 
-    fn start(&mut self, version: &str) {
+    /// Shows the server starting on `version`, with what is known about the folder picker there.
+    fn start(&mut self, version: &str, folder_picker: Option<FolderPicker>) {
         self.enter(ServerState::Starting);
         self.server_version = Some(version.to_owned());
+        self.folder_picker = folder_picker;
+    }
+
+    /// Shows the folder picker's answer while the server runs on the version it was checked with.
+    fn show_folder_picker(&mut self, version: &str, folder_picker: FolderPicker) {
+        if self.server_version.as_deref() == Some(version) {
+            self.folder_picker = Some(folder_picker);
+        }
     }
 
     /// The server answered on its control socket, with `relay` as it was then.
@@ -606,6 +624,7 @@ mod tests {
                 version: "0.157.2".to_owned(),
                 restart_by: datetime!(2026-09-27 18:00 UTC),
             }),
+            folder_picker: Some(FolderPicker::Blocked),
         }
     }
 
@@ -823,6 +842,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_folder_picker_shows_for_the_version_it_was_checked_with_until_another_starts() {
+        let mut status = CodexRemoteStatus::default();
+        status.start("0.157.1", None);
+        status.show_folder_picker("0.157.2", FolderPicker::Works);
+        assert_eq!(status.folder_picker, None);
+        status.show_folder_picker("0.157.1", FolderPicker::Blocked);
+        assert_eq!(status.folder_picker, Some(FolderPicker::Blocked));
+
+        status.idle(ServerState::Off, None);
+        status.show_folder_picker("0.157.1", FolderPicker::Works);
+        assert_eq!(status.folder_picker, Some(FolderPicker::Blocked));
+
+        status.start("0.157.2", None);
+        assert_eq!(status.folder_picker, None);
+        status.start("0.157.1", Some(FolderPicker::Works));
+        assert_eq!(status.folder_picker, Some(FolderPicker::Works));
+    }
+
     fn codex_remote(budget: ServerBudget) -> Arc<CodexRemote> {
         Arc::new(CodexRemote::new(
             Events::default(),
@@ -867,7 +905,9 @@ mod tests {
     #[tokio::test]
     async fn a_sign_in_hold_waits_until_the_server_has_stopped() {
         let codex_remote = codex_remote(ServerBudget::default());
-        codex_remote.status.update(|status| status.start("0.157.1"));
+        codex_remote
+            .status
+            .update(|status| status.start("0.157.1", None));
         let holding = tokio::spawn({
             let codex_remote = Arc::clone(&codex_remote);
             async move { codex_remote.hold_for_sign_in().await }
@@ -902,7 +942,9 @@ mod tests {
             ..ServerBudget::default()
         };
         let codex_remote = codex_remote(budget);
-        codex_remote.status.update(|status| status.start("0.157.1"));
+        codex_remote
+            .status
+            .update(|status| status.start("0.157.1", None));
         let started = Instant::now();
 
         let _hold = timeout(Duration::from_secs(10), codex_remote.hold_for_sign_in())

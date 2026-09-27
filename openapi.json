@@ -2139,6 +2139,17 @@
           "restarts"
         ],
         "properties": {
+          "folder_picker": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FolderPicker",
+                "description": "Whether the ChatGPT app's folder picker is expected to work, absent until Codex was checked."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last_error": {
             "type": [
               "string",
@@ -2393,6 +2404,14 @@
             "description": "The folder's name in /projects."
           }
         }
+      },
+      "FolderPicker": {
+        "type": "string",
+        "description": "Whether the ChatGPT app's folder picker is expected to work in this box.",
+        "enum": [
+          "works",
+          "blocked"
+        ]
       },
       "FolderStatus": {
         "allOf": [

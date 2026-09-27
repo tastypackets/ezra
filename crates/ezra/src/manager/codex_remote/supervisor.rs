@@ -180,6 +180,7 @@ impl AppState {
             Ok(server) => server,
             Err(error) => return RunEnd::Failed(format!("could not start: {error}").into()),
         };
+        codex_remote.check_folder_picker(launch);
         let leader = server
             .leader()
             .expect("a server that just started has a pid");
@@ -957,6 +958,8 @@ mod tests {
         ForeignListener, SLEEPS, Started, daemon_updater,
     };
     use crate::manager::codex_remote::launch::LaunchFlags;
+    use crate::manager::codex_remote::picker::FolderPicker;
+    use crate::manager::codex_remote::picker::tests::NO_NAMESPACES;
     use crate::manager::codex_remote::problem::tests::{
         mfa_warning, relay_warning, unavailable_warning,
     };
@@ -984,6 +987,7 @@ mod tests {
         usage: Duration::from_secs(15),
         update_deadline: UPDATE_RESTART_DEADLINE,
         pairing_poll: Duration::ZERO,
+        folder_picker: Duration::from_secs(5),
     };
     const SHORT_READINESS: ServerBudget = ServerBudget {
         readiness: Duration::from_secs(1),
@@ -1358,7 +1362,9 @@ mod tests {
         let fake = serve_control(&manager, "errored").await;
 
         let running = status_until(&manager, |status| {
-            status.state == ServerState::Running && status.problem.is_some()
+            status.state == ServerState::Running
+                && status.problem.is_some()
+                && status.folder_picker.is_some()
         })
         .await;
         assert_eq!(
@@ -2044,7 +2050,10 @@ mod tests {
         let supervisor = supervise(&manager);
         servers_started(&manager, 1).await;
         let fake = control(&manager, "connecting");
-        status_until(&manager, |status| status.state == ServerState::Running).await;
+        status_until(&manager, |status| {
+            status.state == ServerState::Running && status.folder_picker.is_some()
+        })
+        .await;
         let mut events = Box::pin(manager.state.events.stream());
 
         for relay in ["connecting", "errored", "connecting", "errored"] {
@@ -3439,6 +3448,182 @@ mod tests {
             }
         );
         assert!(matches!(end, RunEnd::ShutDown));
+    }
+
+    /// The runs of the folder picker probe.
+    fn folder_picker_probes(manager: &TestManager) -> Vec<String> {
+        manager
+            .fake_cli_runs(Agent::Codex)
+            .into_iter()
+            .filter(|run| run.starts_with("sandbox"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_folder_picker_is_checked_in_the_background_once_per_version() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let answers = "sandbox*)\n    \
+                         while [ ! -e \"$CODEX_HOME/answer\" ]; do sleep 0.05; done\n    \
+                         echo /home/dev ;;";
+        install_codex(
+            &manager,
+            "0.157.1",
+            &format!("{answers}\n  {TAKES_EVERY_FLAG}"),
+            SERVE,
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        let _fake = serve_control(&manager, "connected").await;
+
+        let running = status_until(&manager, connected).await;
+        assert_eq!(running.folder_picker, None);
+        let probes = wait_until(
+            WAIT,
+            || folder_picker_probes(&manager),
+            |probes| !probes.is_empty(),
+        )
+        .await;
+        assert_eq!(
+            probes,
+            [
+                r#"sandbox -c sandbox_mode="danger-full-access" -c approval_policy="on-request" -c sandbox_mode="read-only" /bin/sh -lc cd "$HOME" && pwd -P"#
+            ]
+        );
+        fs::write(manager.codex_home().join("answer"), "").expect("the probe is told to answer");
+        status_until(&manager, |status| {
+            status.folder_picker == Some(FolderPicker::Works)
+        })
+        .await;
+
+        let chosen = CodexRemoteSettings {
+            sandbox: CodexSandbox::ReadOnly,
+            ..CodexRemoteSettings::default()
+        };
+        save(&manager, &cookie, chosen).await;
+        servers_started(&manager, 2).await;
+        let restarted = status_until(&manager, connected).await;
+        assert_eq!(restarted.folder_picker, Some(FolderPicker::Works));
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(folder_picker_probes(&manager).len(), 1);
+
+        install_codex(
+            &manager,
+            "0.157.2",
+            &format!("{answers}\n  {TAKES_EVERY_FLAG}"),
+            SERVE,
+        );
+        save(&manager, &cookie, chosen).await;
+        status_until(&manager, connected_on("0.157.2")).await;
+        let probes = wait_until(
+            WAIT,
+            || folder_picker_probes(&manager),
+            |probes| probes.len() == 2,
+        )
+        .await;
+        assert_eq!(
+            probes.last().map(String::as_str),
+            Some(
+                r#"sandbox -c sandbox_mode="read-only" -c approval_policy="on-request" -c sandbox_mode="read-only" /bin/sh -lc cd "$HOME" && pwd -P"#
+            )
+        );
+        status_until(&manager, |status| {
+            status.folder_picker == Some(FolderPicker::Works)
+        })
+        .await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_blocked_folder_picker_is_logged_and_not_shown_as_an_error() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        install_codex(
+            &manager,
+            "0.157.1",
+            &format!("sandbox*) echo \"{NO_NAMESPACES}\" >&2; exit 1 ;;\n  {TAKES_EVERY_FLAG}"),
+            SERVE,
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        let _fake = serve_control(&manager, "connected").await;
+
+        let blocked = status_until(&manager, |status| {
+            connected(status) && status.folder_picker == Some(FolderPicker::Blocked)
+        })
+        .await;
+        assert_eq!((blocked.problem, blocked.last_error), (None, None));
+        let overview = manager
+            .get("/api/v1/remote-control", Some(&cookie))
+            .await
+            .text()
+            .await;
+        assert!(
+            overview.contains(r#""folder_picker":"blocked""#),
+            "{overview}"
+        );
+        assert!(!overview.contains("bwrap"), "{overview}");
+        let logged = manager
+            .state
+            .codex_remote
+            .log
+            .tail()
+            .expect("the log is readable");
+        assert!(
+            logged
+                .iter()
+                .any(|line| line.ends_with(&format!("[OUTPUT] codex sandbox: {NO_NAMESPACES}"))),
+            "{logged:?}"
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_folder_picker_check_that_hangs_is_asked_again_at_the_next_start() {
+        let manager = manager(ServerBudget {
+            folder_picker: Duration::from_millis(500),
+            ..BUDGET
+        });
+        let cookie = manager.logged_in().await;
+        install_codex(
+            &manager,
+            "0.157.1",
+            &format!(
+                "sandbox*) echo $$ > \"$CODEX_HOME/probe\"; exec sleep 60 ;;\n  {TAKES_EVERY_FLAG}"
+            ),
+            SERVE,
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        let _fake = serve_control(&manager, "connected").await;
+        status_until(&manager, connected).await;
+        let probe = manager.codex_home().join("probe");
+        let first = wait_until(WAIT, || fs::read_to_string(&probe).ok(), Option::is_some)
+            .await
+            .and_then(|pid| pid.trim().parse().ok())
+            .map(Pid::from_raw)
+            .expect("the probe runs");
+
+        first.wait_until_gone().await;
+        assert_eq!(manager.state.codex_remote.status().folder_picker, None);
+
+        let chosen = CodexRemoteSettings {
+            approvals: CodexApprovals::Never,
+            ..CodexRemoteSettings::default()
+        };
+        save(&manager, &cookie, chosen).await;
+        servers_started(&manager, 2).await;
+        wait_until(
+            WAIT,
+            || folder_picker_probes(&manager).len(),
+            |probes| *probes == 2,
+        )
+        .await;
+        assert_eq!(manager.state.codex_remote.status().folder_picker, None);
+
+        shut_down(&manager, supervisor).await;
     }
 
     #[tokio::test]
