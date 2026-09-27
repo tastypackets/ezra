@@ -1,11 +1,12 @@
 use std::io;
 use std::process::ExitStatus;
+use std::time::Duration;
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tokio::process::Child;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout_at};
 
 use super::ServerBudget;
 use super::launch::CodexLaunch;
@@ -13,7 +14,10 @@ use super::problem::{CodexProblem, ProblemLine};
 use crate::manager::processes::ProcessFamily;
 use crate::manager::supervision::{Failure, LineWatcher, ServerOutput};
 
-/// A running Codex server, the processes it started when last read, and its output.
+/// How often the server's processes are read while it stops.
+const STOPPING_READ_INTERVAL: Duration = Duration::from_secs(1);
+
+/// A running Codex server, the processes it started as read so far, and its output.
 pub struct CodexServerRun {
     pub child: Child,
     /// The lines of its output that name a known problem.
@@ -45,32 +49,37 @@ impl CodexServerRun {
         })
     }
 
-    /// Reads which processes the server started, and returns the memory they use. Keeps the
-    /// earlier reading when the server exited meanwhile.
+    /// Reads which processes the server started, adding them to those read before, and returns
+    /// the memory they use. None once the server exited.
     pub async fn sample_family(&mut self) -> Option<u64> {
         let leader = self.leader()?;
+        let earlier = self.family.take();
         let (family, memory_bytes) = tokio::task::spawn_blocking(move || {
-            let family = ProcessFamily::of(leader);
+            let family = earlier.map_or_else(
+                || ProcessFamily::of(leader),
+                |mut family| {
+                    family.read_again();
+                    family
+                },
+            );
             let memory_bytes = family.memory_bytes();
             (family, memory_bytes)
         })
         .await
         .ok()?;
-        if !matches!(self.child.try_wait(), Ok(None)) {
-            return None;
-        }
         self.family = Some(family);
-        Some(memory_bytes)
+        matches!(self.child.try_wait(), Ok(None)).then_some(memory_bytes)
     }
 
     /// Sends SIGTERM, a second SIGTERM after the drain budget, and SIGKILL after the force
-    /// budget. Then kills what the server left running.
+    /// budget, reading the server's processes before and meanwhile. Then kills what it left
+    /// running.
     pub async fn stop(mut self, budget: &ServerBudget) -> io::Result<ExitStatus> {
+        self.sample_family().await;
         self.signal(Signal::SIGTERM);
-        if timeout(budget.drain, self.child.wait()).await.is_err() {
-            self.sample_family().await;
+        if !self.exits_within(budget.drain).await {
             self.signal(Signal::SIGTERM);
-            if timeout(budget.force, self.child.wait()).await.is_err() {
+            if !self.exits_within(budget.force).await {
                 let _already_gone = self.child.start_kill();
             }
         }
@@ -78,6 +87,26 @@ impl CodexServerRun {
         self.kill_survivors().await;
         self.output.stop_reading().await;
         exit
+    }
+
+    /// Waits up to `longest` for the server to exit, reading its processes every second and at
+    /// the end. True once it exited.
+    async fn exits_within(&mut self, longest: Duration) -> bool {
+        let deadline = Instant::now()
+            .checked_add(longest)
+            .expect("the deadline fits");
+        loop {
+            let next = Instant::now()
+                .checked_add(STOPPING_READ_INTERVAL)
+                .map_or(deadline, |next| next.min(deadline));
+            if timeout_at(next, self.child.wait()).await.is_ok() {
+                return true;
+            }
+            self.sample_family().await;
+            if Instant::now() >= deadline {
+                return false;
+            }
+        }
     }
 
     /// After the server exited by itself: kills what it left and describes the exit.
@@ -100,8 +129,12 @@ impl CodexServerRun {
     }
 
     async fn kill_survivors(&mut self) {
-        if let Some(family) = self.family.take() {
-            let _killed = tokio::task::spawn_blocking(move || family.kill_survivors()).await;
+        if let Some(mut family) = self.family.take() {
+            let _killed = tokio::task::spawn_blocking(move || {
+                family.read_again();
+                family.kill_survivors();
+            })
+            .await;
         }
     }
 }
@@ -130,7 +163,7 @@ pub(super) mod tests {
 
     use nix::sys::wait::{Id, WaitPidFlag, waitid};
     use nix::unistd::getpgid;
-    use tokio::time::{Instant, sleep};
+    use tokio::time::{sleep, timeout};
 
     use super::*;
     use crate::manager::agents::Agent;
@@ -308,6 +341,108 @@ pub(super) mod tests {
         }
         let (_manager, launch, run) = started(&counting_terms(2, LEFTOVER)).await;
         let leftover = pid_in(&launch.codex_home, "leftover");
+
+        run.stop(&BUDGET).await.expect("the server is reaped");
+
+        leftover.wait_until_gone().await;
+    }
+
+    #[tokio::test]
+    async fn a_stop_reads_what_the_server_started_before_its_first_term() {
+        if !"setsid".is_installed() {
+            return;
+        }
+        let (_manager, launch, run) = started(&counting_terms(1, LEFTOVER)).await;
+        let leftover = pid_in(&launch.codex_home, "leftover");
+
+        run.stop(&BUDGET).await.expect("the server is reaped");
+
+        leftover.wait_until_gone().await;
+    }
+
+    #[tokio::test]
+    async fn what_the_server_starts_while_it_drains_is_killed_too() {
+        if !"setsid".is_installed() {
+            return;
+        }
+        let (_manager, launch, run) = started(
+            "trap 'setsid sleep 60 > /dev/null 2>&1 &\n\
+             echo $! > \"$CODEX_HOME/leftover\"\n\
+             sleep 1.5\n\
+             exit 0' TERM\n\
+             : > \"$CODEX_HOME/ready\"\n\
+             sleep 60 > /dev/null 2>&1 &\n\
+             wait $!",
+        )
+        .await;
+        let budget = ServerBudget {
+            drain: Duration::from_secs(3),
+            ..BUDGET
+        };
+        let started = Instant::now();
+
+        let exit = run.stop(&budget).await.expect("the server is reaped");
+
+        assert!(exit.success(), "{exit}");
+        assert!(started.elapsed() < budget.drain, "{:?}", started.elapsed());
+        pid_in(&launch.codex_home, "leftover")
+            .wait_until_gone()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn what_a_helper_left_after_it_exited_is_killed_too() {
+        let (_manager, launch, mut run) = started(
+            "sh -c 'sleep 60 > /dev/null 2>&1 &\n\
+             echo $! > \"$CODEX_HOME/leftover\"\n\
+             echo $$ > \"$CODEX_HOME/helper\"\n\
+             : > \"$CODEX_HOME/ready\"\n\
+             until [ -e \"$CODEX_HOME/go\" ]; do sleep 0.05; done' &\n\
+             sleep 60 > /dev/null 2>&1 &\n\
+             wait",
+        )
+        .await;
+        let leftover = pid_in(&launch.codex_home, "leftover");
+        run.sample_family().await;
+        fs::write(launch.codex_home.join("go"), "").expect("the helper is told to exit");
+        pid_in(&launch.codex_home, "helper").wait_until_gone().await;
+        run.sample_family().await;
+
+        run.stop(&BUDGET).await.expect("the server is reaped");
+
+        leftover.wait_until_gone().await;
+    }
+
+    #[tokio::test]
+    async fn what_a_helper_left_in_its_own_session_after_the_last_reading_is_killed_too() {
+        if !"setsid".is_installed() {
+            return;
+        }
+        let (_manager, launch, mut run) = started(
+            "setsid sh -c 'echo $$ > \"$CODEX_HOME/helper\"\n\
+             : > \"$CODEX_HOME/ready\"\n\
+             until [ -e \"$CODEX_HOME/go\" ]; do sleep 0.05; done\n\
+             sleep 60 > /dev/null 2>&1 &\n\
+             echo $! > \"$CODEX_HOME/leftover\"' &\n\
+             sleep 60 > /dev/null 2>&1 &\n\
+             wait",
+        )
+        .await;
+        run.sample_family().await;
+        fs::write(launch.codex_home.join("go"), "").expect("the helper is told to exit");
+        let leftover = wait_until(
+            WAIT,
+            || {
+                fs::read_to_string(launch.codex_home.join("leftover"))
+                    .ok()
+                    .and_then(|pid| pid.trim().parse().ok())
+            },
+            Option::is_some,
+        )
+        .await
+        .map(Pid::from_raw)
+        .expect("the leftover runs");
+        pid_in(&launch.codex_home, "helper").wait_until_gone().await;
 
         run.stop(&BUDGET).await.expect("the server is reaped");
 

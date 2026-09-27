@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,6 +16,8 @@ pub struct Process(PathBuf);
 
 pub struct ProcessStat {
     pub parent: Pid,
+    /// The pid of the process that started its session.
+    pub session: Pid,
     /// Exited and waiting for its parent to collect it.
     pub zombie: bool,
     /// When it started, in clock ticks after boot.
@@ -62,9 +64,11 @@ impl Process {
         let mut fields = after_name.split_whitespace();
         let zombie = fields.next()? == "Z";
         let parent = fields.next()?.parse().ok()?;
-        let started = fields.nth(17)?.parse().ok()?;
+        let session = fields.nth(1)?.parse().ok()?;
+        let started = fields.nth(15)?.parse().ok()?;
         Some(ProcessStat {
             parent: Pid::from_raw(parent),
+            session: Pid::from_raw(session),
             zombie,
             started,
         })
@@ -126,39 +130,87 @@ impl Process {
     }
 }
 
-/// A process and the processes it started, also those in process groups of their own, as they
-/// were when read.
+/// A process and the processes it started, also those in process groups or sessions of their own,
+/// as they were when read.
 pub struct ProcessFamily {
     leader: Pid,
     members: Vec<(Process, ProcessStat)>,
+    /// The members that started a session, also after they exited while their session lives on.
+    sessions: Vec<ProcessIdentity>,
 }
 
 impl ProcessFamily {
     /// Reads /proc, so it blocks.
     pub fn of(leader: Pid) -> Self {
-        let mut children: HashMap<Pid, Vec<(Process, ProcessStat)>> = HashMap::new();
-        let mut members = Vec::new();
-        for process in Process::all() {
-            let (Some(id), Some(stat)) = (process.id(), process.stat()) else {
-                continue;
-            };
-            if id == leader {
-                members.push((process, stat));
-            } else {
-                children
-                    .entry(stat.parent)
-                    .or_default()
-                    .push((process, stat));
+        let mut family = Self {
+            leader,
+            members: Vec::new(),
+            sessions: Vec::new(),
+        };
+        family.read(|id, _| id == leader);
+        family
+    }
+
+    /// Reads /proc again, keeping the members still running, also those whose parent exited, and
+    /// adding what they and their sessions started since. Blocks.
+    pub fn read_again(&mut self) {
+        let earlier: HashSet<ProcessIdentity> = self.identities().collect();
+        self.read(|id, stat| {
+            earlier.contains(&ProcessIdentity {
+                id,
+                started: stat.started,
+            })
+        });
+    }
+
+    /// Reads /proc with the processes `is_root` picks as the first members, the leader first.
+    fn read(&mut self, is_root: impl Fn(Pid, &ProcessStat) -> bool) {
+        let running: Vec<(Process, ProcessStat)> = Process::all()
+            .filter_map(|process| {
+                let stat = process.stat()?;
+                Some((process, stat))
+            })
+            .collect();
+        let started: HashMap<Pid, u64> = running
+            .iter()
+            .filter_map(|(process, stat)| Some((process.id()?, stat.started)))
+            .collect();
+        self.sessions.retain(|leader| {
+            started
+                .get(&leader.id)
+                .is_none_or(|started| *started == leader.started)
+        });
+        let (mut members, mut others): (Vec<_>, Vec<_>) = running
+            .into_iter()
+            .partition(|(process, stat)| process.id().is_some_and(|id| is_root(id, stat)));
+        members.sort_by_key(|(process, _)| process.id() != Some(self.leader));
+        loop {
+            for (process, stat) in &members {
+                let leads = process.id() == Some(stat.session);
+                if leads && !self.sessions.iter().any(|known| known.id == stat.session) {
+                    self.sessions.push(ProcessIdentity {
+                        id: stat.session,
+                        started: stat.started,
+                    });
+                }
             }
-        }
-        let mut next = 0;
-        while let Some((process, _)) = members.get(next) {
-            if let Some(started) = process.id().and_then(|id| children.remove(&id)) {
-                members.extend(started);
+            let ids: HashSet<Pid> = members
+                .iter()
+                .filter_map(|(process, _)| process.id())
+                .collect();
+            let (joined, rest): (Vec<_>, Vec<_>) = others.into_iter().partition(|(_, stat)| {
+                ids.contains(&stat.parent)
+                    || self.sessions.iter().any(|known| known.id == stat.session)
+            });
+            others = rest;
+            if joined.is_empty() {
+                break;
             }
-            next = next.saturating_add(1);
+            members.extend(joined);
         }
-        Self { leader, members }
+        self.sessions
+            .retain(|leader| members.iter().any(|(_, stat)| stat.session == leader.id));
+        self.members = members;
     }
 
     /// The leader as read, unless it had exited.
@@ -207,7 +259,7 @@ impl ProcessFamily {
 }
 
 /// A process known by its pid and start time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProcessIdentity {
     id: Pid,
     /// When it started, in clock ticks after boot.
@@ -296,6 +348,72 @@ mod tests {
     use nix::sys::signal::{Signal, killpg};
 
     use super::*;
+    use crate::manager::api::test_support::{PidExt, ProgramExt, wait_until};
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    impl ProcessFamily {
+        fn has(&self, id: Pid) -> bool {
+            self.members
+                .iter()
+                .any(|(process, stat)| process.id() == Some(id) && !stat.zombie)
+        }
+    }
+
+    /// A shell script leading a process group of its own, with `$DIR` set to a temporary
+    /// directory.
+    struct Script {
+        directory: tempfile::TempDir,
+        leader: process::Child,
+    }
+
+    impl Script {
+        /// Starts `script` and waits until it created `$DIR/ready`.
+        async fn started(script: &str) -> Self {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let leader = Command::new("sh")
+                .args(["-c", script])
+                .env("DIR", directory.path())
+                .process_group(0)
+                .stdin(Stdio::null())
+                .spawn()
+                .expect("the script starts");
+            let ready = directory.path().join("ready");
+            wait_until(WAIT, || ready.exists(), |ready| *ready).await;
+            Self { directory, leader }
+        }
+
+        fn id(&self) -> Pid {
+            Pid::from_raw(i32::try_from(self.leader.id()).expect("the pid fits"))
+        }
+
+        /// Waits until the script wrote a pid to `$DIR/<name>`, and returns it.
+        async fn pid_in(&self, name: &str) -> Pid {
+            let path = self.directory.path().join(name);
+            let pid = wait_until(
+                WAIT,
+                || {
+                    fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|pid| pid.trim().parse().ok())
+                },
+                Option::is_some,
+            )
+            .await;
+            Pid::from_raw(pid.expect("the pid is written"))
+        }
+
+        fn tell(&self, name: &str) {
+            fs::write(self.directory.path().join(name), "").expect("the script is told");
+        }
+    }
+
+    impl Drop for Script {
+        fn drop(&mut self) {
+            let _already_gone = killpg(self.id(), Signal::SIGKILL);
+            let _reaped = self.leader.wait();
+        }
+    }
 
     #[test]
     fn a_copied_program_counts_as_running_from_its_directory() {
@@ -327,19 +445,19 @@ mod tests {
     }
 
     #[test]
-    fn the_start_time_is_the_twenty_second_stat_field() {
+    fn the_session_and_start_time_are_the_sixth_and_twenty_second_stat_fields() {
         let directory = tempfile::tempdir().expect("temporary directory");
         fs::write(
             directory.path().join("stat"),
-            "42 (a (b) c) S 7 42 42 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 123456 2000000 100\n",
+            "42 (a (b) c) S 7 41 40 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 123456 2000000 100\n",
         )
         .expect("stat is written");
         let stat = Process(directory.path().to_path_buf())
             .stat()
             .expect("stat is readable");
         assert_eq!(
-            (stat.parent, stat.zombie, stat.started),
-            (Pid::from_raw(7), false, 123_456)
+            (stat.parent, stat.session, stat.zombie, stat.started),
+            (Pid::from_raw(7), Pid::from_raw(40), false, 123_456)
         );
     }
 
@@ -376,6 +494,104 @@ mod tests {
         assert!(ProcessFamily::of(leader_id).members.is_empty());
     }
 
+    #[tokio::test]
+    async fn reading_a_family_again_keeps_a_member_whose_parent_exited() {
+        let script = Script::started(
+            "sh -c 'sleep 30 > /dev/null 2>&1 &\n\
+             echo $! > \"$DIR/orphan\"\n\
+             : > \"$DIR/ready\"\n\
+             until [ -e \"$DIR/go\" ]; do sleep 0.02; done' &\n\
+             sleep 30 &\n\
+             wait",
+        )
+        .await;
+        let orphan = script.pid_in("orphan").await;
+        let mut family = ProcessFamily::of(script.id());
+        assert!(family.has(orphan));
+
+        script.tell("go");
+        wait_until(
+            WAIT,
+            || ProcessFamily::of(script.id()).has(orphan),
+            |found| !found,
+        )
+        .await;
+        family.read_again();
+
+        assert!(family.has(orphan));
+        family.kill_survivors();
+        orphan.wait_until_gone().await;
+    }
+
+    #[tokio::test]
+    async fn reading_a_family_again_adds_what_a_session_a_member_started_holds() {
+        if !"setsid".is_installed() {
+            return;
+        }
+        let script = Script::started(
+            "setsid sh -c 'echo $$ > \"$DIR/session\"\n\
+             : > \"$DIR/ready\"\n\
+             until [ -e \"$DIR/go\" ]; do sleep 0.02; done\n\
+             sleep 30 > /dev/null 2>&1 &\n\
+             echo $! > \"$DIR/late\"' &\n\
+             sleep 30 &\n\
+             wait",
+        )
+        .await;
+        let session = script.pid_in("session").await;
+        let mut family = ProcessFamily::of(script.id());
+        assert!(family.has(session));
+
+        script.tell("go");
+        let late = script.pid_in("late").await;
+        session.wait_until_gone().await;
+        assert!(!ProcessFamily::of(script.id()).has(late));
+        family.read_again();
+
+        assert!(family.has(late));
+        family.kill_survivors();
+        late.wait_until_gone().await;
+    }
+
+    #[tokio::test]
+    async fn a_session_whose_leader_is_another_process_now_is_forgotten() {
+        if !"setsid".is_installed() {
+            return;
+        }
+        let mut leading = Command::new("setsid")
+            .args(["sleep", "30"])
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("setsid starts");
+        let id = Pid::from_raw(i32::try_from(leading.id()).expect("the pid fits"));
+        let started = wait_until(
+            WAIT,
+            || {
+                Process::with_id(id)
+                    .stat()
+                    .filter(|stat| stat.session == id)
+                    .map(|stat| stat.started)
+            },
+            Option::is_some,
+        )
+        .await
+        .expect("sleep leads a session");
+        let read_with_session = |started| {
+            let mut family = ProcessFamily {
+                leader: id,
+                members: Vec::new(),
+                sessions: vec![ProcessIdentity { id, started }],
+            };
+            family.read_again();
+            family
+        };
+
+        assert!(!read_with_session(started.saturating_add(1)).has(id));
+        assert!(read_with_session(started).has(id));
+        leading.kill().expect("sleep is killed");
+        leading.wait().expect("sleep is reaped");
+    }
+
     #[test]
     fn children_leave_out_grandchildren_and_exited_children() {
         let member = |id: i32, parent: i32, zombie: bool| {
@@ -383,6 +599,7 @@ mod tests {
                 Process(PathBuf::from(format!("/proc/{id}"))),
                 ProcessStat {
                     parent: Pid::from_raw(parent),
+                    session: Pid::from_raw(1),
                     zombie,
                     started: 1,
                 },
@@ -396,6 +613,7 @@ mod tests {
                 member(12, 10, true),
                 member(13, 11, false),
             ],
+            sessions: Vec::new(),
         };
         let children: Vec<Option<Pid>> = family.children().map(Process::id).collect();
         assert_eq!(children, [Some(Pid::from_raw(11))]);
@@ -414,10 +632,12 @@ mod tests {
                 Process(own.clone()),
                 ProcessStat {
                     parent: Pid::parent(),
+                    session: Pid::parent(),
                     zombie: false,
                     started,
                 },
             )],
+            sessions: Vec::new(),
         };
         assert!(remembered(started).memory_bytes() > 0);
         assert_eq!(remembered(started.saturating_add(1)).memory_bytes(), 0);
@@ -449,6 +669,7 @@ mod tests {
                 member(remembered.id(), 0),
                 member(reused.id(), 1),
             ],
+            sessions: Vec::new(),
         };
 
         family.kill_survivors();

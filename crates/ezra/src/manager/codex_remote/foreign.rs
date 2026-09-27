@@ -36,7 +36,10 @@ impl ForeignServer {
             families.extend(Self::stop(server, budget).await);
         }
         let _killed = tokio::task::spawn_blocking(move || {
-            families.iter().for_each(ProcessFamily::kill_survivors);
+            for family in &mut families {
+                family.read_again();
+                family.kill_survivors();
+            }
         })
         .await;
     }
@@ -63,7 +66,7 @@ impl ForeignServer {
     }
 
     /// Stops `pid` like ezra's own server, with /proc polls instead of a child. Returns what it
-    /// started as last read, which may still run.
+    /// started as read so far, which may still run.
     async fn stop(pid: Pid, budget: &ServerBudget) -> Option<ProcessFamily> {
         let mut family = tokio::task::spawn_blocking(move || ProcessFamily::of(pid))
             .await
@@ -71,11 +74,12 @@ impl ForeignServer {
         if let Some(leader) = family.leader() {
             leader.signal(Signal::SIGTERM).await;
             if !leader.exits_within(budget.drain).await {
-                if let Ok(again) = tokio::task::spawn_blocking(move || ProcessFamily::of(pid)).await
-                    && again.leader() == Some(leader)
-                {
-                    family = again;
-                }
+                family = tokio::task::spawn_blocking(move || {
+                    family.read_again();
+                    family
+                })
+                .await
+                .ok()?;
                 leader.signal(Signal::SIGTERM).await;
                 if !leader.exits_within(budget.force).await {
                     leader.signal(Signal::SIGKILL).await;
