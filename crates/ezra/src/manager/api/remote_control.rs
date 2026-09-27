@@ -14,12 +14,20 @@ use crate::manager::supervision::ServerLog;
     tag = "remote-control",
     summary = "Get every Remote Control server's state",
     responses(
-        (status = 200, description = "The servers for /projects and its folders", body = RemoteControlOverview),
+        (status = 200, description = "Claude Code's servers for /projects and its folders, and Codex's server", body = RemoteControlOverview),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody)
     )
 )]
 pub async fn overview(_: Session, State(state): State<AppState>) -> Json<RemoteControlOverview> {
-    Json(state.remote_control.overview(&state.projects.0))
+    Json(state.remote_control_overview())
+}
+
+impl AppState {
+    /// Every server's state, as the API and the first page show it.
+    pub fn remote_control_overview(&self) -> RemoteControlOverview {
+        self.remote_control
+            .overview(&self.projects.0, self.codex_remote.status())
+    }
 }
 
 /// The end of a Remote Control server's log.
@@ -83,6 +91,27 @@ pub async fn folder_log(
         .map(Json)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/remote-control/codex/log",
+    operation_id = "getCodexRemoteControlLog",
+    tag = "remote-control",
+    summary = "Get the end of Codex's remote control log",
+    description = "Returns up to the last 200 lines Codex printed while serving the ChatGPT app.",
+    responses(
+        (status = 200, description = "The last lines", body = ServerLogTail),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody)
+    )
+)]
+pub async fn codex_log(
+    _: Session,
+    State(state): State<AppState>,
+) -> Result<Json<ServerLogTail>, ApiError> {
+    ServerLogTail::read(state.codex_remote.log.clone())
+        .await
+        .map(Json)
+}
+
 impl ServerLogTail {
     async fn read(log: ServerLog) -> Result<Self, ApiError> {
         let path = log.debug_file().display().to_string();
@@ -121,6 +150,43 @@ mod tests {
             .await;
         assert_eq!(overview.projects.state, ServerState::Waiting);
         assert!(overview.folders.is_empty());
+        assert_eq!(overview.codex.state, ServerState::Waiting);
+    }
+
+    #[tokio::test]
+    async fn the_codex_log_has_the_lines_codex_printed() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        assert_eq!(
+            manager
+                .get("/api/v1/remote-control/codex/log", None)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let empty: ServerLogTail = manager
+            .get("/api/v1/remote-control/codex/log", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert!(empty.lines.is_empty());
+        assert!(
+            empty
+                .path
+                .ends_with("/ezra/remote-control/codex/server.log"),
+            "{}",
+            empty.path
+        );
+
+        let log = &manager.state.codex_remote.log;
+        fs::create_dir_all(&log.0).expect("the log folder is created");
+        fs::write(log.debug_file(), "one\ntwo\n").expect("the log is written");
+        let tail: ServerLogTail = manager
+            .get("/api/v1/remote-control/codex/log", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(tail.lines, ["one", "two"]);
     }
 
     #[tokio::test]

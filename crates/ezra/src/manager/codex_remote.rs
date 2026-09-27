@@ -1,19 +1,24 @@
-#[cfg(test)]
 mod control;
 #[cfg(test)]
 mod fake;
-#[cfg(test)]
 mod launch;
-#[cfg(test)]
 mod problem;
-#[cfg(test)]
 mod run;
+mod supervisor;
 
-#[cfg(test)]
 use std::time::Duration;
 
+use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 use utoipa::ToSchema;
+
+use super::events::{Events, Topic};
+use super::remote_control::ServerState;
+use super::supervision::{Failure, OUTPUT_DRAIN_TIMEOUT, Published, ServerLog, Supervision};
+use control::{RelayStatusWire, RelayWire};
+use launch::LaunchFlagCache;
+use problem::{CodexProblem, ProblemLine};
 
 /// How Codex serves this box to the ChatGPT app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -41,11 +46,12 @@ impl Default for CodexRemoteSettings {
 }
 
 /// How long each step with the Codex server may take.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServerBudget {
     /// For each `--help` flag probe.
     pub probe: Duration,
+    /// For the control socket to answer after a start, and again after the connection was lost.
+    pub readiness: Duration,
     /// After the first SIGTERM, for running turns to finish.
     pub drain: Duration,
     /// After the second SIGTERM, before SIGKILL.
@@ -54,14 +60,209 @@ pub struct ServerBudget {
     pub request: Duration,
 }
 
-#[cfg(test)]
+impl ServerBudget {
+    /// The longest a stop takes, including reading the last output.
+    pub fn longest_stop(&self) -> Duration {
+        self.drain
+            .saturating_add(self.force)
+            .saturating_add(OUTPUT_DRAIN_TIMEOUT)
+    }
+}
+
 impl Default for ServerBudget {
     fn default() -> Self {
         Self {
             probe: Duration::from_secs(5),
+            readiness: Duration::from_secs(30),
             drain: Duration::from_secs(20),
             force: Duration::from_secs(10),
             request: Duration::from_secs(45),
+        }
+    }
+}
+
+/// The process that must answer on the control socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedPeer {
+    /// The server the supervisor started.
+    Child,
+    /// A fake control server in the test process.
+    #[cfg(test)]
+    Pid(Pid),
+}
+
+impl ExpectedPeer {
+    /// The process that must answer when `server` is the one started.
+    fn pid(self, server: Pid) -> Pid {
+        match self {
+            Self::Child => server,
+            #[cfg(test)]
+            Self::Pid(pid) => pid,
+        }
+    }
+}
+
+/// Codex's remote control server as the API reads it, and what its supervisor runs it with.
+#[derive(Debug)]
+pub struct CodexRemote {
+    pub supervision: Supervision,
+    pub log: ServerLog,
+    pub budget: ServerBudget,
+    status: Published<CodexRemoteStatus>,
+    flags: LaunchFlagCache,
+    expected: ExpectedPeer,
+    /// Sign-ins in progress, which keep the server stopped.
+    holds: watch::Sender<u32>,
+}
+
+impl CodexRemote {
+    /// Publishes every status change to `events` and adds the server's output to `log`.
+    pub fn new(
+        events: Events,
+        log: ServerLog,
+        budget: ServerBudget,
+        expected: ExpectedPeer,
+    ) -> Self {
+        Self {
+            supervision: Supervision::default(),
+            log,
+            budget,
+            status: Published::new(CodexRemoteStatus::default(), events, Topic::RemoteControl),
+            flags: LaunchFlagCache::default(),
+            expected,
+            holds: watch::Sender::new(0),
+        }
+    }
+
+    /// The status as the API shows it.
+    pub fn status(&self) -> CodexRemoteStatus {
+        self.status.read(Clone::clone)
+    }
+
+    fn is_held(&self) -> bool {
+        *self.holds.borrow() > 0
+    }
+}
+
+/// The manager's view of Codex's remote control server.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CodexRemoteStatus {
+    pub state: ServerState,
+    /// Whether Codex is connected to ChatGPT, absent while the server does not answer.
+    pub relay: Option<RelayState>,
+    /// The name the ChatGPT app lists this box under, absent while the server does not answer.
+    pub server_name: Option<String>,
+    /// The Codex version the server runs, absent while none runs.
+    pub server_version: Option<String>,
+    /// What keeps Codex from serving the ChatGPT app, absent when nothing known does.
+    pub problem: Option<CodexProblem>,
+    /// The line that named the problem or the last output before a stop, until Codex connects.
+    pub last_error: Option<String>,
+    /// Unexpected stops since the manager started.
+    pub restarts: u32,
+}
+
+impl CodexRemoteStatus {
+    /// Shows `state` with no server answering.
+    fn enter(&mut self, state: ServerState) {
+        self.state = state;
+        self.relay = None;
+        self.server_name = None;
+        self.server_version = None;
+    }
+
+    /// Shows no server running, and the problem keeping it from starting.
+    fn idle(&mut self, state: ServerState, problem: Option<CodexProblem>) {
+        self.enter(state);
+        self.problem = problem;
+    }
+
+    /// Whether to start or stop is not known yet, so a running server shows as waiting.
+    fn unsure(&mut self) {
+        if matches!(
+            self.state,
+            ServerState::Starting | ServerState::Running | ServerState::Stopping
+        ) {
+            self.enter(ServerState::Waiting);
+        }
+    }
+
+    fn start(&mut self, version: &str) {
+        self.enter(ServerState::Starting);
+        self.server_version = Some(version.to_owned());
+    }
+
+    /// The server answered on its control socket, with `relay` as it was then.
+    fn answer(&mut self, relay: RelayWire) {
+        self.state = ServerState::Running;
+        self.show_relay(relay);
+    }
+
+    /// The control connection closed, so the relay is unknown until it opens again.
+    fn lose_control(&mut self) {
+        self.relay = None;
+    }
+
+    /// Shows the relay. Connecting clears every problem but the installed version's.
+    fn show_relay(&mut self, relay: RelayWire) {
+        let state = RelayState::from(relay.status);
+        self.relay = Some(state);
+        self.server_name = Some(relay.server_name);
+        if state == RelayState::Connected {
+            self.last_error = None;
+            self.problem = self
+                .problem
+                .filter(|problem| *problem == CodexProblem::UnsupportedVersion);
+        }
+    }
+
+    /// Shows the first line that names a problem, until another problem replaces it.
+    fn name_problem(&mut self, ProblemLine { problem, line }: ProblemLine) {
+        if self.problem != Some(problem) {
+            self.problem = Some(problem);
+            self.last_error = Some(line);
+        }
+    }
+
+    /// The running server is kept, and the installed version cannot replace it when
+    /// `unsupported`.
+    fn keep(&mut self, unsupported: bool) {
+        if unsupported {
+            self.problem = Some(CodexProblem::UnsupportedVersion);
+        } else if self.problem == Some(CodexProblem::UnsupportedVersion) {
+            self.problem = None;
+        }
+    }
+
+    fn fail(&mut self, Failure { message, problem }: Failure<CodexProblem>) {
+        self.enter(ServerState::Retrying);
+        self.last_error = Some(message);
+        self.problem = problem;
+        self.restarts = self.restarts.saturating_add(1);
+    }
+}
+
+/// Whether Codex is connected to ChatGPT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayState {
+    /// Turned off for now.
+    Disabled,
+    /// Connecting to ChatGPT.
+    Connecting,
+    /// Connected, so the ChatGPT app can reach this box.
+    Connected,
+    /// The last try failed, and Codex keeps trying.
+    Errored,
+}
+
+impl From<RelayStatusWire> for RelayState {
+    fn from(status: RelayStatusWire) -> Self {
+        match status {
+            RelayStatusWire::Disabled => Self::Disabled,
+            RelayStatusWire::Connecting => Self::Connecting,
+            RelayStatusWire::Connected => Self::Connected,
+            RelayStatusWire::Errored => Self::Errored,
         }
     }
 }
@@ -97,8 +298,8 @@ mod tests {
     use serde::de::DeserializeOwned;
 
     use super::*;
+    use crate::manager::codex_remote::fake::FakeControlServer;
     use crate::manager::remote_control::RemoteControl;
-    use crate::manager::supervision::OUTPUT_DRAIN_TIMEOUT;
 
     const SANDBOXES: [(CodexSandbox, &str); 3] = [
         (CodexSandbox::ReadOnly, "read-only"),
@@ -170,13 +371,155 @@ mod tests {
         );
     }
 
+    const STATES: [ServerState; 6] = [
+        ServerState::Off,
+        ServerState::Waiting,
+        ServerState::Starting,
+        ServerState::Running,
+        ServerState::Retrying,
+        ServerState::Stopping,
+    ];
+    const PROBLEMS: [CodexProblem; 7] = [
+        CodexProblem::MfaRequired,
+        CodexProblem::NotChatGpt,
+        CodexProblem::SignedOut,
+        CodexProblem::NotAllowed,
+        CodexProblem::SocketInUse,
+        CodexProblem::RelayUnavailable,
+        CodexProblem::UnsupportedVersion,
+    ];
+
+    /// Codex's report of the relay as `status`.
+    fn reported(status: &str) -> RelayWire {
+        serde_json::from_value(FakeControlServer::relay(status)).expect("the relay parses")
+    }
+
+    /// A running server whose relay errored, showing `problem`.
+    fn errored_with(problem: CodexProblem) -> CodexRemoteStatus {
+        CodexRemoteStatus {
+            state: ServerState::Running,
+            relay: Some(RelayState::Errored),
+            server_name: Some("ezra-dev".to_owned()),
+            server_version: Some("0.157.1".to_owned()),
+            problem: Some(problem),
+            last_error: Some("the line that named it".to_owned()),
+            restarts: 1,
+        }
+    }
+
+    fn line(problem: CodexProblem, line: &str) -> ProblemLine {
+        ProblemLine {
+            problem,
+            line: line.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_connected_relay_clears_every_problem_but_the_installed_versions() {
+        for problem in PROBLEMS {
+            let mut status = errored_with(problem);
+            status.show_relay(reported("connected"));
+            assert_eq!(
+                status,
+                CodexRemoteStatus {
+                    relay: Some(RelayState::Connected),
+                    problem: (problem == CodexProblem::UnsupportedVersion).then_some(problem),
+                    last_error: None,
+                    ..errored_with(problem)
+                },
+                "{problem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_relay_that_is_not_connected_leaves_the_problem_shown() {
+        for (reported_status, shown) in [
+            ("disabled", RelayState::Disabled),
+            ("connecting", RelayState::Connecting),
+            ("errored", RelayState::Errored),
+        ] {
+            let mut status = CodexRemoteStatus {
+                relay: None,
+                server_name: None,
+                ..errored_with(CodexProblem::MfaRequired)
+            };
+            status.show_relay(reported(reported_status));
+            assert_eq!(
+                status,
+                CodexRemoteStatus {
+                    relay: Some(shown),
+                    ..errored_with(CodexProblem::MfaRequired)
+                },
+                "{reported_status}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_problem_of_another_kind_replaces_the_line_shown() {
+        let mut status = CodexRemoteStatus::default();
+        status.name_problem(line(CodexProblem::SignedOut, "first"));
+        status.name_problem(line(CodexProblem::SignedOut, "second"));
+        assert_eq!(
+            (status.problem, status.last_error.as_deref()),
+            (Some(CodexProblem::SignedOut), Some("first"))
+        );
+
+        status.name_problem(line(CodexProblem::RelayUnavailable, "third"));
+        assert_eq!(
+            (status.problem, status.last_error.as_deref()),
+            (Some(CodexProblem::RelayUnavailable), Some("third"))
+        );
+    }
+
+    #[test]
+    fn a_kept_server_shows_only_whether_the_installed_version_can_replace_it() {
+        let mut status = errored_with(CodexProblem::RelayUnavailable);
+        status.keep(false);
+        assert_eq!(status, errored_with(CodexProblem::RelayUnavailable));
+
+        status.keep(true);
+        assert_eq!(status, errored_with(CodexProblem::UnsupportedVersion));
+
+        status.keep(false);
+        assert_eq!(
+            status,
+            CodexRemoteStatus {
+                problem: None,
+                ..errored_with(CodexProblem::UnsupportedVersion)
+            }
+        );
+    }
+
+    #[test]
+    fn an_unsure_wake_shows_only_a_server_on_its_way_as_waiting() {
+        for state in STATES {
+            let before = CodexRemoteStatus {
+                state,
+                ..errored_with(CodexProblem::MfaRequired)
+            };
+            let mut status = before.clone();
+            status.unsure();
+            let expected = match state {
+                ServerState::Starting | ServerState::Running | ServerState::Stopping => {
+                    CodexRemoteStatus {
+                        state: ServerState::Waiting,
+                        relay: None,
+                        server_name: None,
+                        server_version: None,
+                        ..before
+                    }
+                }
+                ServerState::Off | ServerState::Waiting | ServerState::Retrying => before,
+            };
+            assert_eq!(status, expected, "{state:?}");
+        }
+    }
+
     #[test]
     fn the_default_stop_fits_in_claudes() {
-        let budget = ServerBudget::default();
-        let longest = budget
-            .drain
-            .saturating_add(budget.force)
-            .saturating_add(OUTPUT_DRAIN_TIMEOUT);
+        let longest = ServerBudget::default().longest_stop();
         assert_eq!(longest, Duration::from_secs(31));
         assert!(longest < RemoteControl::LONGEST_STOP);
     }

@@ -15,6 +15,8 @@ use tokio::time::sleep;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
+pub const ENVIRONMENT: &str = "environment-1";
+
 /// How the fake answers one request.
 #[derive(Debug, Clone)]
 pub enum Reply {
@@ -115,6 +117,26 @@ impl FakeControlServer {
             "codexHome": codex_home,
             "platformFamily": "unix",
             "platformOs": "linux",
+        })
+    }
+
+    /// Codex's relay status as `remoteControl/status/read` gives it, for ezra-dev in
+    /// `ENVIRONMENT`.
+    pub fn relay(status: &str) -> Value {
+        json!({
+            "status": status,
+            "serverName": "ezra-dev",
+            "installationId": "installation-1",
+            "environmentId": ENVIRONMENT,
+        })
+    }
+
+    /// The notification Codex pushes when the relay status becomes `status`.
+    pub fn status_changed(status: &str) -> Value {
+        json!({
+            "method": "remoteControl/status/changed",
+            "params": Self::relay(status),
+            "emittedAtMs": 1_790_000_000_000_i64,
         })
     }
 

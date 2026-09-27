@@ -373,6 +373,17 @@ impl SignInMethod {
         }
     }
 
+    /// False for the methods Codex's remote control refuses, which reach a model API directly.
+    pub fn uses_codex_backend(self) -> bool {
+        match self {
+            Self::ChatGpt
+            | Self::AccessToken
+            | Self::PersonalAccessToken
+            | Self::WorkloadIdentity => true,
+            Self::ApiKey | Self::AmazonBedrockApiKey | Self::AmazonBedrockAccessKeys => false,
+        }
+    }
+
     /// Reads what `codex login status` names after "Logged in using", such as "an API key -
     /// sk-proj-***ABCDE". `None` for a method this build does not know.
     fn from_status_name(name: &str) -> Option<Self> {
@@ -689,48 +700,61 @@ mod tests {
 
     #[test]
     fn codex_status_gives_the_sign_in_method() {
-        for (output, method, account) in [
-            ("Logged in using ChatGPT", SignInMethod::ChatGpt, "ChatGPT"),
+        for (output, method, account, served) in [
+            (
+                "Logged in using ChatGPT",
+                SignInMethod::ChatGpt,
+                "ChatGPT",
+                true,
+            ),
             (
                 "Logged in using an API key - sk-proj-***ABCDE",
                 SignInMethod::ApiKey,
                 "API key",
+                false,
             ),
             (
                 "Logged in using an API key - ***",
                 SignInMethod::ApiKey,
                 "API key",
+                false,
             ),
             (
                 "Logged in using access token",
                 SignInMethod::AccessToken,
                 "Access token",
+                true,
             ),
             (
                 "Logged in using personal access token",
                 SignInMethod::PersonalAccessToken,
                 "Personal access token",
+                true,
             ),
             (
                 "Logged in using workload identity",
                 SignInMethod::WorkloadIdentity,
                 "Workload identity",
+                true,
             ),
             (
                 "Logged in using Amazon Bedrock API key",
                 SignInMethod::AmazonBedrockApiKey,
                 "Amazon Bedrock API key",
+                false,
             ),
             (
                 "Logged in using Amazon Bedrock AWS access keys",
                 SignInMethod::AmazonBedrockAccessKeys,
                 "Amazon Bedrock AWS access keys",
+                false,
             ),
         ] {
             let status =
                 SignInStatus::from_codex_text(&format!("\n{output}\n")).expect("a method is read");
             assert_eq!(status, SignInStatus::from(method), "{output}");
             assert_eq!(status.account().as_deref(), Some(account), "{output}");
+            assert_eq!(method.uses_codex_backend(), served, "{output}");
         }
     }
 

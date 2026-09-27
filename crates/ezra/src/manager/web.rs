@@ -58,7 +58,7 @@ impl InitialData {
             agents: Some(AgentStatus::gather_all(app).await),
             folders: app.folder_statuses().await.ok(),
             clones: Some(app.clones.statuses()),
-            remote_control: Some(app.remote_control.overview(&app.projects.0)),
+            remote_control: Some(app.remote_control_overview()),
         }
     }
 
@@ -171,6 +171,7 @@ mod tests {
     use crate::manager::agents::Agent;
     use crate::manager::api::test_support::{ResponseExt, TestManager};
     use crate::manager::auth::SESSION_COOKIE;
+    use crate::manager::remote_control::ServerState;
 
     fn cache_control(headers: &HeaderMap) -> Option<&str> {
         headers
@@ -206,6 +207,12 @@ mod tests {
         assert!(signed_in.session.authenticated);
         assert_eq!(signed_in.agents.map(|agents| agents.len()), Some(2));
         assert_eq!(signed_in.folders, Some(Vec::new()));
+        assert_eq!(
+            signed_in
+                .remote_control
+                .map(|overview| overview.codex.state),
+            Some(ServerState::Waiting)
+        );
     }
 
     #[test]

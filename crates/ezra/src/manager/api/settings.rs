@@ -86,6 +86,7 @@ pub async fn codex(_: Session, State(state): State<AppState>) -> Json<CodexSetti
     operation_id = "updateCodexSettings",
     tag = "agents",
     summary = "Change Codex settings",
+    description = "Saves the settings, restarting Codex's remote control when they change.",
     request_body = CodexSettingsBody,
     responses(
         (status = 200, description = "Saved", body = CodexSettingsBody),
@@ -104,6 +105,7 @@ pub async fn update_codex(
         })
         .await?;
     state.events.publish(Topic::CodexSettings);
+    state.codex_remote.supervision.reconsider();
     Ok(Json(body))
 }
 

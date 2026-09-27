@@ -75,7 +75,7 @@ pub(super) mod tests {
     const WEBSOCKET_URL: &str = "wss://chatgpt.com/backend-api/wham/remote/control/server";
 
     /// The warning Codex logs when the relay connection fails, as its stderr prints it.
-    fn relay_warning(error: &str, error_kind: &str) -> String {
+    pub fn relay_warning(error: &str, error_kind: &str) -> String {
         format!(
             "2026-09-26T16:51:29.504163Z  WARN {TARGET}: failed to connect to app-server remote \
              control websocket websocket_url={WEBSOCKET_URL} \

@@ -18,6 +18,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval, sleep, timeout};
 use utoipa::ToSchema;
 
 use super::agents::Agent;
+use super::codex_remote::CodexRemoteStatus;
 use super::events::{Events, Topic};
 use super::folders::Folder;
 use super::login::AgentCli;
@@ -188,7 +189,7 @@ impl ClaudeOptions {
 pub enum ServerState {
     /// Turned off in the settings.
     Off,
-    /// Waiting for Claude Code to be installed and signed in.
+    /// Waiting for the agent to be installed and signed in.
     #[default]
     Waiting,
     /// Started, not connected yet.
@@ -313,6 +314,8 @@ pub struct RemoteControlOverview {
     pub projects: RemoteControlStatus,
     /// The servers for folders in /projects, by folder name.
     pub folders: BTreeMap<String, RemoteControlStatus>,
+    /// The server that serves this box to the ChatGPT app.
+    pub codex: CodexRemoteStatus,
 }
 
 /// The shared handle the API reads statuses from and signals changes through.
@@ -356,7 +359,7 @@ impl RemoteControl {
         .is_ok()
     }
 
-    pub fn overview(&self, projects: &Path) -> RemoteControlOverview {
+    pub fn overview(&self, projects: &Path, codex: CodexRemoteStatus) -> RemoteControlOverview {
         self.servers.read(|servers| RemoteControlOverview {
             device: self.device.clone(),
             projects: servers.get(projects).cloned().unwrap_or_default(),
@@ -368,6 +371,7 @@ impl RemoteControl {
                     Some((name.to_owned(), status.clone()))
                 })
                 .collect(),
+            codex,
         })
     }
 
@@ -1983,7 +1987,7 @@ esac"#,
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
         wait_for(&state, ServerState::Running).await;
         wait_in(&state, &app, ServerState::Running).await;
-        let overview = state.remote_control.overview(&state.projects.0);
+        let overview = state.remote_control_overview();
         assert_eq!(overview.projects.state, ServerState::Running);
         assert_eq!(
             overview

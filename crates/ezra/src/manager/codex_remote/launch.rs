@@ -49,8 +49,9 @@ pub struct CodexLaunch {
     pub projects: PathBuf,
     pub sandbox: CodexSandbox,
     pub approvals: CodexApprovals,
-    /// How Codex is signed in. Another method is a different launch.
-    pub sign_in: SignInMethod,
+    /// How Codex is signed in, absent for a method this build does not know. Another method is a
+    /// different launch.
+    pub sign_in: Option<SignInMethod>,
     pub managed_daemon: bool,
     pub log: ServerLog,
 }
@@ -209,8 +210,7 @@ mod tests {
     use nix::unistd::Pid;
 
     use super::*;
-    use crate::manager::api::test_support::{TestManager, wait_until};
-    use crate::manager::processes::Process;
+    use crate::manager::api::test_support::{PidExt, TestManager};
 
     impl CodexLaunch {
         /// A launch of the agent's installed fake `codex`, with the test manager's directories.
@@ -235,7 +235,7 @@ mod tests {
                 projects,
                 sandbox: CodexSandbox::default(),
                 approvals: CodexApprovals::default(),
-                sign_in: SignInMethod::ChatGpt,
+                sign_in: Some(SignInMethod::ChatGpt),
                 managed_daemon: true,
                 log,
             }
@@ -244,6 +244,7 @@ mod tests {
 
     const PROBE: ServerBudget = ServerBudget {
         probe: Duration::from_millis(300),
+        readiness: Duration::ZERO,
         drain: Duration::ZERO,
         force: Duration::ZERO,
         request: Duration::ZERO,
@@ -365,7 +366,11 @@ mod tests {
                 ..newer.clone()
             },
             CodexLaunch {
-                sign_in: SignInMethod::AccessToken,
+                sign_in: Some(SignInMethod::AccessToken),
+                ..newer.clone()
+            },
+            CodexLaunch {
+                sign_in: None,
                 ..newer.clone()
             },
             CodexLaunch {
@@ -465,14 +470,9 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::TimedOut);
             let probes = fs::read_to_string(codex_home.join("probes")).expect("pids are written");
             for probe in probes.lines() {
-                let probe =
-                    Process::with_id(Pid::from_raw(probe.parse().expect("the pid is a number")));
-                wait_until(
-                    Duration::from_secs(10),
-                    || probe.is_running(),
-                    |running| !running,
-                )
-                .await;
+                Pid::from_raw(probe.parse().expect("the pid is a number"))
+                    .wait_until_gone()
+                    .await;
             }
         }
         assert_eq!(manager.fake_cli_runs(Agent::Codex).len(), 2);

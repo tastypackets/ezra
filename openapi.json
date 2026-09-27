@@ -161,6 +161,7 @@
           "agents"
         ],
         "summary": "Change Codex settings",
+        "description": "Saves the settings, restarting Codex's remote control when they change.",
         "operationId": "updateCodexSettings",
         "requestBody": {
           "content": {
@@ -1375,11 +1376,43 @@
         "operationId": "getRemoteControl",
         "responses": {
           "200": {
-            "description": "The servers for /projects and its folders",
+            "description": "Claude Code's servers for /projects and its folders, and Codex's server",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RemoteControlOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/remote-control/codex/log": {
+      "get": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Get the end of Codex's remote control log",
+        "description": "Returns up to the last 200 lines Codex printed while serving the ChatGPT app.",
+        "operationId": "getCodexRemoteControlLog",
+        "responses": {
+          "200": {
+            "description": "The last lines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerLogTail"
                 }
               }
             }
@@ -1728,6 +1761,19 @@
           "never"
         ]
       },
+      "CodexProblem": {
+        "type": "string",
+        "description": "A known reason Codex does not serve this box to the ChatGPT app.",
+        "enum": [
+          "mfa_required",
+          "not_chatgpt",
+          "signed_out",
+          "not_allowed",
+          "socket_in_use",
+          "relay_unavailable",
+          "unsupported_version"
+        ]
+      },
       "CodexRemoteSettings": {
         "type": "object",
         "description": "How Codex serves this box to the ChatGPT app.",
@@ -1751,6 +1797,68 @@
             "$ref": "#/components/schemas/CodexSandbox",
             "description": "The sandbox Codex runs commands in.",
             "default": "danger-full-access"
+          }
+        }
+      },
+      "CodexRemoteStatus": {
+        "type": "object",
+        "description": "The manager's view of Codex's remote control server.",
+        "required": [
+          "state",
+          "restarts"
+        ],
+        "properties": {
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The line that named the problem or the last output before a stop, until Codex connects."
+          },
+          "problem": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CodexProblem",
+                "description": "What keeps Codex from serving the ChatGPT app, absent when nothing known does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "relay": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RelayState",
+                "description": "Whether Codex is connected to ChatGPT, absent while the server does not answer."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restarts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Unexpected stops since the manager started.",
+            "minimum": 0
+          },
+          "server_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the ChatGPT app lists this box under, absent while the server does not answer."
+          },
+          "server_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Codex version the server runs, absent while none runs."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ServerState"
           }
         }
       },
@@ -2176,6 +2284,16 @@
           }
         }
       },
+      "RelayState": {
+        "type": "string",
+        "description": "Whether Codex is connected to ChatGPT.",
+        "enum": [
+          "disabled",
+          "connecting",
+          "connected",
+          "errored"
+        ]
+      },
       "ReleaseChannel": {
         "type": "string",
         "description": "Which Claude Code releases to install: `latest` gets every release as soon as it ships,\n`stable` is about a week behind and skips releases with major regressions.",
@@ -2189,9 +2307,14 @@
         "description": "Every Remote Control server, and where the Claude app lists them.",
         "required": [
           "projects",
-          "folders"
+          "folders",
+          "codex"
         ],
         "properties": {
+          "codex": {
+            "$ref": "#/components/schemas/CodexRemoteStatus",
+            "description": "The server that serves this box to the ChatGPT app."
+          },
           "device": {
             "type": [
               "string",

@@ -13,7 +13,7 @@ function overview(
   projects: RemoteControlStatus,
   folders: Record<string, RemoteControlStatus> = {},
 ): RemoteControlOverview {
-  return { device: "box", projects, folders };
+  return { device: "box", projects, folders, codex: { state: "waiting", restarts: 0 } };
 }
 
 describe("remoteControlSummary", () => {

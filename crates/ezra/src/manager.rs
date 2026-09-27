@@ -128,9 +128,11 @@ async fn serve() -> Result<(), ManagerError> {
     tokio::spawn(Arc::clone(&state.agent_checks).check_regularly());
     tokio::spawn(state.clone().prepare_git_at_start());
     tokio::spawn(state.clone().supervise_remote_control());
+    tokio::spawn(state.clone().supervise_codex_remote());
     tokio::spawn(state.clone().describe_folders_regularly());
     tokio::spawn(handle.clone().shut_down_on_signal(state.clone()));
     let remote_control = Arc::clone(&state.remote_control);
+    let codex_remote = Arc::clone(&state.codex_remote);
     let app = state.into_router(web_directory);
     let served =
         axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
@@ -138,12 +140,19 @@ async fn serve() -> Result<(), ManagerError> {
             .serve(app.into_make_service())
             .await
             .map_err(|source| ManagerError::Serve { port, source });
-    if !remote_control
-        .supervision
-        .wait_until_stopped(RemoteControl::LONGEST_STOP)
-        .await
-    {
+    let (claude_stopped, codex_stopped) = tokio::join!(
+        remote_control
+            .supervision
+            .wait_until_stopped(RemoteControl::LONGEST_STOP),
+        codex_remote
+            .supervision
+            .wait_until_stopped(codex_remote.budget.longest_stop()),
+    );
+    if !claude_stopped {
         tracing::warn!("Claude Remote Control did not stop in time");
+    }
+    if !codex_stopped {
+        tracing::warn!("Codex remote control did not stop in time");
     }
     served
 }
@@ -180,8 +189,8 @@ impl Default for ManagerOptions {
 impl FromEnvironment for ManagerOptions {}
 
 trait HandleExt {
-    /// On SIGTERM or Ctrl-C, stops Remote Control, ends event streams and gives open connections a
-    /// few seconds.
+    /// On SIGTERM or Ctrl-C, stops both agents' remote control, ends event streams and gives open
+    /// connections a few seconds.
     async fn shut_down_on_signal(self, state: AppState);
 }
 
@@ -195,6 +204,7 @@ impl HandleExt for Handle<SocketAddr> {
             _ = tokio::signal::ctrl_c() => {}
         }
         state.remote_control.supervision.begin_shut_down();
+        state.codex_remote.supervision.begin_shut_down();
         state.events.close();
         self.graceful_shutdown(Some(SHUTDOWN_GRACE_PERIOD));
     }

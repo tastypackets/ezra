@@ -328,6 +328,18 @@ impl ServerLog {
         Ok(lines.into_iter().skip(skipped).collect())
     }
 
+    /// Moves `server.log` over `server.log.1` once it is larger than `largest` bytes.
+    pub async fn rotate_when_larger_than(&self, largest: u64) -> io::Result<()> {
+        let log = self.debug_file();
+        match tokio::fs::metadata(&log).await {
+            Ok(metadata) if metadata.len() > largest => {
+                tokio::fs::rename(&log, self.0.join(ROTATED_LOG_FILE)).await
+            }
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    }
+
     /// Creates the directory and removes session logs older than a week, then the oldest ones
     /// past the size limit.
     pub async fn prepare(&self) -> io::Result<()> {
@@ -504,7 +516,7 @@ impl AppState {
     pub fn reconsider_remote(&self, agent: Agent) {
         match agent {
             Agent::Claude => self.remote_control.supervision.reconsider(),
-            Agent::Codex => {}
+            Agent::Codex => self.codex_remote.supervision.reconsider(),
         }
     }
 
@@ -556,10 +568,14 @@ mod tests {
     async fn each_agent_reconsiders_only_its_own_remote_control() {
         let manager = TestManager::new();
         let claude = manager.state.remote_control.supervision.changes.subscribe();
+        let mut codex = manager.state.codex_remote.supervision.changes.subscribe();
         manager.state.reconsider_remote(Agent::Codex);
         assert!(!claude.has_changed().expect("the sender is alive"));
+        assert!(codex.has_changed().expect("the sender is alive"));
+        codex.mark_unchanged();
         manager.state.reconsider_remote(Agent::Claude);
         assert!(claude.has_changed().expect("the sender is alive"));
+        assert!(!codex.has_changed().expect("the sender is alive"));
     }
 
     #[tokio::test]
@@ -688,6 +704,36 @@ mod tests {
         assert_eq!(tail.len(), LOG_TAIL_LINES);
         assert_eq!(tail.first().map(String::as_str), Some("line 50"));
         assert_eq!(tail.last().map(String::as_str), Some("line 249"));
+    }
+
+    #[tokio::test]
+    async fn a_log_past_its_size_moves_over_the_rotated_one() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let log = ServerLog(directory.path().to_path_buf());
+        let rotated = directory.path().join(ROTATED_LOG_FILE);
+        log.rotate_when_larger_than(4)
+            .await
+            .expect("a missing log needs no rotation");
+        fs::write(log.debug_file(), "four").expect("log is written");
+        fs::write(&rotated, "older").expect("rotated log is written");
+
+        log.rotate_when_larger_than(4)
+            .await
+            .expect("the log is checked");
+        assert_eq!(
+            fs::read_to_string(log.debug_file()).expect("the log stays"),
+            "four"
+        );
+
+        fs::write(log.debug_file(), "fives").expect("log grows");
+        log.rotate_when_larger_than(4)
+            .await
+            .expect("the log is rotated");
+        assert!(!log.debug_file().exists());
+        assert_eq!(
+            fs::read_to_string(&rotated).expect("the rotated log is kept"),
+            "fives"
+        );
     }
 
     #[tokio::test]

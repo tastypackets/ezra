@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -12,15 +13,18 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use futures_util::{Stream, StreamExt};
 use http_body_util::BodyExt;
+use nix::unistd::Pid;
 use serde::de::DeserializeOwned;
 use tokio::time::{Instant, sleep, timeout};
 use tower::ServiceExt;
 
 use super::session::SessionStatus;
 use crate::manager::agents::{Agent, InstallPaths, TlsVerification};
+use crate::manager::codex_remote::{CodexRemote, ExpectedPeer, ServerBudget};
 use crate::manager::events::{ManagerEvent, Topic};
 use crate::manager::folders::ProjectsDirectory;
 use crate::manager::git::GitTools;
+use crate::manager::processes::Process;
 use crate::manager::settings::Settings;
 use crate::manager::state::AppState;
 use crate::manager::status::AgentStatus;
@@ -70,6 +74,21 @@ impl TestManager {
             settings_path,
             directory,
         }
+    }
+
+    /// Runs Codex's server within `budget` and expects `peer` to answer on its control socket.
+    pub fn with_codex(mut self, budget: ServerBudget, peer: ExpectedPeer) -> Self {
+        self.state.codex_remote = Arc::new(CodexRemote::new(
+            self.state.events.clone(),
+            self.state.codex_remote.log.clone(),
+            budget,
+            peer,
+        ));
+        self.router = self
+            .state
+            .clone()
+            .into_router(self.directory.path().join("web"));
+        self
     }
 
     /// Makes `script` the agent's command, installed as version 9.9.9 outside the versions
@@ -271,6 +290,23 @@ impl<S: Stream<Item = ManagerEvent> + Unpin> EventStreamExt for S {
             }
         }
         topics
+    }
+}
+
+pub trait PidExt {
+    /// Waits until the process has exited, and fails the test after 10 s.
+    async fn wait_until_gone(self);
+}
+
+impl PidExt for Pid {
+    async fn wait_until_gone(self) {
+        let process = Process::with_id(self);
+        wait_until(
+            Duration::from_secs(10),
+            || process.is_running(),
+            |running| !running,
+        )
+        .await;
     }
 }
 

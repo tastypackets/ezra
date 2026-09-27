@@ -85,7 +85,7 @@ impl CodexServerRun {
     }
 
     /// The server's pid until its exit is collected.
-    fn leader(&self) -> Option<Pid> {
+    pub fn leader(&self) -> Option<Pid> {
         let id = self.child.id()?;
         Some(Pid::from_raw(i32::try_from(id).ok()?))
     }
@@ -119,26 +119,26 @@ impl LineWatcher for ProblemLines {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::fs;
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    use nix::errno::Errno;
     use nix::sys::wait::{Id, WaitPidFlag, waitid};
     use nix::unistd::getpgid;
     use tokio::time::{Instant, sleep};
 
     use super::*;
     use crate::manager::agents::Agent;
-    use crate::manager::api::test_support::{TestManager, wait_until};
+    use crate::manager::api::test_support::{PidExt, TestManager, wait_until};
     use crate::manager::codex_remote::problem::tests::{coloured, mfa_warning};
     use crate::manager::processes::Process;
 
     const WAIT: Duration = Duration::from_secs(10);
     const BUDGET: ServerBudget = ServerBudget {
         probe: Duration::from_secs(1),
+        readiness: Duration::from_secs(1),
         drain: Duration::from_millis(500),
         force: Duration::from_millis(500),
         request: Duration::from_secs(1),
@@ -189,7 +189,7 @@ mod tests {
             .count()
     }
 
-    fn has_setsid() -> bool {
+    pub fn has_setsid() -> bool {
         let found = Command::new("setsid")
             .arg("--version")
             .stdout(Stdio::null())
@@ -201,7 +201,9 @@ mod tests {
         found
     }
 
-    const LEFTOVER: &str = "setsid sleep 60 > /dev/null 2>&1 &\necho $! > \"$CODEX_HOME/leftover\"";
+    /// Starts a helper in a session of its own, and writes its pid to `$CODEX_HOME/leftover`.
+    pub const LEFTOVER: &str =
+        "setsid sleep 60 > /dev/null 2>&1 &\necho $! > \"$CODEX_HOME/leftover\"";
 
     /// A server that leaves `LEFTOVER` running and fails once `$CODEX_HOME/exit` exists.
     fn exits_when_told() -> String {
@@ -219,10 +221,6 @@ mod tests {
     fn pid_in(launch: &CodexLaunch, name: &str) -> Pid {
         let text = fs::read_to_string(launch.codex_home.join(name)).expect("pid is written");
         Pid::from_raw(text.trim().parse().expect("the pid is a number"))
-    }
-
-    async fn wait_until_gone(pid: Pid) {
-        wait_until(WAIT, || kill(pid, None) == Err(Errno::ESRCH), |gone| *gone).await;
     }
 
     #[tokio::test]
@@ -312,7 +310,7 @@ mod tests {
 
         run.stop(&BUDGET).await.expect("the server is reaped");
 
-        wait_until_gone(leftover).await;
+        leftover.wait_until_gone().await;
     }
 
     #[tokio::test]
@@ -328,7 +326,7 @@ mod tests {
         let exit = run.child.wait().await;
         let failure = run.finish(exit).await;
 
-        wait_until_gone(leftover).await;
+        leftover.wait_until_gone().await;
         assert_eq!(
             failure,
             Failure {
@@ -365,7 +363,7 @@ mod tests {
         let exit = run.child.wait().await;
         run.finish(exit).await;
 
-        wait_until_gone(leftover).await;
+        leftover.wait_until_gone().await;
     }
 
     #[tokio::test]

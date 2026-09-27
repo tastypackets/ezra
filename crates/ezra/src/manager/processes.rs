@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use nix::sys::resource::{Resource, getrlimit, rlim_t, setrlimit};
-#[cfg(test)]
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
@@ -165,7 +164,6 @@ impl ProcessFamily {
 
     /// Kills the members still running with the start time they had when read, never this
     /// process. Blocks.
-    #[cfg(test)]
     pub fn kill_survivors(&self) {
         let own = Pid::this();
         for id in self

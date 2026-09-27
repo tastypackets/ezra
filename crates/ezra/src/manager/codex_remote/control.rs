@@ -168,52 +168,61 @@ impl ControlRequest for StatusRead {
 }
 
 /// Turns the relay on, for this server's lifetime only when `ephemeral`.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct Enable {
     pub ephemeral: bool,
 }
 
+#[cfg(test)]
 impl ControlRequest for Enable {
     const METHOD: &'static str = "remoteControl/enable";
     type Response = RelayWire;
 }
 
 /// Turns the relay off, for this server's lifetime only when `ephemeral`.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct Disable {
     pub ephemeral: bool,
 }
 
+#[cfg(test)]
 impl ControlRequest for Disable {
     const METHOD: &'static str = "remoteControl/disable";
     type Response = RelayWire;
 }
 
 /// Asks for a code a phone pairs with.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingStart {
     pub manual_code: bool,
 }
 
+#[cfg(test)]
 impl ControlRequest for PairingStart {
     const METHOD: &'static str = "remoteControl/pairing/start";
     type Response = PairingWire;
 }
 
 /// Asks whether a phone claimed a pairing code.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingStatus {
     pub pairing_code: String,
 }
 
+#[cfg(test)]
 impl ControlRequest for PairingStatus {
     const METHOD: &'static str = "remoteControl/pairing/status";
     type Response = PairingStatusWire;
 }
 
 /// Lists one page of the paired phones.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientList {
@@ -222,12 +231,14 @@ pub struct ClientList {
     pub cursor: Option<String>,
 }
 
+#[cfg(test)]
 impl ControlRequest for ClientList {
     const METHOD: &'static str = "remoteControl/client/list";
     type Response = ClientPageWire;
 }
 
 /// Removes a paired phone.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientRevoke {
@@ -235,51 +246,60 @@ pub struct ClientRevoke {
     pub client_id: String,
 }
 
+#[cfg(test)]
 impl ControlRequest for ClientRevoke {
     const METHOD: &'static str = "remoteControl/client/revoke";
     type Response = IgnoredAny;
 }
 
 /// Reads how the server is signed in.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct AccountRead {}
 
+#[cfg(test)]
 impl ControlRequest for AccountRead {
     const METHOD: &'static str = "account/read";
     type Response = AccountWire;
 }
 
 /// Lists one page of the chats the server has loaded.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct LoadedThreads {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
+#[cfg(test)]
 impl ControlRequest for LoadedThreads {
     const METHOD: &'static str = "thread/loaded/list";
     type Response = ThreadPageWire;
 }
 
 /// Reads one chat.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadRead {
     pub thread_id: ThreadId,
 }
 
+#[cfg(test)]
 impl ControlRequest for ThreadRead {
     const METHOD: &'static str = "thread/read";
     type Response = ThreadReadWire;
 }
 
 /// Stops this connection following a chat.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadUnsubscribe {
     pub thread_id: ThreadId,
 }
 
+#[cfg(test)]
 impl ControlRequest for ThreadUnsubscribe {
     const METHOD: &'static str = "thread/unsubscribe";
     type Response = UnsubscribeWire;
@@ -354,6 +374,7 @@ pub enum RelayStatusWire {
     Errored,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingWire {
@@ -364,11 +385,13 @@ pub struct PairingWire {
     pub expires_at: i64,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct PairingStatusWire {
     pub claimed: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientPageWire {
@@ -377,6 +400,7 @@ pub struct ClientPageWire {
 }
 
 /// A paired phone.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientWire {
@@ -391,6 +415,7 @@ pub struct ClientWire {
     pub last_seen_at: Option<i64>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountWire {
@@ -400,6 +425,7 @@ pub struct AccountWire {
     pub requires_openai_auth: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type")]
 pub enum AccountKindWire {
@@ -411,6 +437,7 @@ pub enum AccountKindWire {
     AmazonBedrock,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadPageWire {
@@ -418,6 +445,7 @@ pub struct ThreadPageWire {
     pub next_cursor: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ThreadReadWire {
     pub thread: ThreadWire,
@@ -439,11 +467,13 @@ pub enum ThreadStatusWire {
     Active,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct UnsubscribeWire {
     pub status: UnsubscribeStatus,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UnsubscribeStatus {
@@ -754,16 +784,16 @@ mod tests {
 
     use super::*;
     use crate::manager::api::test_support::wait_until;
-    use crate::manager::codex_remote::fake::{FakeControlServer, Reply, Seen};
+    use crate::manager::codex_remote::fake::{ENVIRONMENT, FakeControlServer, Reply, Seen};
 
     const WAIT: Duration = Duration::from_secs(10);
     const BUDGET: ServerBudget = ServerBudget {
         probe: Duration::ZERO,
+        readiness: Duration::ZERO,
         drain: Duration::ZERO,
         force: Duration::ZERO,
         request: Duration::from_secs(5),
     };
-    const ENVIRONMENT: &str = "environment-1";
     const ENABLE_FIRST: &str = "remote control pairing requires remote control to be enabled";
 
     type Events = mpsc::UnboundedReceiver<ControlEvent>;
@@ -808,29 +838,12 @@ mod tests {
         (home, fake, client, events)
     }
 
-    fn relay_params(status: &str) -> Value {
-        json!({
-            "status": status,
-            "serverName": "ezra-dev",
-            "installationId": "installation-1",
-            "environmentId": ENVIRONMENT,
-        })
-    }
-
     fn relay(status: RelayStatusWire) -> RelayWire {
         RelayWire {
             status,
             server_name: "ezra-dev".to_owned(),
             environment_id: Some(ENVIRONMENT.to_owned()),
         }
-    }
-
-    fn status_push(status: &str) -> Value {
-        json!({
-            "method": "remoteControl/status/changed",
-            "params": relay_params(status),
-            "emittedAtMs": 1_790_000_000_000_i64,
-        })
     }
 
     fn thread_params(id: &str, status: Value) -> Value {
@@ -922,8 +935,11 @@ mod tests {
     #[tokio::test]
     async fn status_pushes_before_initialized_are_delivered() {
         let (home, fake) = served();
-        fake.push_after("initialize", status_push("connecting"));
-        fake.push_after("initialize", status_push("connected"));
+        fake.push_after(
+            "initialize",
+            FakeControlServer::status_changed("connecting"),
+        );
+        fake.push_after("initialize", FakeControlServer::status_changed("connected"));
 
         let (_client, mut events) = ControlClient::connect(
             &ControlSocket::of(home.path()),
@@ -1036,15 +1052,15 @@ mod tests {
         let (_home, fake, client, _events) = connected().await;
         fake.reply(
             "remoteControl/status/read",
-            [Reply::Result(relay_params("errored"))],
+            [Reply::Result(FakeControlServer::relay("errored"))],
         );
         fake.reply(
             "remoteControl/enable",
-            [Reply::Result(relay_params("connecting"))],
+            [Reply::Result(FakeControlServer::relay("connecting"))],
         );
         fake.reply(
             "remoteControl/disable",
-            [Reply::Result(relay_params("disabled"))],
+            [Reply::Result(FakeControlServer::relay("disabled"))],
         );
         let accounts = [
             (
@@ -1394,7 +1410,7 @@ mod tests {
         let (_home, fake, client, mut events) = connected().await;
         fake.reply(
             "remoteControl/status/read",
-            [Reply::Result(relay_params("connected"))],
+            [Reply::Result(FakeControlServer::relay("connected"))],
         );
 
         fake.push(json!({
@@ -1445,7 +1461,7 @@ mod tests {
         let followed = [
             (
                 "remoteControl/status/changed",
-                relay_params("errored"),
+                FakeControlServer::relay("errored"),
                 ControlNotification::StatusChanged(relay(RelayStatusWire::Errored)),
             ),
             (
@@ -1525,7 +1541,7 @@ mod tests {
         );
         fake.reply(
             "remoteControl/status/read",
-            [Reply::Result(relay_params("connected"))],
+            [Reply::Result(FakeControlServer::relay("connected"))],
         );
 
         let (read, status) = tokio::join!(
@@ -1550,7 +1566,7 @@ mod tests {
                     json!({"id": 2, "method": "thread/read", "params": {"threadId": "thread-1"}})
                 ),
                 Seen::Received(json!({"id": 3, "method": "remoteControl/status/read"})),
-                Seen::Sent(json!({"id": 3, "result": relay_params("connected")})),
+                Seen::Sent(json!({"id": 3, "result": FakeControlServer::relay("connected")})),
                 Seen::Sent(json!({"id": 2, "result": thread_answer})),
             ]
         );
@@ -1574,8 +1590,14 @@ mod tests {
         fake.reply(
             "remoteControl/status/read",
             [
-                Reply::Late(Duration::from_millis(1300), relay_params("errored")),
-                Reply::Late(Duration::from_millis(600), relay_params("connected")),
+                Reply::Late(
+                    Duration::from_millis(1300),
+                    FakeControlServer::relay("errored"),
+                ),
+                Reply::Late(
+                    Duration::from_millis(600),
+                    FakeControlServer::relay("connected"),
+                ),
             ],
         );
         let started = Instant::now();
@@ -1597,8 +1619,8 @@ mod tests {
             [
                 Seen::Received(json!({"id": 2, "method": "remoteControl/status/read"})),
                 Seen::Received(json!({"id": 3, "method": "remoteControl/status/read"})),
-                Seen::Sent(json!({"id": 2, "result": relay_params("errored")})),
-                Seen::Sent(json!({"id": 3, "result": relay_params("connected")})),
+                Seen::Sent(json!({"id": 2, "result": FakeControlServer::relay("errored")})),
+                Seen::Sent(json!({"id": 3, "result": FakeControlServer::relay("connected")})),
             ]
         );
     }
