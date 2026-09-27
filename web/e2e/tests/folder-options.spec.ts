@@ -16,13 +16,15 @@ test.describe("with Claude Code installed", () => {
       await page.getByRole("menuitem", { name: "Claude Code options" }).click();
       const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
       await expect(dialog).toContainText("Empty fields follow Settings.");
-      await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
+      const followSettings = dialog.getByRole("radio", { name: "Settings default" });
+      await expect(followSettings).toBeChecked();
+      await expect(followSettings).toHaveAccessibleDescription("Their own worktree");
       const mode = dialog.getByRole("combobox", { name: "Permission mode" });
       const capacity = dialog.getByRole("spinbutton", { name: "Sessions at once" });
       await expect(mode).toHaveAttribute("placeholder", "Default: auto");
       await expect(capacity).toHaveAttribute("placeholder", "Default: Claude Code's");
 
-      await dialog.getByRole("radio", { name: /Their own worktree/ }).click();
+      await dialog.getByRole("radio", { name: "The folder" }).click();
       await mode.fill("plan");
       await page.keyboard.press("Escape");
       await capacity.fill("2");
@@ -34,7 +36,21 @@ test.describe("with Claude Code installed", () => {
       expect(await folders.json()).toContainEqual(
         expect.objectContaining({
           name: folder,
-          claude: { spawn: "worktree", permission_mode: "plan", capacity: 2 },
+          claude: { spawn: "same-dir", permission_mode: "plan", capacity: 2 },
+        }),
+      );
+
+      await row.getByRole("button", { name: `More ${folder} actions` }).click();
+      await page.getByRole("menuitem", { name: "Claude Code options" }).click();
+      await expect(dialog.getByRole("radio", { name: "The folder" })).toBeChecked();
+      await followSettings.click();
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog).toBeHidden();
+      const followed = await page.request.get("api/v1/folders");
+      expect(await followed.json()).toContainEqual(
+        expect.objectContaining({
+          name: folder,
+          claude: { permission_mode: "plan", capacity: 2 },
         }),
       );
     } finally {
@@ -51,10 +67,10 @@ test.describe("with Claude Code installed", () => {
       await row.getByRole("button", { name: `More ${folder} actions` }).click();
       await page.getByRole("menuitem", { name: "Claude Code options" }).click();
       const dialog = page.getByRole("dialog", { name: `Claude Code in ${folder}` });
-      await expect(dialog.getByRole("radio", { name: /The folder/ })).toBeChecked();
-      const inWorktree = dialog.getByRole("radio", { name: /Their own worktree/ });
-      await expect(inWorktree).toBeDisabled();
-      await expect(dialog).toContainText("Needs a git repository.");
+      await expect(dialog).toContainText(
+        "Sessions work in the folder, since it is not a git repository.",
+      );
+      await expect(dialog.getByRole("radio")).toHaveCount(0);
 
       const refused = await page.request.put(`api/v1/folders/${folder}/claude-options`, {
         data: { spawn: "worktree" },

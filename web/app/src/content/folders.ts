@@ -12,7 +12,6 @@ export const FOLDERS_DESCRIPTIONS = {
   more_actions: (folder: string) => `More ${folder} actions`,
   open: (folder: string) => `Open ${folder} on claude.ai/code`,
   claude_options: "Claude Code options",
-  worktree_needs_repository: "Needs a git repository.",
   delete: "Delete",
   cloning: "Cloning",
   clone_failed: "Could not clone",
@@ -40,14 +39,16 @@ export const CLONE_DESCRIPTIONS = {
   submit: "Clone",
 } as const;
 
+export const SPAWN_MODE_ORDER: readonly SpawnMode[] = ["worktree", "same-dir"];
+
 export const SPAWN_MODES: Record<SpawnMode, { title: string; description: string }> = {
-  "same-dir": {
-    title: "The folder",
-    description: "Sessions share the folder and its branch.",
-  },
   worktree: {
     title: "Their own worktree",
     description: "Each new session gets a branch in .claude/worktrees, except the first.",
+  },
+  "same-dir": {
+    title: "The folder",
+    description: "Sessions share the folder and its branch.",
   },
 };
 
@@ -55,6 +56,8 @@ export const CLAUDE_OPTIONS_DESCRIPTIONS = {
   title: (folder: string) => `Claude Code in ${folder}`,
   description: "Empty fields follow Settings.",
   spawn: "New sessions work in",
+  spawn_default: "Settings default",
+  spawn_in_folder: "Sessions work in the folder, since it is not a git repository.",
   permission_mode: "Permission mode",
   permission_mode_default: (mode: string) => `Default: ${mode}`,
   permission_mode_unknown: "Choose a listed mode, or leave it empty.",

@@ -464,7 +464,7 @@ impl AppState {
             let claude = &mut settings.agents.claude;
             let mut choice = claude.folder_choice(folder);
             change(&mut choice);
-            if choice.options.spawn == SpawnMode::Worktree && folder.git.is_none() {
+            if choice.options.spawn == Some(SpawnMode::Worktree) && folder.git.is_none() {
                 return Err(FolderChoiceError::NotARepository);
             }
             self.projects

@@ -10,6 +10,8 @@ export const SETTINGS_DESCRIPTIONS = {
     "Serves /projects, and the folders you choose, while Claude Code is signed in.",
   serve_repositories: "Serve new repositories",
   serve_repositories_hint: "Repositories added to /projects start with their switch on.",
+  spawn: "New sessions in repositories work in",
+  spawn_hint: "A folder's Claude Code options can choose otherwise.",
   permission_mode: "Permission mode",
   permission_mode_hint: "New sessions from the Claude app start in this mode.",
   permission_mode_unknown: "Choose one of the listed modes.",

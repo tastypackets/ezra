@@ -98,6 +98,7 @@ mod tests {
 
     use super::super::test_support::{ResponseExt, TestManager};
     use super::*;
+    use crate::manager::remote_control::SpawnMode;
     use crate::manager::settings::Settings;
 
     const PATH: &str = "/api/v1/agents/claude/settings";
@@ -139,6 +140,7 @@ mod tests {
                 permission_mode: "plan".to_owned(),
                 capacity: Some(2),
                 serve_repositories: true,
+                spawn: SpawnMode::Worktree,
             }
         );
         let on_disk = Settings::load(&manager.settings_path).expect("settings load");

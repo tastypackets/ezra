@@ -55,6 +55,10 @@ test.describe("with Claude Code installed", () => {
       claude.getByRole("switch", { name: "Serve new repositories" }),
     ).toHaveAccessibleDescription("Repositories added to /projects start with their switch on.");
     await expect(
+      claude.getByRole("radiogroup", { name: "New sessions in repositories work in" }),
+    ).toHaveAccessibleDescription("A folder's Claude Code options can choose otherwise.");
+    await expect(claude.getByRole("radio", { name: "Their own worktree" })).toBeChecked();
+    await expect(
       claude.getByRole("combobox", { name: "Permission mode" }),
     ).toHaveAccessibleDescription("New sessions from the Claude app start in this mode.");
     await expect(
@@ -76,7 +80,9 @@ test.describe("with Claude Code installed", () => {
     await expect(capacity).toHaveValue("");
     await expect(capacity).toHaveAttribute("placeholder", "Claude Code's default");
 
+    const inFolder = claude.getByRole("radio", { name: "The folder" });
     await serve.setChecked(false);
+    await inFolder.click();
     await mode.fill("plan");
     await mode.press("Enter");
     await expect(mode).toHaveValue("plan");
@@ -88,6 +94,7 @@ test.describe("with Claude Code installed", () => {
 
     await page.reload();
     await expect(serve).not.toBeChecked();
+    await expect(inFolder).toBeChecked();
     await expect(mode).toHaveValue("acceptEdits");
     await expect(capacity).toHaveValue("2");
     await page.getByRole("link", { name: "Agents", exact: true }).click();
@@ -95,6 +102,7 @@ test.describe("with Claude Code installed", () => {
 
     await page.getByRole("link", { name: "Settings", exact: true }).click();
     await serve.setChecked(true);
+    await claude.getByRole("radio", { name: "Their own worktree" }).click();
     await mode.fill("auto");
     await page.keyboard.press("Escape");
     await capacity.fill("");

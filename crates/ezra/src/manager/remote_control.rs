@@ -104,6 +104,9 @@ pub struct RemoteControlSettings {
     /// Whether repositories that appear in /projects start with their switch on.
     #[schema(required = true)]
     pub serve_repositories: bool,
+    /// Where new sessions in repositories work, unless a folder chooses.
+    #[schema(required = true)]
+    pub spawn: SpawnMode,
 }
 
 impl RemoteControlSettings {
@@ -131,6 +134,7 @@ impl Default for RemoteControlSettings {
             permission_mode: "auto".to_owned(),
             capacity: None,
             serve_repositories: true,
+            spawn: SpawnMode::Worktree,
         }
     }
 }
@@ -158,8 +162,9 @@ impl SpawnMode {
 /// A folder's own Claude Code options. Absent ones follow the Settings page.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ClaudeOptions {
-    /// Where new sessions work, always `same-dir` outside a repository.
-    pub spawn: SpawnMode,
+    /// Where new sessions work. Outside a repository they always work in the folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn: Option<SpawnMode>,
     /// The permission mode for the folder's sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
@@ -1006,9 +1011,11 @@ impl AppState {
             let claude = &settings.agents.claude;
             (
                 claude.remote_control.clone(),
-                folder.map(|folder| claude.folder_choice(&folder)),
+                folder.map(|folder| (claude.folder_choice(&folder), folder.git.is_some())),
             )
         };
+        let (choice, in_repository) = choice.unzip();
+        let in_repository = in_repository.unwrap_or(false);
         if !settings.enabled || choice.as_ref().is_some_and(|choice| !choice.serve) {
             return Wanted::Off;
         }
@@ -1029,7 +1036,11 @@ impl AppState {
                 .config_directory(Agent::Claude)
                 .map(Path::to_path_buf),
             directory: directory.to_path_buf(),
-            spawn: options.spawn,
+            spawn: if in_repository {
+                options.spawn.unwrap_or(settings.spawn)
+            } else {
+                SpawnMode::SameDir
+            },
             log: self.remote_control.log(served),
             permission_mode: options.permission_mode.unwrap_or(settings.permission_mode),
             capacity: options.capacity.or(settings.capacity),
@@ -2460,10 +2471,17 @@ esac"#,
         wait_for(&state, ServerState::Running).await;
         wait_in(&state, &app, ServerState::Running).await;
 
+        let notes = state.projects.folder("notes");
+        fs::create_dir_all(&notes).expect("folder is created");
+        state
+            .change_folder_choice("notes", |choice| choice.serve = true)
+            .await
+            .expect("the choice is saved");
+        wait_in(&state, &notes, ServerState::Running).await;
         state
             .change_folder_choice("app", |choice| {
                 choice.options = ClaudeOptions {
-                    spawn: SpawnMode::Worktree,
+                    spawn: Some(SpawnMode::SameDir),
                     permission_mode: Some("plan".to_owned()),
                     capacity: Some(2),
                 };
@@ -2483,19 +2501,21 @@ esac"#,
                 .filter(|line| line.starts_with("app "))
                 .collect();
             if let [first, second] = app_starts[..] {
-                assert!(first.contains(&arguments("same-dir", "")), "{first}");
+                assert!(first.contains(&arguments("worktree", "")), "{first}");
                 assert!(first.contains("--permission-mode auto"), "{first}");
                 assert!(
-                    second.contains(&arguments("worktree", "--capacity 2 ")),
+                    second.contains(&arguments("same-dir", "--capacity 2 ")),
                     "{second}"
                 );
                 assert!(second.contains("--permission-mode plan"), "{second}");
-                let projects: Vec<&str> = started
-                    .lines()
-                    .filter(|line| line.starts_with("projects "))
-                    .collect();
-                assert_eq!(projects.len(), 1, "{started}");
-                assert!(!projects[0].contains("--capacity"), "{started}");
+                for plain in ["projects ", "notes "] {
+                    let starts: Vec<&str> = started
+                        .lines()
+                        .filter(|line| line.starts_with(plain))
+                        .collect();
+                    assert_eq!(starts.len(), 1, "{started}");
+                    assert!(starts[0].contains(&arguments("same-dir", "")), "{started}");
+                }
                 break;
             }
             assert!(Instant::now() < deadline, "started {started}");

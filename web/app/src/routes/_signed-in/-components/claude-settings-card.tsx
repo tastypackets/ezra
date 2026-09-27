@@ -19,13 +19,13 @@ import {
   FieldLabel,
   FieldLegend,
   FieldSet,
-  FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { RadioGroup } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { toastManager } from "@/components/ui/toast";
 import { AGENT_NAMES } from "@/content/agents";
+import { SPAWN_MODE_ORDER, SPAWN_MODES } from "@/content/folders";
 import {
   PERMISSION_MODE_NAMES,
   PERMISSION_MODES,
@@ -35,6 +35,8 @@ import {
 import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions, isClaudeInstalled } from "@/queries/agent-queries";
 import { foldersQueryOptions } from "@/queries/folder-queries";
+
+import { RadioChoice } from "./radio-choice";
 
 const CHANNEL_ORDER: readonly ReleaseChannel[] = ["latest", "stable"];
 
@@ -54,6 +56,8 @@ export function ClaudeSettingsCard() {
     capacity: useId(),
     capacityHint: useId(),
     capacityError: useId(),
+    spawn: useId(),
+    spawnHint: useId(),
     releaseChannel: useId(),
     releaseChannelHint: useId(),
   };
@@ -140,6 +144,34 @@ export function ClaudeSettingsCard() {
                         </FieldDescription>
                       </FieldContent>
                     </Field>
+                  )}
+                </form.Field>
+                <form.Field name="remote_control.spawn">
+                  {(field) => (
+                    <FieldSet>
+                      <FieldLegend id={ids.spawn} variant="label">
+                        {SETTINGS_DESCRIPTIONS.spawn}
+                      </FieldLegend>
+                      <FieldDescription id={ids.spawnHint}>
+                        {SETTINGS_DESCRIPTIONS.spawn_hint}
+                      </FieldDescription>
+                      <RadioGroup
+                        aria-labelledby={ids.spawn}
+                        aria-describedby={ids.spawnHint}
+                        value={field.state.value}
+                        onValueChange={(next) => {
+                          const spawn = SPAWN_MODE_ORDER.find((candidate) => candidate === next);
+                          if (spawn) {
+                            field.handleChange(spawn);
+                          }
+                        }}
+                        className="grid gap-2 sm:grid-cols-2"
+                      >
+                        {SPAWN_MODE_ORDER.map((mode) => (
+                          <RadioChoice key={mode} value={mode} {...SPAWN_MODES[mode]} />
+                        ))}
+                      </RadioGroup>
+                    </FieldSet>
                   )}
                 </form.Field>
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -250,7 +282,7 @@ export function ClaudeSettingsCard() {
                     className="grid gap-2 sm:grid-cols-2"
                   >
                     {CHANNEL_ORDER.map((channel) => (
-                      <ChannelChoice key={channel} channel={channel} />
+                      <RadioChoice key={channel} value={channel} {...RELEASE_CHANNELS[channel]} />
                     ))}
                   </RadioGroup>
                 </FieldSet>
@@ -272,28 +304,5 @@ export function ClaudeSettingsCard() {
         </CardFooter>
       </form>
     </Card>
-  );
-}
-
-function ChannelChoice({ channel }: { channel: ReleaseChannel }) {
-  const id = useId();
-  const titleId = useId();
-  const descriptionId = useId();
-  const { title, description } = RELEASE_CHANNELS[channel];
-  return (
-    <FieldLabel htmlFor={id}>
-      <Field orientation="horizontal">
-        <RadioGroupItem
-          id={id}
-          value={channel}
-          aria-labelledby={titleId}
-          aria-describedby={descriptionId}
-        />
-        <FieldContent>
-          <FieldTitle id={titleId}>{title}</FieldTitle>
-          <FieldDescription id={descriptionId}>{description}</FieldDescription>
-        </FieldContent>
-      </Field>
-    </FieldLabel>
   );
 }

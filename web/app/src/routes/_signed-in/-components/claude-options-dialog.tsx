@@ -17,23 +17,27 @@ import {
 } from "@/components/ui/dialog";
 import {
   Field,
-  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
   FieldSet,
-  FieldTitle,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { CLAUDE_OPTIONS_DESCRIPTIONS, FOLDERS_DESCRIPTIONS, SPAWN_MODES } from "@/content/folders";
+import { RadioGroup } from "@/components/ui/radio-group";
+import { CLAUDE_OPTIONS_DESCRIPTIONS, SPAWN_MODE_ORDER, SPAWN_MODES } from "@/content/folders";
 import { PERMISSION_MODE_NAMES, PERMISSION_MODES, SETTINGS_DESCRIPTIONS } from "@/content/settings";
 import { useFolderActions } from "@/hooks/use-folder-actions";
 import { errorMessage } from "@/lib/utils";
 
-const SPAWN_MODE_ORDER: readonly SpawnMode[] = ["same-dir", "worktree"];
+import { RadioChoice } from "./radio-choice";
+
+const FOLLOW_SETTINGS = "settings" as const;
+const SPAWN_CHOICES: readonly (SpawnMode | typeof FOLLOW_SETTINGS)[] = [
+  FOLLOW_SETTINGS,
+  ...SPAWN_MODE_ORDER,
+];
 
 export interface ClaudeOptionsDialogProps {
   folder: FolderStatus;
@@ -68,7 +72,7 @@ function ClaudeOptionsForm({ folder, onSaved }: { folder: FolderStatus; onSaved:
   };
   const form = useForm({
     defaultValues: {
-      spawn: folder.claude.spawn,
+      spawn: folder.claude.spawn ?? FOLLOW_SETTINGS,
       permission_mode: folder.claude.permission_mode ?? "",
       capacity: folder.claude.capacity ?? null,
     },
@@ -77,7 +81,7 @@ function ClaudeOptionsForm({ folder, onSaved }: { folder: FolderStatus; onSaved:
         await chooseClaudeOptions.mutateAsync({
           path: { name: folder.name },
           body: {
-            spawn: value.spawn,
+            spawn: value.spawn === FOLLOW_SETTINGS ? undefined : value.spawn,
             permission_mode: value.permission_mode.trim() || undefined,
             capacity: value.capacity ?? undefined,
           },
@@ -100,44 +104,38 @@ function ClaudeOptionsForm({ folder, onSaved }: { folder: FolderStatus; onSaved:
       }}
     >
       <FieldGroup>
-        <form.Field name="spawn">
-          {(field) => (
-            <FieldSet>
-              <FieldLegend id={ids.spawn} variant="label">
-                {CLAUDE_OPTIONS_DESCRIPTIONS.spawn}
-              </FieldLegend>
-              <RadioGroup
-                aria-labelledby={ids.spawn}
-                value={field.state.value}
-                onValueChange={(next) => {
-                  const spawn = SPAWN_MODE_ORDER.find((candidate) => candidate === next);
-                  if (spawn) {
-                    field.handleChange(spawn);
-                  }
-                }}
-              >
-                {SPAWN_MODE_ORDER.map((mode) => {
-                  const unavailable = mode === "worktree" && !folder.git;
-                  return (
-                    <FieldLabel key={mode} data-disabled={unavailable || undefined}>
-                      <Field orientation="horizontal">
-                        <RadioGroupItem value={mode} disabled={unavailable} />
-                        <FieldContent>
-                          <FieldTitle>{SPAWN_MODES[mode].title}</FieldTitle>
-                          <FieldDescription>
-                            {unavailable
-                              ? FOLDERS_DESCRIPTIONS.worktree_needs_repository
-                              : SPAWN_MODES[mode].description}
-                          </FieldDescription>
-                        </FieldContent>
-                      </Field>
-                    </FieldLabel>
-                  );
-                })}
-              </RadioGroup>
-            </FieldSet>
-          )}
-        </form.Field>
+        {folder.git ? (
+          <form.Field name="spawn">
+            {(field) => (
+              <FieldSet>
+                <FieldLegend id={ids.spawn} variant="label">
+                  {CLAUDE_OPTIONS_DESCRIPTIONS.spawn}
+                </FieldLegend>
+                <RadioGroup
+                  aria-labelledby={ids.spawn}
+                  value={field.state.value}
+                  onValueChange={(next) => {
+                    const spawn = SPAWN_CHOICES.find((candidate) => candidate === next);
+                    if (spawn) {
+                      field.handleChange(spawn);
+                    }
+                  }}
+                >
+                  <RadioChoice
+                    value={FOLLOW_SETTINGS}
+                    title={CLAUDE_OPTIONS_DESCRIPTIONS.spawn_default}
+                    description={defaults ? SPAWN_MODES[defaults.spawn].title : ""}
+                  />
+                  {SPAWN_MODE_ORDER.map((mode) => (
+                    <RadioChoice key={mode} value={mode} {...SPAWN_MODES[mode]} />
+                  ))}
+                </RadioGroup>
+              </FieldSet>
+            )}
+          </form.Field>
+        ) : (
+          <FieldDescription>{CLAUDE_OPTIONS_DESCRIPTIONS.spawn_in_folder}</FieldDescription>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <form.Field
             name="permission_mode"

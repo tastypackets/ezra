@@ -505,7 +505,7 @@ mod tests {
             .await;
         assert_eq!(chosen.status(), StatusCode::NO_CONTENT);
         let expected = ClaudeOptions {
-            spawn: SpawnMode::Worktree,
+            spawn: Some(SpawnMode::Worktree),
             permission_mode: Some("plan".to_owned()),
             capacity: Some(2),
         };
@@ -526,7 +526,7 @@ mod tests {
         let followed = manager
             .put(
                 "/api/v1/folders/repo/claude-options",
-                r#"{"spawn":"same-dir","permission_mode":""}"#,
+                r#"{"permission_mode":""}"#,
                 Some(&cookie),
             )
             .await;

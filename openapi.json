@@ -1535,9 +1535,6 @@
       "ClaudeOptions": {
         "type": "object",
         "description": "A folder's own Claude Code options. Absent ones follow the Settings page.",
-        "required": [
-          "spawn"
-        ],
         "properties": {
           "capacity": {
             "type": [
@@ -1556,8 +1553,15 @@
             "description": "The permission mode for the folder's sessions."
           },
           "spawn": {
-            "$ref": "#/components/schemas/SpawnMode",
-            "description": "Where new sessions work, always `same-dir` outside a repository."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SpawnMode",
+                "description": "Where new sessions work. Outside a repository they always work in the folder."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -2093,7 +2097,8 @@
           "enabled",
           "permission_mode",
           "capacity",
-          "serve_repositories"
+          "serve_repositories",
+          "spawn"
         ],
         "properties": {
           "capacity": {
@@ -2120,6 +2125,11 @@
             "type": "boolean",
             "description": "Whether repositories that appear in /projects start with their switch on.",
             "default": true
+          },
+          "spawn": {
+            "$ref": "#/components/schemas/SpawnMode",
+            "description": "Where new sessions in repositories work, unless a folder chooses.",
+            "default": "worktree"
           }
         }
       },
