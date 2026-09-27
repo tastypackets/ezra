@@ -23,6 +23,18 @@ fn runs_as_uid_and_gid_1000() {
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
+fn every_directory_writable_by_everyone_is_sticky() {
+    let output = run_in_image(
+        &["--user", "0", "--entrypoint", "find"],
+        &[
+            "/", "-xdev", "-type", "d", "-perm", "-0002", "!", "-perm", "-1000",
+        ],
+    );
+    assert_eq!(stdout_of(&output), "");
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
 fn environment_describes_the_agent_user() {
     let environment = stdout_of(&run_in_image(&[], &["env"]));
     for expected in [
