@@ -1,5 +1,6 @@
 pub mod apt_packages;
 pub mod config;
+mod empty_mounts;
 mod environment;
 mod exec;
 mod git;
@@ -83,12 +84,15 @@ fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
     let InitConfig {
         sudo_policy,
         apt_packages: requested_packages,
+        empty_mount_ownership,
     } = InitConfig::from_environment()?;
     let environment_overrides = if Uid::effective().is_root() {
+        let agent = look_up_agent_user()?;
+        empty_mount_ownership.hand_over(&DIRECTORIES_AGENT_MUST_WRITE, &agent);
         RootTemporaryDirectory::create();
         requested_packages.install_missing();
         SetupScripts::run_all();
-        become_agent_user(sudo_policy)?
+        become_agent_user(&agent, sudo_policy)?
     } else {
         adopt_invoking_user(sudo_policy, &requested_packages)?
     };
@@ -100,16 +104,22 @@ fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
     Ok(environment_overrides)
 }
 
-fn become_agent_user(sudo_policy: SudoPolicy) -> Result<Vec<EnvironmentOverride>, InitError> {
+fn look_up_agent_user() -> Result<User, InitError> {
     let agent = User::look_up_by_name(AGENT_USER_NAME)?.ok_or(InitError::AgentUserMissing)?;
     if agent.uid.is_root() || agent.gid.as_raw() == 0 {
         return Err(InitError::AgentUserIsPrivileged);
     }
+    Ok(agent)
+}
 
-    let supplementary_groups = SupplementaryGroups::for_agent(&agent)?;
+fn become_agent_user(
+    agent: &User,
+    sudo_policy: SudoPolicy,
+) -> Result<Vec<EnvironmentOverride>, InitError> {
+    let supplementary_groups = SupplementaryGroups::for_agent(agent)?;
     StandardStreams::hand_over_to(agent.uid);
     let environment_overrides =
-        AccountDetails::from(&agent).agent_overrides(env::var_os("HOME").as_deref());
+        AccountDetails::from(agent).agent_overrides(env::var_os("HOME").as_deref());
     sudo_policy.configure_sudoers(&agent.name);
     agent.switch_process_to(&supplementary_groups)?;
     Ok(environment_overrides)

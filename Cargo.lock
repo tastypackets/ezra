@@ -582,6 +582,7 @@ dependencies = [
  "qrcode",
  "rcgen",
  "reqwest",
+ "rustix",
  "rustls",
  "semver",
  "serde",
