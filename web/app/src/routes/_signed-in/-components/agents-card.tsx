@@ -363,7 +363,7 @@ function AgentActions({
                 <>
                   <DropdownMenuItem
                     disabled={pairing.start.isPending}
-                    onClick={() => void pairing.pairPhone(remote, pairable)}
+                    onClick={() => void pairing.pairPhone(pairable)}
                   >
                     {PAIRING_DESCRIPTIONS.pair}
                   </DropdownMenuItem>
@@ -402,7 +402,7 @@ function AgentActions({
             open={logOpen}
             onOpenChange={setLogOpen}
           />
-          <PairPhoneDialog flow={pairing} />
+          <PairPhoneDialog flow={pairing} remote={remote} pairable={pairable} />
           <PairedPhonesDialog open={phonesOpen} onOpenChange={setPhonesOpen} />
         </>
       ) : null}

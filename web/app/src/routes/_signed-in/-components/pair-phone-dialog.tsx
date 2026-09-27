@@ -28,10 +28,14 @@ const COUNTDOWN_MS = 1_000;
 
 export interface PairPhoneDialogProps {
   flow: CodexPairingFlow;
+  /** Codex's Remote cell, shown while Codex cannot pair. */
+  remote: RemoteView;
+  /** Whether a phone can pair with Codex now. */
+  pairable: boolean;
 }
 
 /** The code a phone pairs with Codex through, or why there is none. */
-export function PairPhoneDialog({ flow }: PairPhoneDialogProps) {
+export function PairPhoneDialog({ flow, remote, pairable }: PairPhoneDialogProps) {
   return (
     <Dialog open={flow.open} onOpenChange={flow.setOpen}>
       <DialogContent
@@ -41,7 +45,7 @@ export function PairPhoneDialog({ flow }: PairPhoneDialogProps) {
         <DialogHeader>
           <DialogTitle>{PAIRING_DESCRIPTIONS.pair}</DialogTitle>
         </DialogHeader>
-        {flow.unavailable ? <Unavailable remote={flow.unavailable} /> : <PairingCode flow={flow} />}
+        {flow.unpaired && !pairable ? <Unavailable remote={remote} /> : <PairingCode flow={flow} />}
       </DialogContent>
     </Dialog>
   );
@@ -60,8 +64,8 @@ function Unavailable({ remote }: { remote: RemoteView }) {
   );
 }
 
-/** The code with what the phone needs, or the expired or failed code with a way to a new one. */
-function PairingCode({ flow: { start, pairing } }: PairPhoneDialogProps) {
+/** The code with what the phone needs, or a way to a new one when there is none to use. */
+function PairingCode({ flow: { start, pairing } }: { flow: CodexPairingFlow }) {
   const { data: codex } = useQuery({
     ...remoteControlQueryOptions,
     select: (overview) => overview.codex,
@@ -104,7 +108,7 @@ function PairingCode({ flow: { start, pairing } }: PairPhoneDialogProps) {
         ) : null}
         {expired ? <p>{PAIRING_DESCRIPTIONS.expired}</p> : null}
       </DialogDescription>
-      {failure || expired || start.isPending ? (
+      {usable ? null : (
         <Button
           ref={keepFocusInDialog}
           className="self-start"
@@ -113,7 +117,7 @@ function PairingCode({ flow: { start, pairing } }: PairPhoneDialogProps) {
         >
           {PAIRING_DESCRIPTIONS.new_code}
         </Button>
-      ) : null}
+      )}
       {usable ? (
         <>
           {codex?.server_name ? <p>{PAIRING_DESCRIPTIONS.listed_as(codex.server_name)}</p> : null}

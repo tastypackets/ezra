@@ -330,6 +330,34 @@ test.describe("with Codex signed in with ChatGPT", () => {
     expect(apiCalls.filter((call) => call.includes(PAIRING))).toEqual([]);
   });
 
+  test("Pair a phone follows Codex once it connects and then offers a code", async ({
+    page,
+    request,
+  }) => {
+    let codex: object = MFA;
+    const pairing = await stubPairing(page, () => pairingCode("E2E-4821"));
+    await page.goto("./");
+    const row = codexRow(page);
+    await stubCodexStatus(page, request, () => codex);
+    await expect(remoteCell(row)).toContainText("Needs MFA");
+    await chooseCodexAction(page, row, "Pair a phone");
+    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await expect(dialog).toContainText("Needs MFA");
+
+    codex = CONNECTED;
+    const on = await request.put("api/v1/agents/codex/settings", { data: CODEX_DEFAULTS });
+    expect(on.ok()).toBe(true);
+    const newCode = dialog.getByRole("button", { name: "New code" });
+    await expect(newCode).toBeVisible();
+    await expect(dialog).not.toContainText("Needs MFA");
+    await expect(dialog).not.toContainText("Pairing needs Codex connected to ChatGPT.");
+    expect(pairing.posts).toBe(0);
+
+    await newCode.click();
+    await expect(dialog.getByText("E2E-4821", { exact: true })).toBeVisible();
+    expect(pairing.posts).toBe(1);
+  });
+
   test("Pair a phone shows the wait for a code and takes no second click", async ({
     page,
     request,

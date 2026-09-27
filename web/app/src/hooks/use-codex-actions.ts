@@ -9,7 +9,6 @@ import { useEffect, useState } from "react";
 
 import { toast } from "@/components/ui/toast";
 import { PAIRING_DESCRIPTIONS } from "@/content/pairing";
-import type { RemoteView } from "@/lib/codex-remote";
 import { AGENT_ACTION } from "@/queries/query-keys";
 import {
   codexPairingQueryOptions,
@@ -61,25 +60,28 @@ export function useCodexActions() {
   return { retry, removePhone, signIn, confirmingSignIn, setConfirmingSignIn, confirmSignIn };
 }
 
-/** Pairing a phone from Codex's row: the dialog, the code it shows, and why Codex cannot pair. */
+/**
+ * Pairing a phone from Codex's row: the dialog, the code it shows, and whether it opened while
+ * Codex could not pair and no code was asked for since.
+ */
 export function useCodexPairing() {
   const queryClient = useQueryClient();
   const [openAsked, setOpen] = useState(false);
-  const [unavailable, setUnavailable] = useState<RemoteView>();
+  const [openedUnpairable, setOpenedUnpairable] = useState(false);
   const watch = (pairing: CodexPairing) => {
     queryClient.setQueryData(codexPairingQueryOptions.queryKey, { pairing });
     queryClient.setQueryData(codexPairingWatchQueryOptions.queryKey, true);
   };
   const start = useMutation({ ...startCodexPairingMutation(), onSuccess: watch });
   const { data } = useQuery({ ...codexPairingQueryOptions, enabled: false });
-  const pairing = data?.pairing ?? undefined;
-  const claimed =
-    unavailable === undefined && (start.isIdle || start.isSuccess) && pairing?.state === "claimed";
-  /** Opens the dialog on the open code or a new one, or on `remote` when Codex cannot pair. */
-  const pairPhone = async (remote: RemoteView, pairable: boolean) => {
+  const unpaired = openedUnpairable && start.isIdle;
+  const pairing = unpaired ? undefined : (data?.pairing ?? undefined);
+  const claimed = (start.isIdle || start.isSuccess) && pairing?.state === "claimed";
+  /** Opens the dialog on the open code or a new one, or on why Codex cannot pair. */
+  const pairPhone = async (pairable: boolean) => {
     start.reset();
     setOpen(false);
-    setUnavailable(pairable ? undefined : remote);
+    setOpenedUnpairable(!pairable);
     if (!pairable) {
       setOpen(true);
       return;
@@ -95,7 +97,7 @@ export function useCodexPairing() {
   return {
     open: openAsked && !claimed,
     setOpen,
-    unavailable,
+    unpaired,
     pairing,
     start,
     pairPhone,
