@@ -28,6 +28,8 @@ const SIGN_IN_LOST = {
   server_version: "9.9.9-stubbed",
   usage: { chats: 1, running_chats: 1, memory_bytes: 150_000_000 },
 };
+const NOT_CHATGPT = { state: "waiting", problem: "not_chatgpt", restarts: 0 };
+const HELD_FOR_SIGN_IN = { state: "waiting", restarts: 0 };
 const CONNECTED = {
   state: "running",
   relay: "connected",
@@ -296,6 +298,34 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await confirm.getByRole("button", { name: "Sign in again" }).click();
     await signedIn;
     await expect(confirm).toBeHidden();
+  });
+
+  test("a Codex fix stays busy while its sign-in waits for Codex to stop", async ({
+    page,
+    request,
+  }) => {
+    const { promise: held, resolve: release } = Promise.withResolvers<void>();
+    let codex: object = NOT_CHATGPT;
+    await page.route("**/api/v1/agents/codex/login", async (route) => {
+      codex = HELD_FOR_SIGN_IN;
+      const on = await request.put("api/v1/agents/codex/settings", { data: CODEX_DEFAULTS });
+      expect(on.ok()).toBe(true);
+      await held;
+      return route.fulfill({ json: { url: "https://example.com/device", code: "ABCD-1234" } });
+    });
+    await page.goto("./");
+    const row = codexRow(page);
+    await expect(row).toContainText("Signed in");
+    await stubCodexStatus(page, request, () => codex);
+    const signIn = row.getByRole("button", { name: "Sign in with ChatGPT" });
+    await signIn.click();
+    const confirm = page.getByRole("alertdialog", { name: "Sign in to Codex again?" });
+    await confirm.getByRole("button", { name: "Sign in again" }).click();
+
+    await expect(remoteCell(row)).toHaveText("Waiting");
+    await expect(signIn).toBeVisible();
+    await expect(signIn).toHaveAttribute("aria-busy", "true");
+    release();
   });
 
   test("an update waiting for Codex's chats shows under the chat count", async ({

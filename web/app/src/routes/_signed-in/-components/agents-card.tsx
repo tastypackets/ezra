@@ -38,7 +38,7 @@ import { useNow } from "@/hooks/use-now";
 import { menuOffersInstall, nextAgentStep } from "@/lib/agent-steps";
 import type { AgentStep } from "@/lib/agent-steps";
 import { codexPairable, codexRemoteView } from "@/lib/codex-remote";
-import type { RemoteView } from "@/lib/codex-remote";
+import type { CodexFix, RemoteView } from "@/lib/codex-remote";
 import { handOffFocus } from "@/lib/focus";
 import { remoteControlSummary } from "@/lib/remote-control";
 import { signInEnd } from "@/lib/sign-in";
@@ -271,6 +271,7 @@ function AgentActions({
   const pairing = useCodexPairing();
   const [logOpen, setLogOpen] = useState(false);
   const [phonesOpen, setPhonesOpen] = useState(false);
+  const [signingInFor, setSigningInFor] = useState<CodexFix>();
   const installPending = useAgentActionPending(status.agent, "install");
   const signInPending = useAgentActionPending(status.agent, "start_sign_in");
   const signOutPending = useAgentActionPending(status.agent, "sign_out");
@@ -283,7 +284,12 @@ function AgentActions({
   const name = AGENT_NAMES[status.agent];
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
-  const step = nextAgentStep(status, installing, ending, remote.fix);
+  const step = nextAgentStep(
+    status,
+    installing,
+    ending,
+    remote.fix ?? (signInPending ? signingInFor : undefined),
+  );
   const failure = useAgentActionError(
     status.agent,
     step === "try_again" ? undefined : "retry_remote_control",
@@ -291,8 +297,14 @@ function AgentActions({
   const percent = status.install_progress ? downloadPercent(status.install_progress) : undefined;
   const path = { agent: status.agent };
   const installNow = () => install.mutate({ path });
-  const signIn = () =>
-    status.agent === "codex" ? codex.signIn(status.logged_in) : startSignIn.mutate({ path });
+  const signIn = () => {
+    setSigningInFor(remote.fix);
+    if (status.agent === "codex") {
+      codex.signIn(status.logged_in);
+    } else {
+      startSignIn.mutate({ path });
+    }
+  };
   const steps: Record<AgentStep, { label: string; run: () => void; pending: boolean }> = {
     install: {
       label:
