@@ -8,6 +8,8 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use crate::bytes_ext::BytesExt;
+
 pub const SESSION_COOKIE: &str = "session";
 
 /// The manager password as an argon2id PHC string, never the password itself.
@@ -37,12 +39,7 @@ impl SessionToken {
     fn generate() -> Result<Self, getrandom::Error> {
         let mut random_bytes = [0_u8; 32];
         getrandom::fill(&mut random_bytes)?;
-        Ok(Self(
-            random_bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
-        ))
+        Ok(Self(random_bytes.to_hex()))
     }
 
     pub fn into_cookie(self) -> Cookie<'static> {

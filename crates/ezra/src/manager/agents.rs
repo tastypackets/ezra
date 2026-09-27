@@ -14,6 +14,7 @@ use tokio::io::AsyncWriteExt;
 use utoipa::ToSchema;
 
 use super::processes::Process;
+use crate::bytes_ext::BytesExt;
 use crate::path_ext::PathExt;
 
 const CLAUDE_RELEASES: &str = "https://downloads.claude.ai/claude-code-releases";
@@ -498,11 +499,7 @@ impl ReleaseClient {
             progress.advance(chunk.len());
         }
         file.flush().await?;
-        Ok(hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect())
+        Ok(hasher.finalize().to_hex())
     }
 }
 

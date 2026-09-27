@@ -15,6 +15,7 @@ mod state;
 mod status;
 mod tls;
 mod updates;
+mod watcher;
 mod web;
 
 use std::env;

@@ -1,16 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
-use std::future;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
+use notify::EventKind;
 use notify::event::ModifyKind;
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Notify;
-use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
+use tokio::time::{MissedTickBehavior, interval};
 use utoipa::ToSchema;
 
 use super::events::Topic;
@@ -18,6 +15,7 @@ use super::git::{GitError, UnsavedWork};
 use super::remote_control::{ClaudeOptions, SpawnMode};
 use super::settings::{FolderChoice, SettingsError};
 use super::state::AppState;
+use super::watcher::SettledWatcher;
 use crate::path_ext::PathExt;
 
 #[derive(Debug, thiserror::Error)]
@@ -619,49 +617,31 @@ impl AppState {
 
 /// Watches /projects, each folder in it, and each repository's `.git`. Without inotify, rescans
 /// run every 30 s instead.
-struct FolderWatcher {
-    watcher: Option<RecommendedWatcher>,
-    watched: BTreeSet<PathBuf>,
-    changed: Arc<Notify>,
-}
+struct FolderWatcher(SettledWatcher);
 
 impl FolderWatcher {
     fn start(projects: &Path) -> Self {
-        let changed = Arc::new(Notify::new());
-        let notifier = Arc::clone(&changed);
-        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            let relevant = event.map_or(true, |event| {
+        Self(
+            SettledWatcher::start(&[projects], |event| {
                 matches!(
                     event.kind,
                     EventKind::Create(_)
                         | EventKind::Remove(_)
                         | EventKind::Modify(ModifyKind::Name(_))
                 )
-            });
-            if relevant {
-                notifier.notify_one();
-            }
-        })
-        .and_then(|mut watcher| {
-            watcher.watch(projects, RecursiveMode::NonRecursive)?;
-            Ok(watcher)
-        })
-        .inspect_err(|error| {
-            tracing::warn!(
-                "cannot watch {}, rescanning every 30 s instead: {error}",
-                projects.display()
-            );
-        })
-        .ok();
-        Self {
-            watcher,
-            watched: BTreeSet::new(),
-            changed,
-        }
+            })
+            .inspect_err(|error| {
+                tracing::warn!(
+                    "cannot watch {}, rescanning every 30 s instead: {error}",
+                    projects.display()
+                );
+            })
+            .unwrap_or_default(),
+        )
     }
 
     fn rescan_interval(&self) -> Duration {
-        if self.watcher.is_some() {
+        if self.0.is_watching() {
             RESCAN_INTERVAL_WHILE_WATCHING
         } else {
             RESCAN_INTERVAL
@@ -669,53 +649,32 @@ impl FolderWatcher {
     }
 
     /// Watches each folder for a new `.git`, each repository's `.git` for a new branch or remote,
-    /// and its `.git/worktrees` for a new worktree. Stops watching what is gone. A path that was
-    /// removed and made again is watched again.
+    /// and its `.git/worktrees` for a new worktree. Stops watching what is gone.
     fn follow(&mut self, projects: &ProjectsDirectory, folders: &[Folder]) {
-        let Some(watcher) = &mut self.watcher else {
-            return;
-        };
-        let wanted: BTreeSet<PathBuf> = folders
-            .iter()
-            .flat_map(|folder| {
-                let path = projects.folder(&folder.name);
-                let git = folder.git.is_some().then(|| path.join(".git"));
-                let worktrees = git.as_ref().map(|git| git.join("worktrees"));
-                [Some(path), git, worktrees]
-            })
-            .flatten()
-            .collect();
-        self.watched.retain(|path| {
-            let keep = wanted.contains(path);
-            if !keep {
-                let _already_gone = watcher.unwatch(path);
-            }
-            keep
-        });
-        for path in wanted {
-            if watcher.watch(&path, RecursiveMode::NonRecursive).is_ok() {
-                self.watched.insert(path);
-            }
-        }
+        self.0.watch_only(
+            folders
+                .iter()
+                .flat_map(|folder| {
+                    let path = projects.folder(&folder.name);
+                    let git = folder.git.is_some().then(|| path.join(".git"));
+                    let worktrees = git.as_ref().map(|git| git.join("worktrees"));
+                    [Some(path), git, worktrees]
+                })
+                .flatten()
+                .collect(),
+        );
     }
 
     /// Returns after a change once a second passes without another, or after 10 s of changes.
     async fn settled_change(&self) {
-        if self.watcher.is_none() {
-            return future::pending().await;
-        }
-        self.changed.notified().await;
-        let Some(deadline) = Instant::now().checked_add(LONGEST_SETTLE) else {
-            return;
-        };
-        while Instant::now() < deadline
-            && timeout(QUIET_PERIOD, self.changed.notified()).await.is_ok()
-        {}
+        self.0.settled_change(QUIET_PERIOD, LONGEST_SETTLE).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use tokio::time::timeout;
+
     use super::*;
 
     fn folder(name: &str, git: Option<(&str, &str)>) -> Folder {
