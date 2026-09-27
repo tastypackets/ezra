@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fs::{self, Permissions};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};

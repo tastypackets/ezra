@@ -1,8 +1,8 @@
 //! Black-box tests of `/etc/ezra/setup.d`. Build the image first, then run: `cargo test -- --ignored`
 
-mod common;
-
-use common::{DockerResource, SetupDirectory, docker, run_in_image, stderr_of, stdout_of};
+use ezra_container_tests::{
+    DockerResource, SetupDirectory, docker, run_in_image, stderr_of, stdout_of,
+};
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]

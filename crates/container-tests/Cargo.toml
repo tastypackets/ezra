@@ -1,0 +1,13 @@
+[package]
+name = "ezra-container-tests"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

@@ -1,8 +1,6 @@
 //! Black-box tests of mise on the `/config` volume. Build the image first, then run: `cargo test -- --ignored`
 
-mod common;
-
-use common::{DockerResource, SetupDirectory, run_in_image, stdout_of};
+use ezra_container_tests::{DockerResource, SetupDirectory, run_in_image, stdout_of};
 
 #[test]
 #[ignore = "needs Docker, network access and a built ezra image"]

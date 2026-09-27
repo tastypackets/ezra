@@ -1,8 +1,8 @@
 //! Black-box tests of the `EZRA_SUDO` policy. Build the image first, then run: `cargo test -- --ignored`
 
-mod common;
-
-use common::{DockerResource, docker, process_status_field, run_in_image, stderr_of, stdout_of};
+use ezra_container_tests::{
+    DockerResource, docker, process_status_field, run_in_image, stderr_of, stdout_of,
+};
 
 fn sudo_succeeds(docker_options: &[&str]) -> bool {
     run_in_image(docker_options, &["sudo", "--non-interactive", "true"])

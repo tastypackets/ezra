@@ -602,6 +602,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ezra-container-tests"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
