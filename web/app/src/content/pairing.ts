@@ -22,7 +22,6 @@ export const PAIRING_DESCRIPTIONS = {
   phones_empty: "No phones yet.",
   unnamed_phone: "Phone",
   last_seen: (when: string) => `Last seen ${when}`,
-  never_seen: "—",
   remove: "Remove",
   remove_title: (name: string) => `Remove ${name}?`,
   remove_body: "It can no longer reach this box. Pairing it again can fail.",

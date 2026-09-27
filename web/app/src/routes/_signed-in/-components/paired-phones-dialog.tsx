@@ -107,13 +107,11 @@ function Phone({ phone, onRemove }: { phone: PairedPhone; onRemove: () => void }
         <span id={nameId} className="truncate font-medium">
           {phoneName(phone)}
         </span>
-        <span className="text-muted-foreground">
-          {PAIRING_DESCRIPTIONS.last_seen(
-            phone.last_seen_at
-              ? formatDateTime(phone.last_seen_at)
-              : PAIRING_DESCRIPTIONS.never_seen,
-          )}
-        </span>
+        {phone.last_seen_at ? (
+          <span className="text-muted-foreground">
+            {PAIRING_DESCRIPTIONS.last_seen(formatDateTime(phone.last_seen_at))}
+          </span>
+        ) : null}
       </div>
       <Button variant="outline" size="sm" aria-describedby={nameId} onClick={onRemove}>
         {PAIRING_DESCRIPTIONS.remove}

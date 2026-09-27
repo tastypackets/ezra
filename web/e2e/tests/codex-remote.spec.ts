@@ -686,7 +686,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(phones.nth(0)).toContainText("Zeke's iPhone");
     await expect(phones.nth(0)).toContainText(/Last seen \S.*\d/);
     await expect(phones.nth(1)).toContainText("Pixel 9");
-    await expect(phones.nth(1)).toContainText("Last seen —");
+    await expect(phones.nth(1)).not.toContainText("Last seen");
     await expect(phones.nth(2).getByText("Phone", { exact: true })).toBeVisible();
 
     const remove = phones.nth(0).getByRole("button", { name: "Remove" });
