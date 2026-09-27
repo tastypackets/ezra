@@ -328,7 +328,8 @@ impl ServerLog {
             .open(self.debug_file())
             .await?;
         file.write_all(format!("{stamp} [OUTPUT] {line}\n").as_bytes())
-            .await
+            .await?;
+        file.flush().await
     }
 
     /// Adds lines of output, noting at debug level when the log cannot be written.
