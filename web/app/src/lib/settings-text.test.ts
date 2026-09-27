@@ -164,6 +164,8 @@ describe("TOML 1.1, the way Codex reads config.toml", () => {
       '\uFEFFmodel = "gpt"\r\n[features]\r\n\tx = true\r\n',
       'a = {\n  b = 1,\n  c = 2,\n}\ns = "\\e\\x41"\nt = 07:32\nd = 1979-05-27T07:32Z\n',
       '[projects."/projects/a"]\ntrust_level = "trusted"',
+      "a = 9223372036854775807\nb = -9223372036854775808\nc = 9007199254740992\n",
+      "a = 0x7FFFFFFFFFFFFFFF\n",
     ]) {
       expect(problem("toml", valid), JSON.stringify(valid)).toBeUndefined();
     }
@@ -188,8 +190,16 @@ describe("TOML 1.1, the way Codex reads config.toml", () => {
   });
 
   it("differs from Codex on these, where the server's answer wins", () => {
-    for (const leapSecond of ["t = 07:32:60\n", "d = 1979-05-27T23:59:60Z\n"]) {
+    for (const leapSecond of [
+      "t = 07:32:60\n",
+      "d = 1979-05-27T23:59:60Z\n",
+      "t = 07:32:60.5\n",
+      "d = 1979-12-31T23:59:60+01:00\n",
+    ]) {
       expect(problem("toml", leapSecond), JSON.stringify(leapSecond)).toEqual(at(1, 5));
+    }
+    for (const overflow of ["a = 9223372036854775808\n", "a = -9223372036854775809\n"]) {
+      expect(problem("toml", overflow), JSON.stringify(overflow)).toBeUndefined();
     }
     for (const noSuchDay of ["d = 1979-02-30\n", "d = 1900-02-29\n", "d = 1979-04-31\n"]) {
       expect(problem("toml", noSuchDay), JSON.stringify(noSuchDay)).toBeUndefined();

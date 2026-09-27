@@ -4,7 +4,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import type { ParseProblem, SettingsFileFormat } from "@ezra/client";
 import { describe, expect, it } from "vitest";
 
-import { checkFile, diagnosticsFor, editorState, fileOf, markServerProblem } from "./code-editor";
+import { checkFile, diagnosticsFor, editorState, fileOf, markServerVerdict } from "./code-editor";
 
 function stateOf(text: string, format: SettingsFileFormat = "json") {
   return editorState({
@@ -150,7 +150,7 @@ describe("editorState", () => {
     const check = checkFile("toml", () => {});
     const opened = stateOf("\uFEFFd = 1979-02-30", "toml");
     expect(check({ state: opened })).toEqual([]);
-    const marked = markServerProblem(opened, {
+    const marked = markServerVerdict(opened, {
       line: 1,
       column: 6,
       error: "invalid date",
@@ -160,6 +160,24 @@ describe("editorState", () => {
       expect.objectContaining({ from: 4, message: "Invalid date" }),
     ]);
     expect(check({ state: typed(marked, " ") })).toEqual([]);
+  });
+
+  it("drops the browser's mark on text the server parsed, until the text changes", () => {
+    const reported: (ParseProblem | undefined)[] = [];
+    const check = checkFile("toml", (problem) => reported.push(problem));
+    const opened = stateOf("t = 07:32:60\n", "toml");
+    expect(check({ state: opened })).toEqual([
+      expect.objectContaining({ from: 4, message: "Invalid date" }),
+    ]);
+    const accepted = markServerVerdict(opened).state;
+    expect(check({ state: accepted })).toEqual([]);
+    expect(check({ state: typed(accepted, "  ") })).toEqual([
+      expect.objectContaining({ from: 6, message: "Invalid date" }),
+    ]);
+    expect(reported).toEqual([
+      { line: 1, column: 5, error: "invalid date" },
+      { line: 1, column: 7, error: "invalid date" },
+    ]);
   });
 
   it("starts error messages with a capital letter", () => {

@@ -592,13 +592,20 @@ test.describe("with Codex installed", () => {
     await expect(editor).toContainText('trust_level = "trusted"', { timeout: 10_000 });
   });
 
-  test("invalid TOML blocks Save, and the server has the last word", async ({ page }) => {
+  test("invalid TOML is marked, and the server decides whether it saves", async ({ page }) => {
     const { box, editor, save } = await openSettings(page, CODEX_TITLE);
     await editor.click();
     await paste(editor, "a = 1\na = 2\n");
-    await expect(box.getByText("Line 2, column 1: Duplicate key")).toBeVisible();
+    const duplicate = box.getByText("Line 2, column 1: Duplicate key");
+    await expect(duplicate).toBeVisible();
     await expect(editor).toHaveAttribute("aria-invalid", "true");
+    await expect(save).toBeEnabled();
+    const duplicateRefused = savedFile(page);
+    await save.click();
+    expect((await duplicateRefused).status()).toBe(400);
+    await expect(duplicate).toBeVisible();
     await expect(save).toBeDisabled();
+    inContainer("test", "!", "-e", CODEX_FILE);
 
     await page.keyboard.press("Control+A");
     await page.keyboard.type("d = 1979-02-28");
@@ -634,6 +641,30 @@ test.describe("with Codex installed", () => {
     await page.keyboard.press("Control+A");
     await page.keyboard.type("d = 1979-02-28");
     await expect(save).toBeEnabled();
+  });
+
+  test("config.toml values only the browser refuses are saved and lose their mark", async ({
+    page,
+  }) => {
+    const opened = "max = 9223372036854775807\nat = 07:32:60\n";
+    writeInContainer(CODEX_FILE, opened);
+    const { box, editor, save } = await openSettings(page, CODEX_TITLE);
+    const hint = box.getByText("Line 2, column 6: Invalid date");
+    await expect(hint).toBeVisible();
+    await expect(editor).toHaveAttribute("aria-invalid", "true");
+    await expect(save).toBeDisabled();
+
+    await editor.click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type("# mine");
+    await expect(save).toBeEnabled();
+    const saved = savedFile(page);
+    await save.click();
+    expect((await saved).status()).toBe(200);
+    expect(bytesOf(CODEX_FILE).toString()).toBe(`${opened}# mine`);
+    await expect(hint).toBeHidden();
+    await expect(editor).not.toHaveAttribute("aria-invalid");
+    await expect(save).toBeDisabled();
   });
 
   test("a config.toml created while editing is not overwritten unasked", async ({ page }) => {

@@ -18,6 +18,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { APP_DESCRIPTIONS } from "@/content/app";
 import { SETTINGS_FILE_DESCRIPTIONS, SETTINGS_FILES } from "@/content/settings-file";
+import { BROWSER_CHECK_BLOCKS_SAVE } from "@/lib/settings-text";
 import { capitalized, errorMessage } from "@/lib/utils";
 import { settingsFileQueryOptions } from "@/queries/settings-file-queries";
 
@@ -84,7 +85,7 @@ function SettingsFileEditor({
   const [focusOnLoad, setFocusOnLoad] = useState(false);
   const [text, setText] = useState(file.text);
   const [checked, setChecked] = useState<ParseProblem>();
-  const [rejected, setRejected] = useState<{ text: string; problem: ParseProblem }>();
+  const [judged, setJudged] = useState<{ text: string; problem?: ParseProblem }>();
   const { queryKey } = settingsFileQueryOptions(agent);
   const save = useMutation({
     ...updateSettingsFileMutation(),
@@ -93,13 +94,14 @@ function SettingsFileEditor({
         editor.current?.focus();
       }
       setOpened(saved);
+      setJudged({ text: saved.text });
       toast.add({ title: SETTINGS_FILE_DESCRIPTIONS.saved(saved.path) });
       await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData(queryKey, saved);
     },
     onError: async (error, { body }) => {
       if ("line" in error) {
-        setRejected({ text: body.text, problem: error });
+        setJudged({ text: body.text, problem: error });
         editor.current?.focus();
       } else {
         await queryClient.invalidateQueries({ queryKey });
@@ -111,7 +113,7 @@ function SettingsFileEditor({
     setOpened(next);
     setText(next.text);
     setChecked(undefined);
-    setRejected(undefined);
+    setJudged(undefined);
     setFocusOnLoad(focus);
     setEdition(edition + 1);
   };
@@ -122,8 +124,11 @@ function SettingsFileEditor({
   } else if (changedOnDisk && !dirty) {
     load(file, editorFocused);
   }
-  const serverProblem = rejected?.text === text ? rejected.problem : undefined;
-  const problem = serverProblem ?? checked;
+  const verdict = judged?.text === text ? judged : undefined;
+  const problem = verdict ? verdict.problem : checked;
+  const blocked = verdict
+    ? Boolean(verdict.problem)
+    : BROWSER_CHECK_BLOCKS_SAVE[file.format] && Boolean(checked);
   const notice = changedOnDisk
     ? SETTINGS_FILE_DESCRIPTIONS.changed_on_disk(file.path)
     : rereadError
@@ -149,10 +154,10 @@ function SettingsFileEditor({
               format={file.format}
               initialText={opened.text}
               autoFocus={focusOnLoad}
-              serverProblem={serverProblem}
+              serverVerdict={verdict}
               onChange={(next) => {
                 setText(next);
-                setRejected(undefined);
+                setJudged(undefined);
                 if (save.isError) {
                   save.reset();
                 }
@@ -183,7 +188,7 @@ function SettingsFileEditor({
           </Button>
           <Button
             ref={saveButton}
-            disabled={!dirty || Boolean(problem)}
+            disabled={!dirty || blocked}
             loading={save.isPending}
             onClick={() => save.mutate({ path: { agent }, body: { text, version: file.version } })}
           >

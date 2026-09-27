@@ -2,7 +2,7 @@ import { EditorView } from "@codemirror/view";
 import type { ParseProblem, SettingsFileFormat } from "@ezra/client";
 import { type Ref, useEffect, useEffectEvent, useImperativeHandle, useRef } from "react";
 
-import { editorState, markServerProblem } from "@/lib/code-editor";
+import { editorState, markServerVerdict } from "@/lib/code-editor";
 
 /** What a parent can do with a mounted editor. */
 export interface CodeEditorHandle {
@@ -16,8 +16,8 @@ interface CodeEditorProps {
   initialText: string;
   /** Read once, focuses the text once it mounts. */
   autoFocus?: boolean;
-  /** Where the server said the text stops parsing, marked until the text changes, with the cursor moved to it. */
-  serverProblem?: ParseProblem;
+  /** What the server said about the text, kept until the text changes: where it stops parsing, with the cursor moved there, or no problem. */
+  serverVerdict?: { problem?: ParseProblem };
   onChange: (text: string) => void;
   /** Called once typing pauses, with where the text stops parsing or `undefined`. */
   onProblem: (problem: ParseProblem | undefined) => void;
@@ -31,7 +31,7 @@ export default function CodeEditor({
   format,
   initialText,
   autoFocus = false,
-  serverProblem,
+  serverVerdict,
   onChange,
   onProblem,
   ...aria
@@ -66,10 +66,10 @@ export default function CodeEditor({
 
   useEffect(() => {
     const current = view.current;
-    if (current && serverProblem) {
-      current.dispatch(markServerProblem(current.state, serverProblem));
+    if (current && serverVerdict) {
+      current.dispatch(markServerVerdict(current.state, serverVerdict.problem));
     }
-  }, [serverProblem]);
+  }, [serverVerdict]);
 
   return (
     <div

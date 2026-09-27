@@ -104,7 +104,7 @@ function jsonProblem(doc: Text): TextProblem | undefined {
 /** Where `doc` stops parsing as TOML 1.1. */
 function tomlProblem(doc: Text): TextProblem | undefined {
   try {
-    parseToml(doc.toString());
+    parseToml(doc.toString(), { integersAsBigInt: true });
     return undefined;
   } catch (error) {
     if (!(error instanceof TomlError)) {
@@ -124,6 +124,12 @@ function tomlProblem(doc: Text): TextProblem | undefined {
 export const FIND_PROBLEM: Record<SettingsFileFormat, (doc: Text) => TextProblem | undefined> = {
   json: jsonProblem,
   toml: tomlProblem,
+};
+
+/** Whether a problem found in the browser blocks Save, only where its check is the agent's own parser. */
+export const BROWSER_CHECK_BLOCKS_SAVE: Record<SettingsFileFormat, boolean> = {
+  json: true,
+  toml: false,
 };
 
 /** `problem` with a one-based line and a column in characters, as the server reports it. */

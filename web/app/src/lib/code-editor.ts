@@ -121,18 +121,18 @@ const LANGUAGES: Record<SettingsFileFormat, Extension> = {
 /** The file's leading BOM, which the text in the editor leaves out. */
 const KEPT_PREFIX = Facet.define<string, string>({ combine: (prefixes) => prefixes[0] ?? "" });
 
-const setServerProblem = StateEffect.define<TextProblem>();
+const setServerVerdict = StateEffect.define<TextProblem | null>();
 
-/** Where the server said the text in the editor stops parsing, until the text changes. */
-const SERVER_PROBLEM = StateField.define<TextProblem | undefined>({
+/** Where the server said the text in the editor stops parsing, `null` when it parsed, until the text changes. */
+const SERVER_VERDICT = StateField.define<TextProblem | null | undefined>({
   create: () => undefined,
-  update: (problem, transaction) => {
+  update: (verdict, transaction) => {
     for (const effect of transaction.effects) {
-      if (effect.is(setServerProblem)) {
+      if (effect.is(setServerVerdict)) {
         return effect.value;
       }
     }
-    return transaction.docChanged ? undefined : problem;
+    return transaction.docChanged ? undefined : verdict;
   },
 });
 
@@ -153,27 +153,34 @@ export function diagnosticsFor(problem: TextProblem | undefined): Diagnostic[] {
     : [];
 }
 
-/** Checks the file as `format`, keeping the server's mark instead while the text is as sent. */
+/** Checks the file as `format`, leaving the server's verdict in place while the text is as sent. */
 export function checkFile(
   format: SettingsFileFormat,
   onProblem: (problem: ParseProblem | undefined) => void,
 ) {
   return ({ state }: { state: EditorState }): Diagnostic[] => {
+    const verdict = state.field(SERVER_VERDICT);
+    if (verdict !== undefined) {
+      return diagnosticsFor(verdict ?? undefined);
+    }
     const file = state.toText(fileOf(state));
     const problem = FIND_PROBLEM[format](file);
     onProblem(problem && parseProblemAt(file, problem));
-    return diagnosticsFor(state.field(SERVER_PROBLEM) ?? (problem && inEditor(state, problem)));
+    return diagnosticsFor(problem && inEditor(state, problem));
   };
 }
 
-/** Marks where the server said the text stops parsing and moves the cursor there. */
-export function markServerProblem(state: EditorState, problem: ParseProblem): Transaction {
+/** Marks where the server said the text stops parsing and moves the cursor there, or clears the mark when it parsed. */
+export function markServerVerdict(state: EditorState, problem?: ParseProblem): Transaction {
+  if (!problem) {
+    return state.update(setDiagnostics(state, []), { effects: setServerVerdict.of(null) });
+  }
   const marked = inEditor(state, {
     at: offsetOf(state.toText(fileOf(state)), problem),
     error: problem.error,
   });
   return state.update(setDiagnostics(state, diagnosticsFor(marked)), {
-    effects: setServerProblem.of(marked),
+    effects: setServerVerdict.of(marked),
     selection: { anchor: marked.at },
     scrollIntoView: true,
   });
@@ -200,7 +207,7 @@ export function editorState({
       SETUP,
       LANGUAGES[format],
       KEPT_PREFIX.of(prefix),
-      SERVER_PROBLEM,
+      SERVER_VERDICT,
       EditorState.lineSeparator.of(lineBreakOf(text)),
       indentUnit.of(/^\t/m.test(text) ? "\t" : "  "),
       EditorView.clipboardInputFilter.of((input, state) =>

@@ -679,9 +679,24 @@ mod tests {
             "[projects.\"/projects/a\"]\ntrust_level = \"trusted\"",
             "t = 07:32:60\n",
             "d = 1979-05-27T23:59:60Z\n",
+            "t = 07:32:60.5\nd = 1979-12-31T23:59:60+01:00\n",
+            "a = 9223372036854775807\nb = -9223372036854775808\nc = 9007199254740992\n",
+            "a = 0x7FFFFFFFFFFFFFFF\n",
         ] {
             assert_eq!(problem(Toml, valid), None, "{valid:?}");
         }
+        assert_eq!(
+            problem(Toml, "a = 9223372036854775808\n"),
+            at(1, 5, "u64 value was too large")
+        );
+        assert_eq!(
+            problem(Toml, "a = -9223372036854775809\n"),
+            at(
+                1,
+                5,
+                "invalid type: integer `-9223372036854775809` as i128, expected any valid TOML value"
+            )
+        );
         assert_eq!(problem(Toml, "a = 1\na = 2\n"), at(2, 1, "duplicate key"));
         assert_eq!(problem(Toml, "[a]\n[a]\n"), at(2, 2, "duplicate key"));
         assert_eq!(
