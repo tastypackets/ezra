@@ -37,7 +37,7 @@ volumes:
 | `/home/dev/projects` | Your repositories |
 | `/cache` | Installed agent versions and tools |
 
-Host folders work in place of volumes. At every start, an empty folder mounted at one of these paths and owned by root is given to uid 1000, so the folder Docker creates for a missing bind mount path is ready to use. A folder with files in it must already be writable by uid 1000. Under rootless Docker or Podman, the new owner shows on the host as one of your subordinate uids.
+At start, an empty folder mounted at one of these paths and owned by root is given to uid 1000.
 
 > [!IMPORTANT]
 > On an Ubuntu 24.04 host, Codex's sandbox also needs Ubuntu's AppArmor profile for bubblewrap. Ubuntu 26.04 loads it by default.
