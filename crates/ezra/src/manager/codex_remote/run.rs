@@ -142,6 +142,7 @@ pub(super) mod tests {
         drain: Duration::from_millis(500),
         force: Duration::from_millis(500),
         request: Duration::from_secs(1),
+        mfa_retry: Duration::ZERO,
     };
 
     /// A fake `codex` whose `app-server` runs `server`.

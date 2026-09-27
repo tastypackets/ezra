@@ -4,19 +4,20 @@ use std::time::Duration;
 
 use nix::unistd::Pid;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep_until};
 
 use super::control::{
-    ControlClient, ControlError, ControlEvent, ControlNotification, ControlSocket, RelayWire,
-    StatusRead,
+    AccountRead, AccountWire, ControlClient, ControlError, ControlEvent, ControlNotification,
+    ControlSocket, Disable, Enable, RelayStatusWire, RelayWire, StatusRead,
 };
 use super::foreign::ForeignServer;
 use super::launch::CodexLaunch;
-use super::problem::CodexProblem;
+use super::problem::{CodexProblem, ProblemLine};
 use super::run::CodexServerRun;
-use super::{CodexRemoteStatus, ServerBudget};
+use super::{CodexRemote, CodexRemoteStatus, Control, RelayState, ServerBudget};
 use crate::manager::agents::Agent;
+use crate::manager::checks::AgentChecks;
 use crate::manager::remote_control::ServerState;
 use crate::manager::state::AppState;
 use crate::manager::supervision::{
@@ -27,6 +28,7 @@ use crate::manager::supervision::{
 const CONNECT_INTERVAL: Duration = Duration::from_millis(250);
 const LONGEST_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const LARGEST_LOG: u64 = 10 * 1024 * 1024;
+const TURNED_OFF: &str = "Codex turned remote control off";
 
 impl AppState {
     /// Runs Codex's remote control server while it is wanted, until shutdown.
@@ -72,6 +74,7 @@ impl AppState {
                 Wanted::Server(launch) => {
                     let started = Instant::now();
                     let end = self.run_codex_server(&launch, &mut signals).await;
+                    codex_remote.with_control(|control| *control = Control::default());
                     failures.forget_after_healthy_run(started);
                     end
                 }
@@ -181,11 +184,15 @@ impl AppState {
             "Codex remote control is starting on Codex {}",
             launch.version
         );
-        let mut link = ControlLink::opening(
-            launch,
-            codex_remote.expected.pid(leader),
-            codex_remote.budget,
-        );
+        let mut run = CodexRun {
+            link: ControlLink::opening(
+                launch,
+                codex_remote.expected.pid(leader),
+                codex_remote.budget,
+            ),
+            asking: Asking::default(),
+            mfa_retry_at: None,
+        };
         let mut recheck = interval(RECHECK_INTERVAL);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         recheck.reset();
@@ -193,27 +200,30 @@ impl AppState {
         usage.set_missed_tick_behavior(MissedTickBehavior::Delay);
         usage.reset();
         loop {
+            run.plan_mfa_retry(codex_remote);
+            let mfa_retry_at = run.mfa_retry_at;
+            let mut turned_off = false;
             tokio::select! {
                 exit = server.child.wait() => {
                     return RunEnd::Failed(server.finish(exit).await);
                 }
                 Some(line) = server.problems.recv() => {
-                    codex_remote.status.update(|status| status.name_problem(line));
+                    run.name_problem(codex_remote, line);
                     continue;
                 }
-                event = link.next() => {
+                event = run.link.next() => {
                     match event {
-                        LinkEvent::Ready(relay) => {
-                            tracing::info!("Codex remote control answers as {}", relay.server_name);
+                        LinkEvent::Ready { relay, client } => {
                             server.sample_family().await;
-                            codex_remote.status.update(|status| status.answer(relay));
+                            run.ready(self, relay, client);
                         }
-                        LinkEvent::Control(ControlEvent::Notification(
-                            ControlNotification::StatusChanged(relay),
-                        )) => codex_remote.status.update(|status| status.show_relay(relay)),
-                        LinkEvent::Control(_) => {}
+                        LinkEvent::Control(ControlEvent::Notification(notification)) => {
+                            run.notified(self, notification);
+                        }
+                        LinkEvent::Control(ControlEvent::ServerRequest { .. } | ControlEvent::Closed) => {}
                         LinkEvent::Lost => {
                             tracing::warn!("lost Codex's control connection, opening it again");
+                            codex_remote.with_control(|control| control.client = None);
                             codex_remote.status.update(CodexRemoteStatus::lose_control);
                         }
                         LinkEvent::GaveUp(message) => {
@@ -223,6 +233,16 @@ impl AppState {
                             return RunEnd::Failed(message.into());
                         }
                     }
+                    continue;
+                }
+                Some(answer) = run.asking.next() => {
+                    turned_off = run.answered(codex_remote, answer);
+                    if !turned_off {
+                        continue;
+                    }
+                }
+                () = sleep_until(mfa_retry_at.unwrap_or_else(Instant::now)), if mfa_retry_at.is_some() => {
+                    run.retry_mfa(codex_remote);
                     continue;
                 }
                 _ = signals.restarts.changed() => {
@@ -257,6 +277,10 @@ impl AppState {
                 }
             };
             match wanted.verdict(launch) {
+                Verdict::Keep | Verdict::Unsure if turned_off => {
+                    self.stop_codex_server(server).await;
+                    return RunEnd::Failed(TURNED_OFF.to_owned().into());
+                }
                 Verdict::Keep => {
                     let unsupported = matches!(
                         wanted,
@@ -282,11 +306,237 @@ impl AppState {
 
     async fn stop_codex_server(&self, server: CodexServerRun) {
         self.codex_remote
+            .with_control(|control| control.client = None);
+        self.codex_remote
             .status
             .update(|status| status.enter(ServerState::Stopping));
         if let Err(error) = server.stop(&self.codex_remote.budget).await {
             tracing::warn!("could not wait for Codex to stop: {error}");
         }
+    }
+}
+
+/// What the supervisor tracks while one server runs, beyond the status it shows.
+struct CodexRun {
+    link: ControlLink,
+    asking: Asking,
+    /// When to turn the relay on again while ChatGPT asks for multi-factor authentication.
+    mfa_retry_at: Option<Instant>,
+}
+
+impl CodexRun {
+    /// Shows a line that names a problem, and turns the relay off when Codex cannot enroll.
+    fn name_problem(&mut self, codex_remote: &CodexRemote, line: ProblemLine) {
+        let problem = line.problem;
+        codex_remote
+            .status
+            .update(|status| status.name_problem(line));
+        if problem.turns_relay_off() {
+            self.turn_relay_off(codex_remote);
+        }
+    }
+
+    /// The connection opened with `relay` as Codex reported it.
+    fn ready(&mut self, state: &AppState, relay: RelayWire, client: Arc<ControlClient>) {
+        let codex_remote = &state.codex_remote;
+        let off = codex_remote.with_control(|control| control.relay_off);
+        match relay.status {
+            RelayStatusWire::Disabled if !off => {
+                self.asking.turned_off(Arc::clone(&state.agent_checks));
+            }
+            RelayStatusWire::Connected => {
+                codex_remote.with_control(|control| control.relay_off = false);
+            }
+            RelayStatusWire::Connecting | RelayStatusWire::Errored if off => {
+                self.asking.relay(Arc::clone(&client), true);
+            }
+            RelayStatusWire::Disabled | RelayStatusWire::Connecting | RelayStatusWire::Errored => {}
+        }
+        tracing::info!("Codex remote control answers as {}", relay.server_name);
+        codex_remote.with_control(|control| control.client = Some(Arc::clone(&client)));
+        codex_remote.status.update(|status| status.answer(relay));
+        self.asking.account(client, None);
+    }
+
+    fn notified(&mut self, state: &AppState, notification: ControlNotification) {
+        let codex_remote = &state.codex_remote;
+        match notification {
+            ControlNotification::StatusChanged(relay) => {
+                match relay.status {
+                    RelayStatusWire::Disabled
+                        if !codex_remote.with_control(|control| control.relay_off) =>
+                    {
+                        self.asking.turned_off(Arc::clone(&state.agent_checks));
+                    }
+                    RelayStatusWire::Connected => {
+                        codex_remote.with_control(|control| control.relay_off = false);
+                    }
+                    RelayStatusWire::Disabled
+                    | RelayStatusWire::Connecting
+                    | RelayStatusWire::Errored => {}
+                }
+                codex_remote
+                    .status
+                    .update(|status| status.show_relay(relay));
+            }
+            ControlNotification::AccountUpdated {} => {
+                if let Some(client) = codex_remote.client() {
+                    self.asking
+                        .account(client, Some(Arc::clone(&state.agent_checks)));
+                }
+            }
+            ControlNotification::ThreadStarted { .. }
+            | ControlNotification::ThreadStatusChanged { .. }
+            | ControlNotification::ThreadClosed { .. } => {}
+        }
+    }
+
+    /// True when Codex turned the relay off by itself and still has it off, with Codex's own
+    /// sign-in checked again since.
+    fn answered(&mut self, codex_remote: &CodexRemote, answer: Answer) -> bool {
+        match answer {
+            Answer::Account { account, changed } => match account.problem() {
+                Some(problem) => {
+                    codex_remote
+                        .status
+                        .update(|status| status.name_sign_in_problem(problem));
+                    self.turn_relay_off(codex_remote);
+                }
+                None if changed
+                    && codex_remote.status.read(|status| {
+                        status
+                            .problem
+                            .is_some_and(CodexProblem::is_about_the_sign_in)
+                    }) =>
+                {
+                    self.turn_relay_on(codex_remote);
+                }
+                None => {}
+            },
+            Answer::RelayStays { off } => {
+                codex_remote.with_control(|control| control.relay_off = off);
+            }
+            Answer::TurnedOff => {
+                return codex_remote.status.read(|status| status.relay)
+                    == Some(RelayState::Disabled)
+                    && !codex_remote.with_control(|control| control.relay_off);
+            }
+            Answer::Nothing => {}
+        }
+        false
+    }
+
+    fn turn_relay_off(&mut self, codex_remote: &CodexRemote) {
+        if !codex_remote.with_control(Control::turn_relay_off) {
+            return;
+        }
+        if let Some(client) = codex_remote.client() {
+            self.asking.relay(client, true);
+        }
+    }
+
+    /// Asks Codex to turn the relay on again when ezra turned it off.
+    fn turn_relay_on(&mut self, codex_remote: &CodexRemote) {
+        if let Some(client) = codex_remote.with_control(Control::turn_relay_on) {
+            self.asking.relay(client, false);
+        }
+    }
+
+    /// Plans turning the relay on again while ezra holds it off and ChatGPT asks for multi-factor
+    /// authentication, and drops the plan otherwise.
+    fn plan_mfa_retry(&mut self, codex_remote: &CodexRemote) {
+        let waiting = codex_remote.with_control(|control| control.relay_off)
+            && codex_remote.status.read(|status| status.problem) == Some(CodexProblem::MfaRequired);
+        if !waiting {
+            self.mfa_retry_at = None;
+        } else if self.mfa_retry_at.is_none() {
+            self.mfa_retry_at = Instant::now().checked_add(codex_remote.budget.mfa_retry);
+        }
+    }
+
+    fn retry_mfa(&mut self, codex_remote: &CodexRemote) {
+        self.mfa_retry_at = None;
+        if codex_remote.status.read(|status| status.problem) == Some(CodexProblem::MfaRequired) {
+            self.turn_relay_on(codex_remote);
+        }
+    }
+}
+
+/// Requests to Codex that run beside the supervisor, and end with the run.
+#[derive(Default)]
+struct Asking(JoinSet<Answer>);
+
+/// What Codex's answer to a request running beside the supervisor tells it.
+enum Answer {
+    /// The server's sign-in, read again after it changed when `changed`.
+    Account {
+        account: AccountWire,
+        changed: bool,
+    },
+    /// Codex did not do what ezra asked, so the relay stays off, or on when not `off`.
+    RelayStays {
+        off: bool,
+    },
+    /// Codex turned the relay off by itself, and its sign-in was checked again since.
+    TurnedOff,
+    Nothing,
+}
+
+impl Asking {
+    /// Asks Codex to turn the relay off, or on when not `off`.
+    fn relay(&mut self, client: Arc<ControlClient>, off: bool) {
+        self.0.spawn(async move {
+            let asked = if off {
+                client.request(Disable { ephemeral: true }).await
+            } else {
+                client.request(Enable { ephemeral: true }).await
+            };
+            match asked {
+                Ok(_) | Err(ControlError::Closed) => Answer::Nothing,
+                Err(error) => {
+                    let turn = if off { "off" } else { "on" };
+                    tracing::warn!("Codex did not turn remote control {turn}: {error}");
+                    Answer::RelayStays { off: !off }
+                }
+            }
+        });
+    }
+
+    /// Checks Codex's own sign-in again, after Codex turned the relay off by itself.
+    fn turned_off(&mut self, agent_checks: Arc<AgentChecks>) {
+        self.0.spawn(async move {
+            agent_checks
+                .check_sign_in(Agent::Codex, Duration::ZERO)
+                .await;
+            Answer::TurnedOff
+        });
+    }
+
+    /// Reads the server's sign-in, after checking Codex's own when `agent_checks` is given.
+    fn account(&mut self, client: Arc<ControlClient>, agent_checks: Option<Arc<AgentChecks>>) {
+        let changed = agent_checks.is_some();
+        self.0.spawn(async move {
+            if let Some(agent_checks) = agent_checks {
+                agent_checks.refresh(Agent::Codex).await;
+            }
+            match client.request(AccountRead {}).await {
+                Ok(account) => Answer::Account { account, changed },
+                Err(error) => {
+                    tracing::warn!("could not read Codex's sign-in: {error}");
+                    Answer::Nothing
+                }
+            }
+        });
+    }
+
+    /// Waits for the next answer. None while nothing is asked.
+    async fn next(&mut self) -> Option<Answer> {
+        while let Some(joined) = self.0.join_next().await {
+            if let Ok(answer) = joined {
+                return Some(answer);
+            }
+        }
+        None
     }
 }
 
@@ -310,7 +560,10 @@ impl Wanted<CodexLaunch, Option<CodexProblem>> {
 #[derive(Debug)]
 enum LinkEvent {
     /// The connection opened, with the relay as it was then.
-    Ready(RelayWire),
+    Ready {
+        relay: RelayWire,
+        client: Arc<ControlClient>,
+    },
     Control(ControlEvent),
     /// The connection closed, and opening it again started.
     Lost,
@@ -329,7 +582,7 @@ struct ControlLink {
 
 enum LinkState {
     Open {
-        _client: ControlClient,
+        _client: Arc<ControlClient>,
         events: mpsc::UnboundedReceiver<ControlEvent>,
     },
     Opening(Attempts),
@@ -390,11 +643,12 @@ impl ControlLink {
                     events,
                     relay,
                 })) => {
+                    let client = Arc::new(client);
                     self.state = LinkState::Open {
-                        _client: client,
+                        _client: Arc::clone(&client),
                         events,
                     };
-                    return LinkEvent::Ready(relay);
+                    return LinkEvent::Ready { relay, client };
                 }
                 Ok(Err(error)) => attempts.failed(error.to_string()),
                 Err(error) => attempts.failed(error.to_string()),
@@ -515,20 +769,21 @@ mod tests {
 
     use axum::http::StatusCode;
     use nix::sys::signal::{Signal, kill};
-    use serde_json::json;
-    use tokio::time::timeout;
+    use serde_json::{Value, json};
+    use tokio::time::{sleep, timeout};
 
     use super::*;
     use crate::manager::api::test_support::{
         EventStreamExt, PidExt, ProgramExt, ResponseExt, TestManager, wait_until,
     };
-    use crate::manager::codex_remote::control::RelayStatusWire;
     use crate::manager::codex_remote::fake::{FakeControlServer, Reply};
     use crate::manager::codex_remote::foreign::tests::{
         ForeignListener, SLEEPS, Started, daemon_updater,
     };
     use crate::manager::codex_remote::launch::LaunchFlags;
-    use crate::manager::codex_remote::problem::tests::relay_warning;
+    use crate::manager::codex_remote::problem::tests::{
+        mfa_warning, relay_warning, unavailable_warning,
+    };
     use crate::manager::codex_remote::run::tests::{
         LEFTOVER, SOCKET_IN_USE, counting_terms, exits_when_told, terms_seen,
     };
@@ -546,6 +801,7 @@ mod tests {
         drain: Duration::from_secs(1),
         force: Duration::from_secs(1),
         request: Duration::from_secs(5),
+        mfa_retry: Duration::from_secs(10 * 60),
     };
     const SHORT_READINESS: ServerBudget = ServerBudget {
         readiness: Duration::from_secs(1),
@@ -968,6 +1224,679 @@ mod tests {
         shut_down(&manager, supervisor).await;
     }
 
+    /// A server that prints `line` twice to stderr each time `$CODEX_HOME/print` appears, which
+    /// it removes.
+    fn prints_when_told(line: &str) -> String {
+        format!(
+            "while :; do\n  \
+               if [ -e \"$CODEX_HOME/print\" ]; then\n    \
+                 rm \"$CODEX_HOME/print\"\n    \
+                 printf '%s\\n' '{line}' '{line}' >&2\n  \
+               fi\n  \
+               sleep 0.05\n\
+             done"
+        )
+    }
+
+    fn tell_to_print(manager: &TestManager) {
+        fs::write(codex_home(manager).join("print"), "").expect("the server is told to print");
+    }
+
+    /// Serves the control socket like `control`, and turns the relay off and on like Codex.
+    fn relay_control(manager: &TestManager, relay: &str) -> FakeControlServer {
+        let fake = control(manager, relay);
+        fake.reply(
+            "remoteControl/disable",
+            [Reply::Result(FakeControlServer::relay("disabled"))],
+        );
+        fake.push_after(
+            "remoteControl/disable",
+            FakeControlServer::status_changed("disabled"),
+        );
+        fake.reply(
+            "remoteControl/enable",
+            [Reply::Result(FakeControlServer::relay("connecting"))],
+        );
+        fake.push_after(
+            "remoteControl/enable",
+            FakeControlServer::status_changed("connecting"),
+        );
+        fake
+    }
+
+    fn turned_off(status: &CodexRemoteStatus) -> bool {
+        status.relay == Some(RelayState::Disabled)
+    }
+
+    const TURN_OFF: &str = "remoteControl/disable";
+    const TURN_ON: &str = "remoteControl/enable";
+    const RETRY: &str = "/api/v1/remote-control/codex/retry";
+
+    /// Starts a supervisor whose server prints the MFA warning when told, and waits until the
+    /// warning turned the relay off.
+    async fn asking_for_mfa(
+        manager: &TestManager,
+        control: impl FnOnce(&TestManager) -> FakeControlServer,
+    ) -> (JoinHandle<()>, FakeControlServer) {
+        install_codex(
+            manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            &prints_when_told(&mfa_warning()),
+        );
+        sign_in(manager, CHATGPT);
+        let supervisor = supervise(manager);
+        servers_started(manager, 1).await;
+        let fake = control(manager);
+        status_until(manager, |status| status.state == ServerState::Running).await;
+        tell_to_print(manager);
+        let off = status_until(manager, turned_off).await;
+        assert_eq!(
+            (off.state, off.problem, off.restarts),
+            (ServerState::Running, Some(CodexProblem::MfaRequired), 0)
+        );
+        assert_eq!(off.last_error, Some(mfa_warning()));
+        (supervisor, fake)
+    }
+
+    #[tokio::test]
+    async fn chatgpt_asking_for_mfa_turns_the_relay_off_once_and_codex_keeps_running() {
+        let manager = manager(BUDGET);
+        let (supervisor, fake) =
+            asking_for_mfa(&manager, |manager| relay_control(manager, "errored")).await;
+
+        tell_to_print(&manager);
+        wait_until(
+            WAIT,
+            || manager.state.codex_remote.log.tail().unwrap_or_default(),
+            |lines| {
+                lines
+                    .iter()
+                    .filter(|line| line.ends_with(&mfa_warning()))
+                    .count()
+                    == 4
+            },
+        )
+        .await;
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(fake.requests_of(TURN_OFF), [json!({"ephemeral": true})]);
+        let off = manager.state.codex_remote.status();
+        assert_eq!(
+            (off.state, off.relay, off.restarts),
+            (ServerState::Running, Some(RelayState::Disabled), 0)
+        );
+        assert_eq!(servers(&manager).len(), 1);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn the_disabled_status_may_arrive_before_or_after_the_answer_to_turning_it_off() {
+        for before in [true, false] {
+            let manager = manager(BUDGET);
+            let (supervisor, fake) = asking_for_mfa(&manager, |manager| {
+                let fake = control(manager, "errored");
+                fake.reply(
+                    TURN_OFF,
+                    [Reply::Result(FakeControlServer::relay("disabled"))],
+                );
+                let disabled = FakeControlServer::status_changed("disabled");
+                if before {
+                    fake.push_before(TURN_OFF, disabled);
+                } else {
+                    fake.push_after(TURN_OFF, disabled);
+                }
+                fake
+            })
+            .await;
+
+            sleep(Duration::from_millis(200)).await;
+            let off = manager.state.codex_remote.status();
+            assert_eq!(
+                (off.state, off.relay, off.restarts),
+                (ServerState::Running, Some(RelayState::Disabled), 0),
+                "before: {before}"
+            );
+            assert_eq!(fake.requests_of(TURN_OFF).len(), 1);
+            assert_eq!(servers(&manager).len(), 1);
+
+            shut_down(&manager, supervisor).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_mfa_warning_before_codex_answers_turns_the_relay_off_once_it_does() {
+        let manager = manager(BUDGET);
+        install_codex(
+            &manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            &format!("printf '%s\\n' '{}' >&2\n{SERVE}", mfa_warning()),
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        let starting = status_until(&manager, |status| status.problem.is_some()).await;
+        assert_eq!(
+            (starting.state, starting.problem),
+            (ServerState::Starting, Some(CodexProblem::MfaRequired))
+        );
+
+        let fake = relay_control(&manager, "errored");
+        let off = status_until(&manager, turned_off).await;
+        assert_eq!(
+            (off.state, off.problem, off.restarts),
+            (ServerState::Running, Some(CodexProblem::MfaRequired), 0)
+        );
+        assert_eq!(fake.requests_of(TURN_OFF), [json!({"ephemeral": true})]);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_disabled_status_while_codex_stops_changes_nothing() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        install_codex(
+            &manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            &counting_terms(2, ""),
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = control(&manager, "connected");
+        status_until(&manager, connected).await;
+
+        let off = CodexRemoteSettings {
+            enabled: false,
+            ..CodexRemoteSettings::default()
+        };
+        save(&manager, &cookie, off).await;
+        let home = codex_home(&manager);
+        wait_until(WAIT, || terms_seen(&home), |terms| *terms == 1).await;
+        fake.push(FakeControlServer::status_changed("disabled"));
+        let stopped = status_until(&manager, |status| status.state == ServerState::Off).await;
+        assert_eq!(
+            (stopped.relay, stopped.problem, stopped.restarts),
+            (None, None, 0)
+        );
+        assert_eq!(terms_seen(&home), 2);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codex_turning_the_relay_off_by_itself_restarts_it_after_a_delay() {
+        let manager = manager(BUDGET);
+        let (supervisor, fake, first) = running(&manager, "0.157.1").await;
+
+        fake.push(FakeControlServer::status_changed("disabled"));
+        let retrying = status_until(&manager, |status| status.state == ServerState::Retrying).await;
+        let failed = Instant::now();
+        assert_eq!(
+            (retrying.restarts, retrying.last_error.as_deref()),
+            (1, Some("Codex turned remote control off"))
+        );
+        first.wait_until_gone().await;
+        wait_until(
+            FIRST_RETRY_DELAY.saturating_add(WAIT),
+            || servers(&manager).len(),
+            |started| *started == 2,
+        )
+        .await;
+        assert!(
+            failed.elapsed() >= FIRST_RETRY_DELAY.saturating_sub(Duration::from_millis(500)),
+            "{:?}",
+            failed.elapsed()
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn trying_again_clears_the_problem_before_codex_turns_the_relay_on() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, fake) =
+            asking_for_mfa(&manager, |manager| relay_control(manager, "errored")).await;
+        fake.reply(
+            TURN_ON,
+            [Reply::Late(
+                Duration::from_millis(500),
+                FakeControlServer::relay("connecting"),
+            )],
+        );
+        assert_eq!(
+            manager.post(RETRY, "", None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let (response, (cleared, answered_then)) =
+            tokio::join!(manager.post(RETRY, "", Some(&cookie)), async {
+                let cleared = status_until(&manager, |status| status.problem.is_none()).await;
+                (cleared, fake.answered(TURN_ON))
+            });
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(cleared.last_error, None);
+        assert!(!answered_then);
+        assert!(fake.answered(TURN_ON));
+        assert_eq!(fake.requests_of(TURN_ON), [json!({"ephemeral": true})]);
+        let connecting = status_until(&manager, |status| {
+            status.relay == Some(RelayState::Connecting)
+        })
+        .await;
+        assert_eq!((connecting.problem, connecting.restarts), (None, 0));
+
+        tell_to_print(&manager);
+        let off = status_until(&manager, turned_off).await;
+        assert_eq!(
+            (off.problem, off.last_error),
+            (Some(CodexProblem::MfaRequired), Some(mfa_warning()))
+        );
+        assert_eq!(fake.requests_of(TURN_OFF).len(), 2);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    /// Codex's answer when the account changed while it turned the relay on.
+    fn authentication_changed() -> Reply {
+        Reply::Error {
+            code: -32603,
+            message: "remote control authentication changed".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn trying_again_when_codex_refuses_shows_the_problem_again_and_tries_later() {
+        let manager = manager(ServerBudget {
+            mfa_retry: Duration::from_secs(1),
+            ..BUDGET
+        });
+        let cookie = manager.logged_in().await;
+        let (supervisor, fake) = asking_for_mfa(&manager, |manager| {
+            let fake = relay_control(manager, "errored");
+            fake.reply(TURN_ON, [authentication_changed()]);
+            fake
+        })
+        .await;
+
+        let response = manager.post(RETRY, "", Some(&cookie)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let shown = manager.state.codex_remote.status();
+        assert_eq!(
+            (shown.relay, shown.problem, shown.last_error),
+            (
+                Some(RelayState::Disabled),
+                Some(CodexProblem::MfaRequired),
+                Some(mfa_warning())
+            )
+        );
+        let tried = fake.requests_of(TURN_ON).len();
+        fake.until_requested(TURN_ON, tried.saturating_add(1)).await;
+        assert_eq!(manager.state.codex_remote.status().restarts, 0);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn trying_again_while_the_relay_is_on_only_clears_the_problem() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        install_codex(
+            &manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            &prints_when_told(&unavailable_warning()),
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = relay_control(&manager, "errored");
+        status_until(&manager, |status| status.state == ServerState::Running).await;
+        tell_to_print(&manager);
+        status_until(&manager, |status| {
+            status.problem == Some(CodexProblem::RelayUnavailable)
+        })
+        .await;
+
+        let response = manager.post(RETRY, "", Some(&cookie)).await;
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let cleared = manager.state.codex_remote.status();
+        assert_eq!(
+            (cleared.relay, cleared.problem, cleared.last_error),
+            (Some(RelayState::Errored), None, None)
+        );
+        assert!(fake.requests_of(TURN_ON).is_empty());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn trying_again_needs_a_running_codex() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+
+        let response = manager.post(RETRY, "", Some(&cookie)).await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn the_relay_is_turned_on_again_while_chatgpt_asks_for_mfa() {
+        let manager = manager(ServerBudget {
+            mfa_retry: Duration::from_secs(1),
+            ..BUDGET
+        });
+        let (supervisor, fake) =
+            asking_for_mfa(&manager, |manager| relay_control(manager, "errored")).await;
+
+        fake.until_requested(TURN_ON, 1).await;
+        let trying = status_until(&manager, |status| {
+            status.relay == Some(RelayState::Connecting)
+        })
+        .await;
+        assert_eq!(trying.problem, Some(CodexProblem::MfaRequired));
+        tell_to_print(&manager);
+        fake.until_requested(TURN_OFF, 2).await;
+        status_until(&manager, turned_off).await;
+        fake.until_requested(TURN_ON, 2).await;
+
+        fake.push(FakeControlServer::status_changed("connected"));
+        let connected = status_until(&manager, connected).await;
+        assert_eq!((connected.problem, connected.last_error), (None, None));
+        sleep(Duration::from_millis(1500)).await;
+        assert_eq!(fake.requests_of(TURN_ON).len(), 2);
+        assert_eq!(fake.requests_of(TURN_OFF).len(), 2);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_codex_cannot_serve_with_turns_the_relay_off() {
+        for (account, requires_openai_auth, problem) in [
+            (
+                json!({"type": "apiKey"}),
+                true,
+                Some(CodexProblem::NotChatGpt),
+            ),
+            (Value::Null, true, Some(CodexProblem::SignedOut)),
+            (Value::Null, false, None),
+            (
+                json!({"type": "amazonBedrock", "usesCodexManagedCredentials": true}),
+                false,
+                None,
+            ),
+            (
+                json!({"type": "chatgpt", "email": "dev@example.com", "planType": "plus"}),
+                true,
+                None,
+            ),
+        ] {
+            let manager = manager(BUDGET);
+            install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+            sign_in(&manager, CHATGPT);
+            let supervisor = supervise(&manager);
+            servers_started(&manager, 1).await;
+            let fake = relay_control(&manager, "connecting");
+            fake.reply(
+                "account/read",
+                [Reply::Result(json!({
+                    "account": account,
+                    "requiresOpenaiAuth": requires_openai_auth,
+                }))],
+            );
+
+            fake.until_requested("account/read", 1).await;
+            let shown = match problem {
+                Some(_) => {
+                    let off = status_until(&manager, turned_off).await;
+                    assert_eq!(fake.requests_of(TURN_OFF).len(), 1, "{account}");
+                    off
+                }
+                None => {
+                    sleep(Duration::from_millis(200)).await;
+                    assert!(fake.requests_of(TURN_OFF).is_empty(), "{account}");
+                    manager.state.codex_remote.status()
+                }
+            };
+            assert_eq!(
+                (shown.state, shown.problem, shown.last_error),
+                (ServerState::Running, problem, None),
+                "{account}"
+            );
+
+            shut_down(&manager, supervisor).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_changed_sign_in_is_checked_and_read_again() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = relay_control(&manager, "connecting");
+        fake.reply(
+            "account/read",
+            [
+                Reply::Result(json!({"account": null, "requiresOpenaiAuth": true})),
+                Reply::Result(json!({
+                    "account": {"type": "chatgpt", "email": "dev@example.com", "planType": "plus"},
+                    "requiresOpenaiAuth": true,
+                })),
+            ],
+        );
+        let signed_out = status_until(&manager, turned_off).await;
+        assert_eq!(signed_out.problem, Some(CodexProblem::SignedOut));
+        let checks = || {
+            manager
+                .fake_cli_runs(Agent::Codex)
+                .iter()
+                .filter(|run| *run == "login status")
+                .count()
+        };
+        let checked = checks();
+
+        fake.push(signed_in_with_chatgpt());
+        fake.until_requested("account/read", 2).await;
+        wait_until(WAIT, checks, |count| *count > checked).await;
+        fake.until_requested(TURN_ON, 1).await;
+        assert_eq!(fake.requests_of(TURN_ON), [json!({"ephemeral": true})]);
+        let connecting = status_until(&manager, |status| {
+            status.relay == Some(RelayState::Connecting)
+        })
+        .await;
+        assert_eq!(
+            (connecting.state, connecting.problem),
+            (ServerState::Running, Some(CodexProblem::SignedOut))
+        );
+
+        fake.push(FakeControlServer::status_changed("connected"));
+        let signed_in = status_until(&manager, connected).await;
+        assert_eq!((signed_in.problem, signed_in.restarts), (None, 0));
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    /// The notification Codex sends when its sign-in becomes ChatGPT's, and to each new
+    /// connection while that sign-in has workspace routing.
+    fn signed_in_with_chatgpt() -> Value {
+        json!({
+            "method": "account/updated",
+            "params": {"authMode": "chatgpt", "planType": "plus"},
+        })
+    }
+
+    fn chatgpt_account() -> Reply {
+        Reply::Result(json!({
+            "account": {"type": "chatgpt", "email": "dev@example.com", "planType": "plus"},
+            "requiresOpenaiAuth": true,
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_changed_sign_in_codex_refuses_to_serve_leaves_the_relay_off_and_the_problem_shown() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = relay_control(&manager, "connecting");
+        fake.reply(
+            "account/read",
+            [
+                Reply::Result(json!({"account": null, "requiresOpenaiAuth": true})),
+                chatgpt_account(),
+            ],
+        );
+        fake.reply(TURN_ON, [authentication_changed()]);
+        status_until(&manager, turned_off).await;
+
+        fake.push(signed_in_with_chatgpt());
+        fake.until_requested(TURN_ON, 1).await;
+        sleep(Duration::from_millis(200)).await;
+        let refused = manager.state.codex_remote.status();
+        assert_eq!(
+            (refused.state, refused.relay, refused.problem),
+            (
+                ServerState::Running,
+                Some(RelayState::Disabled),
+                Some(CodexProblem::SignedOut)
+            )
+        );
+
+        fake.push(signed_in_with_chatgpt());
+        fake.until_requested(TURN_ON, 2).await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codex_reporting_its_sign_in_on_each_connection_changes_nothing() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = relay_control(&manager, "connected");
+        fake.reply("account/read", [chatgpt_account()]);
+        fake.push_after("remoteControl/status/read", signed_in_with_chatgpt());
+
+        fake.until_requested("account/read", 2).await;
+        fake.disconnect();
+        fake.until_requested("account/read", 4).await;
+        sleep(Duration::from_millis(200)).await;
+        let running = status_until(&manager, connected).await;
+        assert_eq!((running.problem, running.restarts), (None, 0));
+        assert!(fake.requests_of(TURN_OFF).is_empty());
+        assert!(fake.requests_of(TURN_ON).is_empty());
+        assert_eq!(servers(&manager).len(), 1);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn signing_out_while_codex_serves_stops_it_without_a_failure() {
+        for disabled_first in [true, false] {
+            let manager = manager(BUDGET);
+            let (supervisor, fake, first) = running(&manager, "0.157.1").await;
+
+            sign_in(&manager, SIGNED_OUT);
+            let mut pushes = [
+                FakeControlServer::status_changed("disabled"),
+                json!({
+                    "method": "account/updated",
+                    "params": {"authMode": null, "planType": null},
+                }),
+            ];
+            if !disabled_first {
+                pushes.reverse();
+            }
+            for frame in pushes {
+                fake.push(frame);
+            }
+
+            let waiting =
+                status_until(&manager, |status| status.state == ServerState::Waiting).await;
+            assert_eq!(
+                (waiting.problem, waiting.last_error, waiting.restarts),
+                (None, None, 0),
+                "disabled first: {disabled_first}"
+            );
+            first.wait_until_gone().await;
+            assert_eq!(servers(&manager).len(), 1);
+
+            shut_down(&manager, supervisor).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_warning_about_reaching_chatgpt_leaves_the_relay_on() {
+        let manager = manager(BUDGET);
+        install_codex(
+            &manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            &prints_when_told(&unavailable_warning()),
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = relay_control(&manager, "errored");
+        status_until(&manager, |status| status.state == ServerState::Running).await;
+
+        tell_to_print(&manager);
+        let unavailable = status_until(&manager, |status| status.problem.is_some()).await;
+        assert_eq!(unavailable.problem, Some(CodexProblem::RelayUnavailable));
+        sleep(Duration::from_millis(200)).await;
+        assert!(fake.requests_of(TURN_OFF).is_empty());
+        assert_eq!(
+            manager.state.codex_remote.status().relay,
+            Some(RelayState::Errored)
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn an_error_is_published_once_and_shown_until_codex_connects() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = control(&manager, "connecting");
+        status_until(&manager, |status| status.state == ServerState::Running).await;
+        let mut events = Box::pin(manager.state.events.stream());
+
+        for relay in ["connecting", "errored", "connecting", "errored"] {
+            fake.push(FakeControlServer::status_changed(relay));
+        }
+        let published = events.published().await;
+        assert_eq!(
+            published
+                .iter()
+                .filter(|topic| **topic == Topic::RemoteControl)
+                .count(),
+            1,
+            "{published:?}"
+        );
+        assert_eq!(
+            manager.state.codex_remote.status().relay,
+            Some(RelayState::Errored)
+        );
+
+        fake.push(FakeControlServer::status_changed("connected"));
+        status_until(&manager, connected).await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
     #[tokio::test]
     async fn a_codex_server_that_exits_is_retried_and_its_output_logged() {
         let manager = manager(BUDGET);
@@ -1258,19 +2187,13 @@ mod tests {
         let (supervisor, fake, first) = running(&manager, "0.157.1").await;
 
         fake.disconnect();
-        let requests = wait_until(
-            WAIT,
-            || fake.requests(),
-            |requests| {
-                requests
-                    .iter()
-                    .filter(|(method, _)| method == "remoteControl/status/read")
-                    .count()
-                    >= 2
-            },
-        )
-        .await;
-        let methods: Vec<&str> = requests.iter().map(|(method, _)| method.as_str()).collect();
+        fake.until_requested("account/read", 2).await;
+        let requests = fake.requests();
+        let methods: Vec<&str> = requests
+            .iter()
+            .map(|(method, _)| method.as_str())
+            .filter(|method| *method != "account/read")
+            .collect();
         assert_eq!(
             methods,
             [
@@ -1283,6 +2206,97 @@ mod tests {
         let running = status_until(&manager, connected).await;
         assert_eq!(running.restarts, 0);
         assert_eq!(servers(&manager), [first]);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_ezra_turned_off_stays_off_across_a_lost_control_connection() {
+        for answered in [false, true] {
+            let manager = manager(BUDGET);
+            let (supervisor, fake) = asking_for_mfa(&manager, |manager| {
+                let fake = FakeControlServer::bind(&codex_home(manager));
+                fake.reply(
+                    "remoteControl/status/read",
+                    [
+                        Reply::Result(FakeControlServer::relay("errored")),
+                        Reply::Result(FakeControlServer::relay("disabled")),
+                    ],
+                );
+                let disabled = FakeControlServer::status_changed("disabled");
+                if answered {
+                    fake.reply(
+                        TURN_OFF,
+                        [Reply::Result(FakeControlServer::relay("disabled"))],
+                    );
+                    fake.push_after(TURN_OFF, disabled);
+                } else {
+                    fake.reply(TURN_OFF, [Reply::Never]);
+                    fake.push_before(TURN_OFF, disabled);
+                }
+                fake
+            })
+            .await;
+
+            fake.disconnect();
+            fake.until_requested("remoteControl/status/read", 2).await;
+            status_until(&manager, turned_off).await;
+            sleep(Duration::from_millis(500)).await;
+            let off = manager.state.codex_remote.status();
+            assert_eq!(
+                (off.state, off.relay, off.problem, off.restarts),
+                (
+                    ServerState::Running,
+                    Some(RelayState::Disabled),
+                    Some(CodexProblem::MfaRequired),
+                    0
+                ),
+                "answered: {answered}"
+            );
+            assert_eq!(fake.requests_of(TURN_OFF).len(), 1, "answered: {answered}");
+            assert_eq!(servers(&manager).len(), 1);
+
+            shut_down(&manager, supervisor).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_mfa_warning_while_the_control_connection_is_lost_turns_the_relay_off_once_it_opens()
+    {
+        let manager = manager(BUDGET);
+        install_codex(
+            &manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            &prints_when_told(&mfa_warning()),
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = relay_control(&manager, "errored");
+        status_until(&manager, |status| status.state == ServerState::Running).await;
+        fake.reply(
+            "remoteControl/status/read",
+            [Reply::Late(
+                Duration::from_secs(1),
+                FakeControlServer::relay("errored"),
+            )],
+        );
+
+        fake.disconnect();
+        status_until(&manager, |status| status.relay.is_none()).await;
+        tell_to_print(&manager);
+        status_until(&manager, |status| {
+            status.problem == Some(CodexProblem::MfaRequired)
+        })
+        .await;
+        assert!(fake.requests_of(TURN_OFF).is_empty());
+
+        fake.until_requested(TURN_OFF, 1).await;
+        let off = status_until(&manager, turned_off).await;
+        assert_eq!((off.state, off.restarts), (ServerState::Running, 0));
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(fake.requests_of(TURN_OFF), [json!({"ephemeral": true})]);
 
         shut_down(&manager, supervisor).await;
     }
@@ -1478,7 +2492,7 @@ mod tests {
         let mut link = ControlLink::opening(&launch, server.leader().expect("codex runs"), budget);
 
         let event = link.next().await;
-        let LinkEvent::Ready(relay) = event else {
+        let LinkEvent::Ready { relay, client } = event else {
             panic!("{event:?}");
         };
         let socket = fs::read_link(ControlSocket::of(home.path()).0)
@@ -1495,6 +2509,33 @@ mod tests {
             .expect("a problem line arrives in time")
             .expect("the output is read");
         assert_eq!(problem.problem, CodexProblem::SignedOut, "{}", problem.line);
+        let account = client
+            .request(AccountRead {})
+            .await
+            .expect("codex reads its sign-in");
+        assert_eq!(
+            account.problem(),
+            Some(CodexProblem::SignedOut),
+            "{account:?}"
+        );
+        let turned_off = client
+            .request(Disable { ephemeral: true })
+            .await
+            .expect("codex turns the relay off");
+        assert_eq!(turned_off.status, RelayStatusWire::Disabled);
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if let LinkEvent::Control(ControlEvent::Notification(
+                    ControlNotification::StatusChanged(relay),
+                )) = link.next().await
+                    && relay.status == RelayStatusWire::Disabled
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("codex reports the relay turned off");
         let stopping = Instant::now();
         let exit = server
             .stop(&ServerBudget {

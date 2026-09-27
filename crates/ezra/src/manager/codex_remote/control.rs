@@ -17,6 +17,7 @@ use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{WebSocketStream, client_async};
 
 use super::ServerBudget;
+use super::problem::CodexProblem;
 
 /// A client name Codex does not take as the originator of its own requests.
 const CLIENT_NAME: &str = "codex_app_server_daemon";
@@ -175,26 +176,22 @@ impl ControlRequest for StatusRead {
 }
 
 /// Turns the relay on, for this server's lifetime only when `ephemeral`.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct Enable {
     pub ephemeral: bool,
 }
 
-#[cfg(test)]
 impl ControlRequest for Enable {
     const METHOD: &'static str = "remoteControl/enable";
     type Response = RelayWire;
 }
 
 /// Turns the relay off, for this server's lifetime only when `ephemeral`.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct Disable {
     pub ephemeral: bool,
 }
 
-#[cfg(test)]
 impl ControlRequest for Disable {
     const METHOD: &'static str = "remoteControl/disable";
     type Response = RelayWire;
@@ -260,11 +257,9 @@ impl ControlRequest for ClientRevoke {
 }
 
 /// Reads how the server is signed in.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct AccountRead {}
 
-#[cfg(test)]
 impl ControlRequest for AccountRead {
     const METHOD: &'static str = "account/read";
     type Response = AccountWire;
@@ -422,7 +417,6 @@ pub struct ClientWire {
     pub last_seen_at: Option<i64>,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountWire {
@@ -432,7 +426,6 @@ pub struct AccountWire {
     pub requires_openai_auth: bool,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type")]
 pub enum AccountKindWire {
@@ -442,6 +435,20 @@ pub enum AccountKindWire {
     ApiKey,
     #[serde(rename = "amazonBedrock")]
     AmazonBedrock,
+}
+
+impl AccountWire {
+    /// What keeps this sign-in from serving the ChatGPT app.
+    pub fn problem(&self) -> Option<CodexProblem> {
+        if !self.requires_openai_auth {
+            return None;
+        }
+        match self.account {
+            Some(AccountKindWire::ChatGpt | AccountKindWire::AmazonBedrock) => None,
+            Some(AccountKindWire::ApiKey) => Some(CodexProblem::NotChatGpt),
+            None => Some(CodexProblem::SignedOut),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -797,6 +804,7 @@ pub(super) mod tests {
         drain: Duration::ZERO,
         force: Duration::ZERO,
         request: Duration::from_secs(5),
+        mfa_retry: Duration::ZERO,
     };
     const ENABLE_FIRST: &str = "remote control pairing requires remote control to be enabled";
 
@@ -1141,6 +1149,27 @@ pub(super) mod tests {
             .find(|frame| frame["method"] == "remoteControl/status/read")
             .expect("the status was read");
         assert!(status_read.get("params").is_none(), "{status_read}");
+    }
+
+    #[test]
+    fn only_a_chatgpt_sign_in_serves_the_chatgpt_app() {
+        for (account, requires_openai_auth, problem) in [
+            (Some(AccountKindWire::ChatGpt), true, None),
+            (
+                Some(AccountKindWire::ApiKey),
+                true,
+                Some(CodexProblem::NotChatGpt),
+            ),
+            (Some(AccountKindWire::AmazonBedrock), false, None),
+            (None, true, Some(CodexProblem::SignedOut)),
+            (None, false, None),
+        ] {
+            let read = AccountWire {
+                account,
+                requires_openai_auth,
+            };
+            assert_eq!(read.problem(), problem, "{read:?}");
+        }
     }
 
     #[tokio::test]

@@ -1,11 +1,29 @@
+use std::sync::Arc;
+
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
+use crate::manager::codex_remote::ControlError;
 use crate::manager::remote_control::{RemoteControlOverview, Served};
 use crate::manager::supervision::ServerLog;
+
+const CODEX_NOT_RUNNING: &str = "Codex is not running";
+
+impl From<ControlError> for ApiError {
+    fn from(error: ControlError) -> Self {
+        match error {
+            ControlError::Closed => Self::Conflict(CODEX_NOT_RUNNING.to_owned()),
+            ControlError::Io(_)
+            | ControlError::TimedOut
+            | ControlError::ForeignServer(_)
+            | ControlError::Codex { .. } => Self::AgentFailed(error.to_string()),
+        }
+    }
+}
 
 #[utoipa::path(
     get,
@@ -110,6 +128,31 @@ pub async fn codex_log(
     ServerLogTail::read(state.codex_remote.log.clone())
         .await
         .map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/remote-control/codex/retry",
+    operation_id = "retryCodexRemoteControl",
+    tag = "remote-control",
+    summary = "Connect Codex to ChatGPT again",
+    description = "Clears the problem shown, and turns Codex's connection to ChatGPT back on when the manager turned it off.",
+    responses(
+        (status = 204, description = "Codex is trying again"),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "Codex is not running", body = ErrorBody),
+        (status = 502, description = "Codex refused or did not answer", body = ErrorBody)
+    )
+)]
+pub async fn retry_codex(
+    _: Session,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    let codex_remote = Arc::clone(&state.codex_remote);
+    tokio::spawn(async move { codex_remote.retry().await })
+        .await
+        .map_err(internal)??;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 impl ServerLogTail {

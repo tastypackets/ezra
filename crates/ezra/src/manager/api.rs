@@ -57,6 +57,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/remote-control/codex/log",
             get(remote_control::codex_log),
         )
+        .route(
+            "/api/v1/remote-control/codex/retry",
+            post(remote_control::retry_codex),
+        )
         .route("/api/v1/folders", get(folders::list))
         .route("/api/v1/folders/{name}", delete(folders::delete))
         .route(
@@ -201,6 +205,7 @@ pub struct ErrorBody {
         remote_control::projects_log,
         remote_control::folder_log,
         remote_control::codex_log,
+        remote_control::retry_codex,
         events::stream,
         manager::status,
         manager::change_password,

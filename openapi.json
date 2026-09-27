@@ -1430,6 +1430,51 @@
         }
       }
     },
+    "/api/v1/remote-control/codex/retry": {
+      "post": {
+        "tags": [
+          "remote-control"
+        ],
+        "summary": "Connect Codex to ChatGPT again",
+        "description": "Clears the problem shown, and turns Codex's connection to ChatGPT back on when the manager turned it off.",
+        "operationId": "retryCodexRemoteControl",
+        "responses": {
+          "204": {
+            "description": "Codex is trying again"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex refused or did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/remote-control/log": {
       "get": {
         "tags": [

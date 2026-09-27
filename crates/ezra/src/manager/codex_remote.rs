@@ -7,6 +7,8 @@ mod problem;
 mod run;
 mod supervisor;
 
+use std::mem;
+use std::sync::{Arc, Mutex as SyncMutex, PoisonError};
 use std::time::Duration;
 
 use nix::unistd::Pid;
@@ -17,7 +19,8 @@ use utoipa::ToSchema;
 use super::events::{Events, Topic};
 use super::remote_control::ServerState;
 use super::supervision::{Failure, OUTPUT_DRAIN_TIMEOUT, Published, ServerLog, Supervision};
-use control::{RelayStatusWire, RelayWire};
+pub use control::ControlError;
+use control::{ControlClient, Enable, RelayStatusWire, RelayWire};
 use launch::LaunchFlagCache;
 use problem::{CodexProblem, ProblemLine};
 
@@ -59,6 +62,9 @@ pub struct ServerBudget {
     pub force: Duration,
     /// For each answer on the control socket, and for its WebSocket handshake.
     pub request: Duration,
+    /// After ezra turned the relay off because ChatGPT asks for multi-factor authentication,
+    /// before it turns it on again.
+    pub mfa_retry: Duration,
 }
 
 impl ServerBudget {
@@ -78,6 +84,7 @@ impl Default for ServerBudget {
             drain: Duration::from_secs(20),
             force: Duration::from_secs(10),
             request: Duration::from_secs(45),
+            mfa_retry: Duration::from_secs(10 * 60),
         }
     }
 }
@@ -114,6 +121,30 @@ pub struct CodexRemote {
     expected: ExpectedPeer,
     /// Sign-ins in progress, which keep the server stopped.
     holds: watch::Sender<u32>,
+    control: SyncMutex<Control>,
+}
+
+/// The running server's control connection, and whether ezra turned its relay off.
+#[derive(Debug, Default)]
+struct Control {
+    client: Option<Arc<ControlClient>>,
+    /// ezra turned the relay off, or will once a connection opens.
+    relay_off: bool,
+}
+
+impl Control {
+    /// Marks the relay as turned off by ezra. False when it was already.
+    fn turn_relay_off(&mut self) -> bool {
+        !mem::replace(&mut self.relay_off, true)
+    }
+
+    /// Marks the relay as on again when ezra turned it off and a connection is open to ask
+    /// Codex on, and returns that connection.
+    fn turn_relay_on(&mut self) -> Option<Arc<ControlClient>> {
+        let client = self.client.clone().filter(|_| self.relay_off)?;
+        self.relay_off = false;
+        Some(client)
+    }
 }
 
 impl CodexRemote {
@@ -132,6 +163,7 @@ impl CodexRemote {
             flags: LaunchFlagCache::default(),
             expected,
             holds: watch::Sender::new(0),
+            control: SyncMutex::default(),
         }
     }
 
@@ -142,6 +174,38 @@ impl CodexRemote {
 
     fn is_held(&self) -> bool {
         *self.holds.borrow() > 0
+    }
+
+    /// Clears the problem shown, and asks Codex to turn the relay on again when ezra turned it
+    /// off. Shows the problem again when Codex does not.
+    pub async fn retry(&self) -> Result<(), ControlError> {
+        let (client, was_off) = self
+            .with_control(|control| {
+                let client = control.client.clone()?;
+                Some((client, mem::replace(&mut control.relay_off, false)))
+            })
+            .ok_or(ControlError::Closed)?;
+        let shown = self.status.update(CodexRemoteStatus::take_problem);
+        if !was_off {
+            return Ok(());
+        }
+        match client.request(Enable { ephemeral: true }).await {
+            Ok(_relay) => Ok(()),
+            Err(ControlError::Closed) => Err(ControlError::Closed),
+            Err(error) => {
+                self.with_control(|control| control.relay_off = true);
+                self.status.update(|status| status.show_again(shown));
+                Err(error)
+            }
+        }
+    }
+
+    fn with_control<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {
+        change(&mut self.control.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn client(&self) -> Option<Arc<ControlClient>> {
+        self.with_control(|control| control.client.clone())
     }
 }
 
@@ -204,16 +268,39 @@ impl CodexRemoteStatus {
         self.relay = None;
     }
 
-    /// Shows the relay. Connecting clears every problem but the installed version's.
+    /// Shows the relay, and keeps an error shown while Codex tries again. A connection clears
+    /// every problem but the installed version's.
     fn show_relay(&mut self, relay: RelayWire) {
         let state = RelayState::from(relay.status);
-        self.relay = Some(state);
+        if !(state == RelayState::Connecting && self.relay == Some(RelayState::Errored)) {
+            self.relay = Some(state);
+        }
         self.server_name = Some(relay.server_name);
         if state == RelayState::Connected {
-            self.last_error = None;
-            self.problem = self
-                .problem
-                .filter(|problem| *problem == CodexProblem::UnsupportedVersion);
+            self.clear_problem();
+        }
+    }
+
+    /// Forgets the problem shown and its line, unless the installed version is the problem.
+    fn clear_problem(&mut self) {
+        self.last_error = None;
+        self.problem = self
+            .problem
+            .filter(|problem| *problem == CodexProblem::UnsupportedVersion);
+    }
+
+    /// Clears the problem like `clear_problem`, and returns the problem and line it showed.
+    fn take_problem(&mut self) -> (Option<CodexProblem>, Option<String>) {
+        let shown = (self.problem, self.last_error.clone());
+        self.clear_problem();
+        shown
+    }
+
+    /// Shows a problem taken earlier again, unless another was named since.
+    fn show_again(&mut self, (problem, last_error): (Option<CodexProblem>, Option<String>)) {
+        if self.problem.is_none_or(|shown| Some(shown) == problem) && self.last_error.is_none() {
+            self.problem = problem;
+            self.last_error = last_error;
         }
     }
 
@@ -222,6 +309,14 @@ impl CodexRemoteStatus {
         if self.problem != Some(problem) {
             self.problem = Some(problem);
             self.last_error = Some(line);
+        }
+    }
+
+    /// Shows a problem the server's sign-in names, with no line.
+    fn name_sign_in_problem(&mut self, problem: CodexProblem) {
+        if self.problem != Some(problem) {
+            self.problem = Some(problem);
+            self.last_error = None;
         }
     }
 
@@ -300,6 +395,7 @@ mod tests {
 
     use super::*;
     use crate::manager::codex_remote::fake::FakeControlServer;
+    use crate::manager::codex_remote::problem::tests::PROBLEMS;
     use crate::manager::remote_control::RemoteControl;
 
     const SANDBOXES: [(CodexSandbox, &str); 3] = [
@@ -380,15 +476,6 @@ mod tests {
         ServerState::Retrying,
         ServerState::Stopping,
     ];
-    const PROBLEMS: [CodexProblem; 7] = [
-        CodexProblem::MfaRequired,
-        CodexProblem::NotChatGpt,
-        CodexProblem::SignedOut,
-        CodexProblem::NotAllowed,
-        CodexProblem::SocketInUse,
-        CodexProblem::RelayUnavailable,
-        CodexProblem::UnsupportedVersion,
-    ];
 
     /// Codex's report of the relay as `status`.
     fn reported(status: &str) -> RelayWire {
@@ -455,6 +542,79 @@ mod tests {
                 "{reported_status}"
             );
         }
+    }
+
+    #[test]
+    fn an_error_stays_shown_while_codex_tries_again() {
+        let mut status = CodexRemoteStatus {
+            relay: Some(RelayState::Connecting),
+            ..errored_with(CodexProblem::RelayUnavailable)
+        };
+        for (reported_status, shown) in [
+            ("errored", RelayState::Errored),
+            ("connecting", RelayState::Errored),
+            ("errored", RelayState::Errored),
+            ("disabled", RelayState::Disabled),
+            ("connecting", RelayState::Connecting),
+            ("errored", RelayState::Errored),
+            ("connected", RelayState::Connected),
+            ("connecting", RelayState::Connecting),
+        ] {
+            status.show_relay(reported(reported_status));
+            assert_eq!(status.relay, Some(shown), "{reported_status}");
+        }
+    }
+
+    #[test]
+    fn clearing_the_problem_keeps_only_the_installed_versions() {
+        for problem in PROBLEMS {
+            let mut status = errored_with(problem);
+            status.clear_problem();
+            assert_eq!(
+                status,
+                CodexRemoteStatus {
+                    problem: (problem == CodexProblem::UnsupportedVersion).then_some(problem),
+                    last_error: None,
+                    ..errored_with(problem)
+                },
+                "{problem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_taken_problem_is_shown_again_unless_another_was_named() {
+        for problem in PROBLEMS {
+            let mut status = errored_with(problem);
+            let shown = status.take_problem();
+            status.show_again(shown);
+            assert_eq!(status, errored_with(problem), "{problem:?}");
+        }
+
+        let mut status = errored_with(CodexProblem::MfaRequired);
+        let shown = status.take_problem();
+        status.name_problem(line(CodexProblem::RelayUnavailable, "since"));
+        status.show_again(shown);
+        assert_eq!(
+            (status.problem, status.last_error.as_deref()),
+            (Some(CodexProblem::RelayUnavailable), Some("since"))
+        );
+    }
+
+    #[test]
+    fn a_sign_in_problem_replaces_the_line_of_another_problem() {
+        let mut status = errored_with(CodexProblem::SignedOut);
+        status.name_sign_in_problem(CodexProblem::SignedOut);
+        assert_eq!(status, errored_with(CodexProblem::SignedOut));
+
+        status.name_sign_in_problem(CodexProblem::NotChatGpt);
+        assert_eq!(
+            status,
+            CodexRemoteStatus {
+                last_error: None,
+                ..errored_with(CodexProblem::NotChatGpt)
+            }
+        );
     }
 
     #[test]

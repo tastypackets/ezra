@@ -63,6 +63,16 @@ impl CodexProblem {
     pub fn in_output(lines: &[&str]) -> Option<Self> {
         lines.iter().rev().find_map(|line| Self::in_line(line))
     }
+
+    /// Whether ezra turns the relay off when this problem is named.
+    pub fn turns_relay_off(self) -> bool {
+        matches!(self, Self::MfaRequired | Self::NotChatGpt | Self::SignedOut)
+    }
+
+    /// A sign-in that is not ChatGPT's.
+    pub fn is_about_the_sign_in(self) -> bool {
+        matches!(self, Self::NotChatGpt | Self::SignedOut)
+    }
 }
 
 #[cfg(test)]
@@ -71,6 +81,15 @@ pub(super) mod tests {
     use crate::manager::login::StrExt;
 
     const TARGET: &str = "codex_app_server_transport::transport::remote_control::websocket";
+    pub const PROBLEMS: [CodexProblem; 7] = [
+        CodexProblem::MfaRequired,
+        CodexProblem::NotChatGpt,
+        CodexProblem::SignedOut,
+        CodexProblem::NotAllowed,
+        CodexProblem::SocketInUse,
+        CodexProblem::RelayUnavailable,
+        CodexProblem::UnsupportedVersion,
+    ];
     const ENROLL_URL: &str = "https://chatgpt.com/backend-api/wham/remote/control/server/enroll";
     const WEBSOCKET_URL: &str = "wss://chatgpt.com/backend-api/wham/remote/control/server";
 
@@ -95,6 +114,18 @@ pub(super) mod tests {
                  body: {{\"detail\":\"Multi-factor authentication required\"}}"
             ),
             "PermissionDenied",
+        )
+    }
+
+    /// The warning Codex logs when ChatGPT does not take the relay connection.
+    pub fn unavailable_warning() -> String {
+        relay_warning(
+            &format!(
+                "failed to connect app-server remote control websocket `{WEBSOCKET_URL}`: HTTP \
+                 error: 503 Service Unavailable, request-id: <none>, cf-ray: <none>, body: \
+                 upstream unavailable"
+            ),
+            "Other",
         )
     }
 
@@ -137,17 +168,7 @@ pub(super) mod tests {
                     .to_owned(),
                 Some(CodexProblem::SocketInUse),
             ),
-            (
-                relay_warning(
-                    &format!(
-                        "failed to connect app-server remote control websocket \
-                         `{WEBSOCKET_URL}`: HTTP error: 503 Service Unavailable, request-id: \
-                         <none>, cf-ray: <none>, body: upstream unavailable"
-                    ),
-                    "Other",
-                ),
-                Some(CodexProblem::RelayUnavailable),
-            ),
+            (unavailable_warning(), Some(CodexProblem::RelayUnavailable)),
             (
                 format!(
                     "2026-09-26T16:51:29.504163Z  INFO {TARGET}: retrying app-server remote \
@@ -194,6 +215,30 @@ pub(super) mod tests {
                 "{coloured}"
             );
         }
+    }
+
+    #[test]
+    fn only_problems_codex_retries_without_end_turn_the_relay_off() {
+        let turning_off: Vec<CodexProblem> = PROBLEMS
+            .into_iter()
+            .filter(|problem| problem.turns_relay_off())
+            .collect();
+        assert_eq!(
+            turning_off,
+            [
+                CodexProblem::MfaRequired,
+                CodexProblem::NotChatGpt,
+                CodexProblem::SignedOut
+            ]
+        );
+        let about_the_sign_in: Vec<CodexProblem> = PROBLEMS
+            .into_iter()
+            .filter(|problem| problem.is_about_the_sign_in())
+            .collect();
+        assert_eq!(
+            about_the_sign_in,
+            [CodexProblem::NotChatGpt, CodexProblem::SignedOut]
+        );
     }
 
     #[test]

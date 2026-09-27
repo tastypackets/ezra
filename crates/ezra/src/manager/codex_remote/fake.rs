@@ -16,8 +16,10 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::control::ControlSocket;
+use crate::manager::api::test_support::wait_until;
 
 pub const ENVIRONMENT: &str = "environment-1";
+const WAIT: Duration = Duration::from_secs(10);
 
 /// A socket path in a short folder of its own that a Codex home's control socket links to, like
 /// Codex's.
@@ -71,6 +73,7 @@ enum Out {
 #[derive(Default)]
 struct FakeState {
     replies: HashMap<String, VecDeque<Reply>>,
+    before: HashMap<String, Vec<Value>>,
     after: HashMap<String, Vec<Value>>,
     seen: Vec<Seen>,
     connections: Vec<mpsc::UnboundedSender<Out>>,
@@ -168,11 +171,21 @@ impl FakeControlServer {
             .insert(method.to_owned(), replies.into_iter().collect());
     }
 
-    /// Sends `frame` right after the answer to each later `method` request.
+    /// Sends `frame` right after the result of each later `method` request.
     pub fn push_after(&self, method: &str, frame: Value) {
         self.shared
             .state()
             .after
+            .entry(method.to_owned())
+            .or_default()
+            .push(frame);
+    }
+
+    /// Sends `frame` on each later `method` request that is not refused, right before its result.
+    pub fn push_before(&self, method: &str, frame: Value) {
+        self.shared
+            .state()
+            .before
             .entry(method.to_owned())
             .or_default()
             .push(frame);
@@ -217,6 +230,40 @@ impl FakeControlServer {
                 ))
             })
             .collect()
+    }
+
+    /// The params of each `method` request read, in order.
+    pub fn requests_of(&self, method: &str) -> Vec<Value> {
+        self.requests()
+            .into_iter()
+            .filter(|(requested, _)| requested == method)
+            .map(|(_, params)| params)
+            .collect()
+    }
+
+    /// Waits until `method` was requested `times` times, and returns the params of each.
+    pub async fn until_requested(&self, method: &str, times: usize) -> Vec<Value> {
+        wait_until(
+            WAIT,
+            || self.requests_of(method),
+            |requests| requests.len() >= times,
+        )
+        .await
+    }
+
+    /// Whether a `method` request was answered.
+    pub fn answered(&self, method: &str) -> bool {
+        let seen = self.seen();
+        seen.iter()
+            .filter_map(|frame| match frame {
+                Seen::Received(request) if request["method"] == method => Some(&request["id"]),
+                Seen::Received(_) | Seen::Sent(_) => None,
+            })
+            .any(|id| {
+                seen.iter().any(|frame| {
+                    matches!(frame, Seen::Sent(answer) if answer["id"] == *id && answer.get("method").is_none())
+                })
+            })
     }
 
     /// The requests after the first, which must be `initialize`.
@@ -277,18 +324,30 @@ impl Shared {
 
     fn answer(&self, id: &Value, method: &str, outgoing: &mpsc::UnboundedSender<Out>) {
         let mut state = self.state();
-        let (delay, answer) = match state.reply_to(method) {
-            Reply::Result(result) => (Duration::ZERO, json!({"id": id, "result": result})),
-            Reply::Late(delay, result) => (delay, json!({"id": id, "result": result})),
-            Reply::Error { code, message } => (
-                Duration::ZERO,
-                json!({"id": id, "error": {"code": code, "message": message}}),
-            ),
-            Reply::Never => return,
+        let before: Vec<Value> = state
+            .before
+            .get(method)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect();
+        let (delay, result) = match state.reply_to(method) {
+            Reply::Result(result) => (Duration::ZERO, result),
+            Reply::Late(delay, result) => (delay, result),
+            Reply::Error { code, message } => {
+                let error = json!({"id": id, "error": {"code": code, "message": message}});
+                let _closed = outgoing.send(Out::Frames(vec![error]));
+                return;
+            }
+            Reply::Never => {
+                let _closed = outgoing.send(Out::Frames(before));
+                return;
+            }
         };
         let frames = Out::Frames(
-            [answer]
+            before
                 .into_iter()
+                .chain([json!({"id": id, "result": result})])
                 .chain(state.after.get(method).into_iter().flatten().cloned())
                 .collect(),
         );
