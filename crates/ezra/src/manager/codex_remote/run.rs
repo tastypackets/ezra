@@ -122,7 +122,7 @@ impl LineWatcher for ProblemLines {
 pub(super) mod tests {
     use std::fs;
     use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
+    use std::path::Path;
     use std::time::Duration;
 
     use nix::sys::wait::{Id, WaitPidFlag, waitid};
@@ -131,7 +131,7 @@ pub(super) mod tests {
 
     use super::*;
     use crate::manager::agents::Agent;
-    use crate::manager::api::test_support::{PidExt, TestManager, wait_until};
+    use crate::manager::api::test_support::{PidExt, ProgramExt, TestManager, wait_until};
     use crate::manager::codex_remote::problem::tests::{coloured, mfa_warning};
     use crate::manager::processes::Process;
 
@@ -169,7 +169,7 @@ pub(super) mod tests {
 
     /// A server that counts each SIGTERM in `$CODEX_HOME/terms` and exits on the `exits_on`th.
     /// The helper it runs until then writes its pid to `$CODEX_HOME/helper`.
-    fn counting_terms(exits_on: u32, before: &str) -> String {
+    pub fn counting_terms(exits_on: u32, before: &str) -> String {
         format!(
             "terms=0\n\
              trap 'echo term >> \"$CODEX_HOME/terms\"; terms=$((terms + 1)); \
@@ -182,44 +182,37 @@ pub(super) mod tests {
         )
     }
 
-    fn terms_seen(launch: &CodexLaunch) -> usize {
-        fs::read_to_string(launch.codex_home.join("terms"))
+    pub fn terms_seen(codex_home: &Path) -> usize {
+        fs::read_to_string(codex_home.join("terms"))
             .unwrap_or_default()
             .lines()
             .count()
-    }
-
-    pub fn has_setsid() -> bool {
-        let found = Command::new("setsid")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success());
-        if !found {
-            eprintln!("skipped: setsid from util-linux is not installed");
-        }
-        found
     }
 
     /// Starts a helper in a session of its own, and writes its pid to `$CODEX_HOME/leftover`.
     pub const LEFTOVER: &str =
         "setsid sleep 60 > /dev/null 2>&1 &\necho $! > \"$CODEX_HOME/leftover\"";
 
-    /// A server that leaves `LEFTOVER` running and fails once `$CODEX_HOME/exit` exists.
-    fn exits_when_told() -> String {
+    /// Codex's line when another server holds the control socket.
+    pub const SOCKET_IN_USE: &str = "Error: app-server control socket is already in use at \
+                                     $CODEX_HOME/app-server-control/app-server-control.sock";
+
+    /// A server that runs `before`, then prints `line` and fails once `$CODEX_HOME/exit` exists,
+    /// which it removes.
+    pub fn exits_when_told(before: &str, line: &str) -> String {
         format!(
-            "{LEFTOVER}\n\
+            "{before}\n\
              : > \"$CODEX_HOME/ready\"\n\
              while [ ! -e \"$CODEX_HOME/exit\" ]; do sleep 0.05; done\n\
-             echo \"Error: app-server control socket is already in use at \
-             $CODEX_HOME/app-server-control/app-server-control.sock\" >&2\n\
+             rm \"$CODEX_HOME/exit\"\n\
+             echo \"{line}\" >&2\n\
              exit 1"
         )
     }
 
     /// The pid the server wrote to `$CODEX_HOME/<name>`.
-    fn pid_in(launch: &CodexLaunch, name: &str) -> Pid {
-        let text = fs::read_to_string(launch.codex_home.join(name)).expect("pid is written");
+    pub fn pid_in(codex_home: &Path, name: &str) -> Pid {
+        let text = fs::read_to_string(codex_home.join(name)).expect("pid is written");
         Pid::from_raw(text.trim().parse().expect("the pid is a number"))
     }
 
@@ -262,13 +255,13 @@ pub(super) mod tests {
 
         assert!(started.elapsed() < BUDGET.drain, "{:?}", started.elapsed());
         assert!(exit.success(), "{exit}");
-        assert_eq!(terms_seen(&launch), 1);
+        assert_eq!(terms_seen(&launch.codex_home), 1);
     }
 
     #[tokio::test]
     async fn a_second_term_forces_the_stop_after_the_drain() {
         let (_manager, launch, run) = started(&counting_terms(2, "")).await;
-        let helper = Process::with_id(pid_in(&launch, "helper"));
+        let helper = Process::with_id(pid_in(&launch.codex_home, "helper"));
         let started = Instant::now();
 
         let stopping = tokio::spawn(run.stop(&BUDGET));
@@ -285,7 +278,7 @@ pub(super) mod tests {
             "{waited:?}"
         );
         assert!(exit.success(), "{exit}");
-        assert_eq!(terms_seen(&launch), 2);
+        assert_eq!(terms_seen(&launch.codex_home), 2);
     }
 
     #[tokio::test]
@@ -297,16 +290,16 @@ pub(super) mod tests {
 
         assert!(started.elapsed() >= BUDGET.drain.saturating_add(BUDGET.force));
         assert_eq!(exit.signal(), Some(Signal::SIGKILL as i32));
-        assert_eq!(terms_seen(&launch), 2);
+        assert_eq!(terms_seen(&launch.codex_home), 2);
     }
 
     #[tokio::test]
     async fn a_stop_kills_what_the_server_left_in_its_own_session() {
-        if !has_setsid() {
+        if !"setsid".is_installed() {
             return;
         }
         let (_manager, launch, run) = started(&counting_terms(2, LEFTOVER)).await;
-        let leftover = pid_in(&launch, "leftover");
+        let leftover = pid_in(&launch.codex_home, "leftover");
 
         run.stop(&BUDGET).await.expect("the server is reaped");
 
@@ -315,11 +308,11 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn a_server_that_exits_by_itself_leaves_nothing_running() {
-        if !has_setsid() {
+        if !"setsid".is_installed() {
             return;
         }
-        let (_manager, launch, mut run) = started(&exits_when_told()).await;
-        let leftover = pid_in(&launch, "leftover");
+        let (_manager, launch, mut run) = started(&exits_when_told(LEFTOVER, SOCKET_IN_USE)).await;
+        let leftover = pid_in(&launch.codex_home, "leftover");
         run.sample_family().await;
         fs::write(launch.codex_home.join("exit"), "").expect("the server is told to exit");
 
@@ -344,11 +337,11 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn a_sample_after_the_exit_keeps_the_family_read_before_it() {
-        if !has_setsid() {
+        if !"setsid".is_installed() {
             return;
         }
-        let (_manager, launch, mut run) = started(&exits_when_told()).await;
-        let leftover = pid_in(&launch, "leftover");
+        let (_manager, launch, mut run) = started(&exits_when_told(LEFTOVER, SOCKET_IN_USE)).await;
+        let leftover = pid_in(&launch.codex_home, "leftover");
         run.sample_family().await;
         let server = run.leader().expect("the server runs");
         fs::write(launch.codex_home.join("exit"), "").expect("the server is told to exit");

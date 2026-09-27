@@ -86,13 +86,24 @@ impl Process {
         ))
     }
 
+    /// The running processes whose executable lies inside `directory`, each with the
+    /// executable's path in there.
+    pub fn running_inside(directory: &Path) -> impl Iterator<Item = (Self, PathBuf)> + use<> {
+        let directory = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+        Self::all().filter_map(move |process| {
+            let inside = process
+                .executable()?
+                .strip_prefix(&directory)
+                .ok()?
+                .to_path_buf();
+            Some((process, inside))
+        })
+    }
+
     /// Names of the entries in `directory` that a running process executes from.
     pub fn running_from(directory: &Path) -> Vec<String> {
-        let directory = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
-        Self::all()
-            .filter_map(|process| process.executable())
-            .filter_map(|executable| {
-                let inside = executable.strip_prefix(&directory).ok()?;
+        Self::running_inside(directory)
+            .filter_map(|(_, inside)| {
                 let first = inside.components().next()?;
                 Some(first.as_os_str().to_string_lossy().into_owned())
             })

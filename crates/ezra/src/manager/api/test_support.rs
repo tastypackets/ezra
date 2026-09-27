@@ -310,6 +310,25 @@ impl PidExt for Pid {
     }
 }
 
+pub trait ProgramExt {
+    /// Whether the program runs, with a note that the test is skipped when it does not.
+    fn is_installed(&self) -> bool;
+}
+
+impl ProgramExt for str {
+    fn is_installed(&self) -> bool {
+        let found = Command::new(self)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !found {
+            eprintln!("skipped: {self} is not installed");
+        }
+        found
+    }
+}
+
 /// Reads `current` every 50 ms until `wanted` holds for it, and fails the test after `longest`.
 pub async fn wait_until<T: Debug>(
     longest: Duration,

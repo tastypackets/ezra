@@ -508,13 +508,13 @@ mod tests {
 
     use super::*;
     use crate::manager::api::test_support::{
-        EventStreamExt, PidExt, ResponseExt, TestManager, wait_until,
+        EventStreamExt, PidExt, ProgramExt, ResponseExt, TestManager, wait_until,
     };
     use crate::manager::codex_remote::control::RelayStatusWire;
     use crate::manager::codex_remote::fake::{FakeControlServer, Reply};
     use crate::manager::codex_remote::launch::LaunchFlags;
     use crate::manager::codex_remote::problem::tests::relay_warning;
-    use crate::manager::codex_remote::run::tests::{LEFTOVER, has_setsid};
+    use crate::manager::codex_remote::run::tests::LEFTOVER;
     use crate::manager::codex_remote::{
         CodexApprovals, CodexRemoteSettings, CodexSandbox, ExpectedPeer, RelayState,
     };
@@ -1010,7 +1010,7 @@ mod tests {
 
     #[tokio::test]
     async fn stopping_codex_kills_what_its_server_left_running() {
-        if !has_setsid() {
+        if !"setsid".is_installed() {
             return;
         }
         let manager = manager(BUDGET);
@@ -1030,7 +1030,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_codex_server_that_dies_leaves_nothing_running() {
-        if !has_setsid() {
+        if !"setsid".is_installed() {
             return;
         }
         let manager = manager(BUDGET);

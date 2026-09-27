@@ -127,6 +127,13 @@ impl ControlSocket {
                 .join("app-server-control.sock"),
         )
     }
+
+    /// Connects, and names the process that answers when it can.
+    pub async fn connect(&self) -> io::Result<(UnixStream, Option<Pid>)> {
+        let stream = UnixStream::connect(&self.0).await?;
+        let peer = stream.peer_cred()?.pid().map(Pid::from_raw);
+        Ok((stream, peer))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -695,12 +702,9 @@ impl ControlClient {
         codex_home: &Path,
         budget: &ServerBudget,
     ) -> Result<(Self, mpsc::UnboundedReceiver<ControlEvent>), ControlError> {
-        let stream = UnixStream::connect(&socket.0).await?;
-        let peer = stream
-            .peer_cred()?
-            .pid()
-            .map(Pid::from_raw)
-            .ok_or_else(|| io::Error::other("the control socket names no peer process"))?;
+        let (stream, peer) = socket.connect().await?;
+        let peer =
+            peer.ok_or_else(|| io::Error::other("the control socket names no peer process"))?;
         if peer != expected {
             return Err(ControlError::ForeignServer(peer));
         }

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as SyncMutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -15,7 +15,33 @@ use tokio::time::sleep;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
+use super::control::ControlSocket;
+
 pub const ENVIRONMENT: &str = "environment-1";
+
+/// A socket path in a short folder of its own that a Codex home's control socket links to, like
+/// Codex's.
+pub struct LinkedSocket {
+    pub path: PathBuf,
+    _folder: TempDir,
+}
+
+impl LinkedSocket {
+    pub fn of(codex_home: &Path) -> Self {
+        let folder = tempfile::Builder::new()
+            .tempdir_in("/tmp")
+            .expect("the socket folder is created");
+        let path = folder.path().join("control");
+        let link = ControlSocket::of(codex_home).0;
+        fs::create_dir_all(link.parent().expect("the link has a folder"))
+            .expect("the link folder is created");
+        symlink(&path, link).expect("the socket link is created");
+        Self {
+            path,
+            _folder: folder,
+        }
+    }
+}
 
 /// How the fake answers one request.
 #[derive(Debug, Clone)]
@@ -80,22 +106,15 @@ struct Shared(SyncMutex<FakeState>);
 pub struct FakeControlServer {
     shared: Arc<Shared>,
     accepting: JoinHandle<()>,
-    _socket_folder: TempDir,
+    _socket: LinkedSocket,
 }
 
 impl FakeControlServer {
     /// Serves the control socket of `codex_home` from a short path it links to, like Codex, and
     /// answers `initialize` with that home.
     pub fn bind(codex_home: &Path) -> Self {
-        let socket_folder = tempfile::Builder::new()
-            .tempdir_in("/tmp")
-            .expect("the socket folder is created");
-        let socket = socket_folder.path().join("control");
-        let listener = UnixListener::bind(&socket).expect("the fake socket is bound");
-        let link_folder = codex_home.join("app-server-control");
-        fs::create_dir_all(&link_folder).expect("the link folder is created");
-        symlink(&socket, link_folder.join("app-server-control.sock"))
-            .expect("the socket link is created");
+        let socket = LinkedSocket::of(codex_home);
+        let listener = UnixListener::bind(&socket.path).expect("the fake socket is bound");
         let shared = Arc::new(Shared::default());
         let fake = Self {
             shared: Arc::clone(&shared),
@@ -104,7 +123,7 @@ impl FakeControlServer {
                     tokio::spawn(Arc::clone(&shared).serve(stream));
                 }
             }),
-            _socket_folder: socket_folder,
+            _socket: socket,
         };
         fake.reply("initialize", [Reply::Result(Self::initialized(codex_home))]);
         fake
