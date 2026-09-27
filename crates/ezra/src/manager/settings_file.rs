@@ -719,7 +719,7 @@ mod tests {
         let files = Files::new();
         let claude = files.of(Agent::Claude);
         files.write("config/claude/settings.json", b"{}");
-        fs::set_permissions(&claude.path, Permissions::from_mode(0o640)).expect("the mode is set");
+        fs::set_permissions(&claude.path, Permissions::from_mode(0o660)).expect("the mode is set");
         let mut version = claude.read().expect("the file reads").version;
         for text in [
             "\u{feff}{\r\n\t\"a\" :   1 ,\r\n  \"b\":[ ]\r\n}",
@@ -732,7 +732,7 @@ mod tests {
                 .expect("the text saves");
             assert_eq!(files.read("config/claude/settings.json"), text.as_bytes());
             assert_eq!(saved.text, text);
-            assert_eq!(mode_of(&claude.path), 0o640);
+            assert_eq!(mode_of(&claude.path), 0o660);
             version = saved.version;
         }
 
@@ -861,7 +861,7 @@ mod tests {
         files.write("dotfiles/claude.json", b"{}");
         fs::set_permissions(
             files.path("dotfiles/claude.json"),
-            Permissions::from_mode(0o644),
+            Permissions::from_mode(0o664),
         )
         .expect("the mode is set");
         fs::create_dir_all(files.path("config/claude")).expect("the directory is created");
@@ -877,7 +877,7 @@ mod tests {
             Path::new("../../dotfiles/claude.json")
         );
         assert_eq!(files.read("dotfiles/claude.json"), b"{\"a\": 1}\n");
-        assert_eq!(mode_of(&files.path("dotfiles/claude.json")), 0o644);
+        assert_eq!(mode_of(&files.path("dotfiles/claude.json")), 0o664);
 
         let codex = files.of(Agent::Codex);
         fs::create_dir_all(files.path("config/codex")).expect("the directory is created");
