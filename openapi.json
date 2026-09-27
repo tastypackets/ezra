@@ -2330,7 +2330,7 @@
           "uncommitted_changes": {
             "type": "integer",
             "format": "int32",
-            "description": "Changed and untracked paths, an untracked folder counting once.",
+            "description": "Changed and untracked paths in the folder and its worktrees, an untracked folder counting\nonce.",
             "minimum": 0
           },
           "unpushed_commits": {

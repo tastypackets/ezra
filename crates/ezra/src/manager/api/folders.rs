@@ -233,6 +233,26 @@ mod tests {
             &["commit", "--quiet", "--allow-empty", "--message=local too"],
         );
         fs::write(app.join("README.md"), "changed once more\n").expect("file is written");
+        manager
+            .state
+            .git_tools
+            .ignore_claude_worktrees()
+            .await
+            .expect("worktrees are ignored");
+        git(&app, &["notes", "add", "--message=note"]);
+        git(
+            &app,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "worktree-bridge-1",
+                ".claude/worktrees/bridge-1",
+            ],
+        );
+        fs::write(app.join(".claude/worktrees/bridge-1/work.txt"), "work\n")
+            .expect("file is written");
         let unsaved: UnsavedWork = manager
             .get("/api/v1/folders/app/unsaved-work", Some(&cookie))
             .await
@@ -241,7 +261,7 @@ mod tests {
         assert_eq!(
             unsaved,
             UnsavedWork {
-                uncommitted_changes: 2,
+                uncommitted_changes: 3,
                 unpushed_commits: 2,
                 stashes: 1,
             }

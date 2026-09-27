@@ -285,32 +285,54 @@ impl GitTools {
         command
     }
 
-    /// Changes, commits and stashes in the repository at `folder` that no remote has.
+    /// Changes in the repository at `folder` and the worktrees inside it, and the commits and
+    /// stashes no remote has.
     pub async fn unsaved_work(&self, folder: &Path) -> Result<UnsavedWork, GitError> {
-        let changes = self
-            .output_in(
-                folder,
-                "status",
-                &["--no-optional-locks", "status", "--porcelain"],
-            )
+        let folder = tokio::fs::canonicalize(folder).await?;
+        let worktrees = self
+            .output_in(&folder, "worktree", &["worktree", "list", "--porcelain"])
             .await?;
+        let mut uncommitted_changes: u32 = 0;
+        for worktree in worktrees
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .map(Path::new)
+            .filter(|worktree| worktree.starts_with(&folder) && worktree.is_dir())
+        {
+            let changes = self
+                .output_in(
+                    worktree,
+                    "status",
+                    &[
+                        "--no-optional-locks",
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=normal",
+                    ],
+                )
+                .await?;
+            uncommitted_changes = uncommitted_changes.saturating_add(changes.line_count());
+        }
         let commits = self
             .output_in(
-                folder,
+                &folder,
                 "rev-list",
                 &[
                     "rev-list",
                     "--count",
                     "--exclude=refs/stash",
+                    "--exclude=refs/notes/*",
+                    "--exclude=refs/original/*",
+                    "--exclude=refs/prefetch/*",
                     "--all",
                     "--not",
                     "--remotes",
                 ],
             )
             .await?;
-        let stashes = self.output_in(folder, "stash", &["stash", "list"]).await?;
+        let stashes = self.output_in(&folder, "stash", &["stash", "list"]).await?;
         Ok(UnsavedWork {
-            uncommitted_changes: changes.line_count(),
+            uncommitted_changes,
             unpushed_commits: commits.trim().parse().map_err(|_| GitError::Git {
                 action: "rev-list",
                 output: format!("unexpected count {commits:?}"),
@@ -464,7 +486,8 @@ impl GitHubSignIn {
 /// Work in a repository that no remote has.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UnsavedWork {
-    /// Changed and untracked paths, an untracked folder counting once.
+    /// Changed and untracked paths in the folder and its worktrees, an untracked folder counting
+    /// once.
     pub uncommitted_changes: u32,
     /// Commits on no remote, stashes left out.
     pub unpushed_commits: u32,
