@@ -1,6 +1,7 @@
 mod control;
 #[cfg(test)]
 mod fake;
+mod foreign;
 mod launch;
 mod problem;
 mod run;

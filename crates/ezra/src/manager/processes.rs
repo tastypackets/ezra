@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use nix::sys::resource::{Resource, getrlimit, rlim_t, setrlimit};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
+use tokio::time::{Instant, sleep};
 
 const DELETED_SUFFIX: &str = " (deleted)";
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// A process as /proc describes it.
 pub struct Process(PathBuf);
@@ -20,6 +23,10 @@ pub struct ProcessStat {
 }
 
 impl Process {
+    pub fn with_id(id: Pid) -> Self {
+        Self(PathBuf::from(format!("/proc/{id}")))
+    }
+
     pub fn all() -> impl Iterator<Item = Self> {
         fs::read_dir("/proc")
             .into_iter()
@@ -113,10 +120,6 @@ impl Process {
 
 #[cfg(test)]
 impl Process {
-    pub fn with_id(id: Pid) -> Self {
-        Self(PathBuf::from(format!("/proc/{id}")))
-    }
-
     /// Exists and has not exited.
     pub fn is_running(&self) -> bool {
         self.stat().is_some_and(|stat| !stat.zombie)
@@ -158,6 +161,13 @@ impl ProcessFamily {
         Self { leader, members }
     }
 
+    /// The leader as read, unless it had exited.
+    pub fn leader(&self) -> Option<ProcessIdentity> {
+        self.identities()
+            .next()
+            .filter(|first| first.id == self.leader)
+    }
+
     /// The leader's children that have not exited.
     pub fn children(&self) -> impl Iterator<Item = &Process> {
         self.members
@@ -168,34 +178,75 @@ impl ProcessFamily {
 
     /// Memory the members still running use, with shared memory counted once. Blocks.
     pub fn memory_bytes(&self) -> u64 {
-        self.survivors()
-            .filter_map(Process::proportional_memory)
+        self.identities()
+            .filter(|member| member.is_running())
+            .filter_map(|member| Process::with_id(member.id).proportional_memory())
             .fold(0, u64::saturating_add)
     }
 
     /// Kills the members still running with the start time they had when read, never this
     /// process. Blocks.
     pub fn kill_survivors(&self) {
-        let own = Pid::this();
-        for id in self
-            .survivors()
-            .filter_map(Process::id)
-            .filter(|id| *id != own)
-        {
-            let _already_gone = kill(id, Signal::SIGKILL);
+        for member in self.identities() {
+            member.send(Signal::SIGKILL);
         }
     }
 
-    /// The members still running with the start time they had when read.
-    fn survivors(&self) -> impl Iterator<Item = &Process> {
+    /// The members that had not exited when read.
+    fn identities(&self) -> impl Iterator<Item = ProcessIdentity> {
         self.members
             .iter()
-            .filter(|(process, stat)| {
-                process
-                    .stat()
-                    .is_some_and(|now| now.started == stat.started)
+            .filter(|(_, stat)| !stat.zombie)
+            .filter_map(|(process, stat)| {
+                Some(ProcessIdentity {
+                    id: process.id()?,
+                    started: stat.started,
+                })
             })
-            .map(|(process, _)| process)
+    }
+}
+
+/// A process known by its pid and start time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessIdentity {
+    id: Pid,
+    /// When it started, in clock ticks after boot.
+    started: u64,
+}
+
+impl ProcessIdentity {
+    /// Has not exited. Blocks.
+    fn is_running(self) -> bool {
+        Process::with_id(self.id)
+            .stat()
+            .is_some_and(|stat| !stat.zombie && stat.started == self.started)
+    }
+
+    /// Sends `signal` unless it exited or is this process. Blocks.
+    fn send(self, signal: Signal) {
+        if self.id != Pid::this() && self.is_running() {
+            let _already_gone = kill(self.id, signal);
+        }
+    }
+
+    /// Sends `signal` unless it exited or is this process.
+    pub async fn signal(self, signal: Signal) {
+        let _sent = tokio::task::spawn_blocking(move || self.send(signal)).await;
+    }
+
+    /// Reads /proc until it exited, for at most `longest`. True once it has.
+    pub async fn exits_within(self, longest: Duration) -> bool {
+        let started = Instant::now();
+        loop {
+            let running = tokio::task::spawn_blocking(move || self.is_running()).await;
+            if matches!(running, Ok(false)) {
+                return true;
+            }
+            if started.elapsed() >= longest {
+                return false;
+            }
+            sleep(EXIT_POLL_INTERVAL).await;
+        }
     }
 }
 
@@ -407,6 +458,35 @@ mod tests {
         assert!(reused.try_wait().expect("sleep is readable").is_none());
         reused.kill().expect("sleep is killed");
         reused.wait().expect("sleep is reaped");
+    }
+
+    #[tokio::test]
+    async fn only_the_leader_with_its_remembered_start_time_is_signalled() {
+        let mut sleeping = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("sleep starts");
+        let id = Pid::from_raw(i32::try_from(sleeping.id()).expect("the pid fits"));
+        let leader = ProcessFamily::of(id).leader().expect("sleep runs");
+        let reused = ProcessIdentity {
+            started: leader.started.saturating_add(1),
+            ..leader
+        };
+        let this = ProcessFamily::of(Pid::this())
+            .leader()
+            .expect("this process runs");
+
+        reused.signal(Signal::SIGKILL).await;
+        this.signal(Signal::SIGKILL).await;
+        assert!(reused.exits_within(Duration::ZERO).await);
+        assert!(!leader.exits_within(Duration::from_millis(100)).await);
+
+        leader.signal(Signal::SIGKILL).await;
+        assert!(leader.exits_within(Duration::from_secs(5)).await);
+        assert_eq!(ProcessFamily::of(id).leader(), None);
+        let killed = sleeping.wait().expect("sleep is reaped");
+        assert_eq!(killed.signal(), Some(Signal::SIGKILL as i32));
     }
 
     #[test]

@@ -11,6 +11,7 @@ use super::control::{
     ControlClient, ControlError, ControlEvent, ControlNotification, ControlSocket, RelayWire,
     StatusRead,
 };
+use super::foreign::ForeignServer;
 use super::launch::CodexLaunch;
 use super::problem::CodexProblem;
 use super::run::CodexServerRun;
@@ -35,6 +36,7 @@ impl AppState {
             .supervision
             .signals(self.agent_checks.watch_sign_in(Agent::Codex));
         let mut failures = Failures::default();
+        let mut look_for_foreign = true;
         while !signals.is_shutting_down() {
             if !codex_remote.is_held() && !self.check_sign_in(Agent::Codex, &mut signals).await {
                 break;
@@ -58,6 +60,15 @@ impl AppState {
                     self.idle_codex_server(CodexRemoteStatus::unsure, &mut signals)
                         .await
                 }
+                Wanted::Server(launch) if look_for_foreign => {
+                    look_for_foreign = false;
+                    let stopping =
+                        ForeignServer::stop_all_in(&launch.codex_home, &codex_remote.budget);
+                    tokio::select! {
+                        () = stopping => RunEnd::Reconsidered,
+                        () = signals.shutdown.until_set() => RunEnd::ShutDown,
+                    }
+                }
                 Wanted::Server(launch) => {
                     let started = Instant::now();
                     let end = self.run_codex_server(&launch, &mut signals).await;
@@ -69,6 +80,7 @@ impl AppState {
                 RunEnd::Reconsidered => {}
                 RunEnd::ShutDown => break,
                 RunEnd::Failed(failure) => {
+                    look_for_foreign = failure.problem == Some(CodexProblem::SocketInUse);
                     failures.add_one();
                     tracing::warn!("Codex remote control stopped: {}", failure.message);
                     codex_remote.status.update(|status| status.fail(failure));
@@ -512,9 +524,14 @@ mod tests {
     };
     use crate::manager::codex_remote::control::RelayStatusWire;
     use crate::manager::codex_remote::fake::{FakeControlServer, Reply};
+    use crate::manager::codex_remote::foreign::tests::{
+        ForeignListener, SLEEPS, Started, daemon_updater,
+    };
     use crate::manager::codex_remote::launch::LaunchFlags;
     use crate::manager::codex_remote::problem::tests::relay_warning;
-    use crate::manager::codex_remote::run::tests::LEFTOVER;
+    use crate::manager::codex_remote::run::tests::{
+        LEFTOVER, SOCKET_IN_USE, counting_terms, exits_when_told, terms_seen,
+    };
     use crate::manager::codex_remote::{
         CodexApprovals, CodexRemoteSettings, CodexSandbox, ExpectedPeer, RelayState,
     };
@@ -1098,6 +1115,141 @@ mod tests {
         assert!(fake.requests().is_empty(), "{:?}", fake.requests());
 
         shut_down(&manager, supervisor).await;
+    }
+
+    /// Starts a supervisor whose first server fails with `line` while Codex's own daemon updater
+    /// runs, and waits until the next server started. Returns the updater and the failure.
+    async fn after_a_failure_with(
+        manager: &TestManager,
+        line: &str,
+    ) -> (JoinHandle<()>, Started, CodexRemoteStatus) {
+        install_codex(
+            manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            &exits_when_told("", line),
+        );
+        sign_in(manager, CHATGPT);
+        let supervisor = supervise(manager);
+        servers_started(manager, 1).await;
+        let updater = daemon_updater(&codex_home(manager), SLEEPS).await;
+        fs::write(codex_home(manager).join("exit"), "").expect("the server is told to fail");
+        let retrying = status_until(manager, |status| status.state == ServerState::Retrying).await;
+        wait_until(
+            FIRST_RETRY_DELAY.saturating_add(WAIT),
+            || servers(manager).len(),
+            |started| *started == 2,
+        )
+        .await;
+        (supervisor, updater, retrying)
+    }
+
+    #[tokio::test]
+    async fn a_listener_in_the_manager_itself_is_left_running_and_codex_starts() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let fake = control(&manager, "connected");
+        assert_eq!(
+            ForeignServer::on(&ControlSocket::of(&codex_home(&manager))).await,
+            None
+        );
+
+        let supervisor = supervise(&manager);
+        let running = status_until(&manager, connected).await;
+        assert_eq!(running.restarts, 0);
+        assert_eq!(servers(&manager).len(), 1);
+        assert_eq!(
+            fake.requests().first().map(|(method, _)| method.as_str()),
+            Some("initialize")
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_codex_server_ezra_did_not_start_is_stopped_before_codex_starts() {
+        if !"python3".is_installed() {
+            return;
+        }
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let mut foreign = ForeignListener::in_home(&codex_home(&manager)).await;
+
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        assert!(foreign.process.has_exited());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_socket_in_use_failure_stops_codexs_own_daemon_before_the_next_start() {
+        let manager = manager(BUDGET);
+        let (supervisor, mut updater, retrying) =
+            after_a_failure_with(&manager, SOCKET_IN_USE).await;
+
+        assert_eq!(retrying.problem, Some(CodexProblem::SocketInUse));
+        assert!(updater.has_exited());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_failure_for_another_reason_leaves_codexs_own_daemon_running() {
+        let manager = manager(BUDGET);
+        let (supervisor, mut updater, retrying) = after_a_failure_with(
+            &manager,
+            "Error: remote control is disabled by managed requirements",
+        )
+        .await;
+
+        assert_eq!(retrying.problem, Some(CodexProblem::NotAllowed));
+        assert!(!updater.has_exited());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codexs_own_daemon_is_left_alone_until_codex_is_about_to_start() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, API_KEY);
+        let mut updater = daemon_updater(&codex_home(&manager), SLEEPS).await;
+        let supervisor = supervise(&manager);
+        status_until(&manager, |status| {
+            status.problem == Some(CodexProblem::NotChatGpt)
+        })
+        .await;
+        assert!(!updater.has_exited());
+
+        sign_in_now(&manager, CHATGPT).await;
+        servers_started(&manager, 1).await;
+        assert!(updater.has_exited());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn shutting_down_does_not_wait_for_codexs_own_daemon_to_stop() {
+        let manager = manager(ServerBudget {
+            drain: Duration::from_secs(30),
+            force: Duration::from_secs(30),
+            ..BUDGET
+        });
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let home = codex_home(&manager);
+        let _updater = daemon_updater(&home, &counting_terms(3, "")).await;
+        let supervisor = supervise(&manager);
+        wait_until(WAIT, || terms_seen(&home), |terms| *terms == 1).await;
+        let supervision = &manager.state.codex_remote.supervision;
+        supervision.begin_shut_down();
+
+        assert!(supervision.wait_until_stopped(Duration::from_secs(2)).await);
+        supervisor.await.expect("the supervisor stops");
+        assert!(servers(&manager).is_empty());
     }
 
     #[tokio::test]

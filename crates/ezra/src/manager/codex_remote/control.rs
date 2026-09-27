@@ -776,7 +776,7 @@ impl ControlClient {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::collections::HashSet;
     use std::fs;
     use std::os::unix::fs::symlink;
@@ -816,7 +816,7 @@ mod tests {
     }
 
     /// A Codex home short enough for its control socket path.
-    fn home() -> TempDir {
+    pub fn home() -> TempDir {
         tempfile::Builder::new()
             .tempdir_in("/tmp")
             .expect("a Codex home is created")
