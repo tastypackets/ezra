@@ -158,6 +158,23 @@ fn unknown_user_gets_a_temporary_home() {
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
+fn unknown_user_writes_to_directories_mounted_for_it() {
+    let mounts = AGENT_DIRECTORIES.map(|(_, directory)| format!("{directory}:uid=4321,gid=4321"));
+    let mut options = vec!["--user", "4321:4321"];
+    for mount in &mounts {
+        options.extend(["--tmpfs", mount]);
+    }
+    let output = run_in_image(&options, &["touch", "/home/dev/projects/app"]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert!(
+        !stderr_of(&output).contains("is not writable"),
+        "{}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
 fn docker_init_adds_no_warnings() {
     assert_eq!(stderr_of(&run_in_image(&["--init"], &["true"])), "");
 }
