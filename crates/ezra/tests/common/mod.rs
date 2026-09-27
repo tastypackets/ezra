@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tempfile::TempDir;
 
 pub fn image_name() -> String {
@@ -95,7 +95,9 @@ impl DockerResource {
         container
     }
 
-    /// Runs curl inside the container, keeping the manager session cookie in `MANAGER_COOKIES`.
+    /// Runs curl inside the container with the manager session cookie from `MANAGER_COOKIES`.
+    /// Only the request that signs in writes the file, so concurrent requests never read it half
+    /// written.
     pub fn curl(&self, arguments: &[&str]) -> Output {
         let mut command = vec![
             "exec",
@@ -104,8 +106,6 @@ impl DockerResource {
             "--silent",
             "--insecure",
             "--cookie",
-            MANAGER_COOKIES,
-            "--cookie-jar",
             MANAGER_COOKIES,
         ];
         command.extend_from_slice(arguments);
@@ -252,11 +252,20 @@ impl Manager {
     pub fn start(purpose: &str, docker_options: &[&str]) -> Self {
         let container = DockerResource::start_container(purpose, docker_options, &[]);
         container.wait_for_manager(8443);
-        let manager = Self { container };
-        let (status, body) =
-            manager.request("POST", "/api/v1/setup", Some(&json!({ "password": "x" })));
-        assert_eq!(status, "204", "{body}");
-        manager
+        let setup = container.curl(&[
+            "--fail-with-body",
+            "--cookie-jar",
+            MANAGER_COOKIES,
+            "--request",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--data-binary",
+            r#"{"password":"x"}"#,
+            "https://localhost:8443/api/v1/setup",
+        ]);
+        assert!(setup.status.success(), "{}", stdout_of(&setup));
+        Self { container }
     }
 
     /// Sends a request to the manager API and returns the status code and the JSON body.
