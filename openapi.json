@@ -2237,6 +2237,7 @@
         "description": "A known reason a server stopped.",
         "enum": [
           "sign_in",
+          "blocked_by_setting",
           "not_enabled",
           "not_allowed",
           "offline"

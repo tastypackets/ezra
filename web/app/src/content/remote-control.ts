@@ -41,6 +41,7 @@ export const SERVER_STATES: Record<ServerState, string> = {
 
 export const SERVER_PROBLEMS: Record<ServerProblem, string> = {
   sign_in: "Claude Code's sign-in does not work for Remote Control.",
+  blocked_by_setting: "A Claude Code setting or environment variable stops Remote Control.",
   not_enabled: "Claude says Remote Control is off for this account.",
   not_allowed: "This organization does not allow Remote Control.",
   offline: "Claude's servers could not be reached or kept failing.",

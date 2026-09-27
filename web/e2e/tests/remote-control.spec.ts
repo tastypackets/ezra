@@ -12,6 +12,8 @@ import {
 
 const CONNECTED = "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600";
 const REJECTED = "echo 'Error: You must be logged in to use Remote Control.' >&2; exit 1";
+const BLOCKED =
+  "echo 'Error: Remote Control requires claude.ai subscription auth. apiKeyHelper is configured, so this session is using API-key auth — unset it to use Remote Control.' >&2; exit 1";
 const DAY_MS = 86_400_000;
 
 function projectsRow(page: Page) {
@@ -70,6 +72,20 @@ test("a rejected sign-in is explained, logged and fixed by signing in again", as
   } finally {
     inContainer("rm", "-rf", `/projects/${folder}`);
   }
+});
+
+test("a setting that stops Remote Control is named without offering a new sign-in", async ({
+  page,
+  request,
+}) => {
+  installFakeClaude("2.1.0-e2e", BLOCKED);
+  await nudgeRemoteControl(request);
+  await page.goto("./");
+  const projects = projectsRow(page);
+  await expect(
+    projects.getByText("A Claude Code setting or environment variable stops Remote Control."),
+  ).toBeVisible();
+  await expect(projects.getByRole("button", { name: "Sign in again" })).toBeHidden();
 });
 
 test("a busy server waits for its sessions before restarting on an update", async ({

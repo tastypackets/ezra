@@ -13,9 +13,9 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, gethostname};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use time::OffsetDateTime;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
+use time::{OffsetDateTime, Time};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::watch;
@@ -49,6 +49,7 @@ const UPDATE_RESTART_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
 const LOG_FILE: &str = "server.log";
 const LOG_TIME: &[BorrowedFormatItem<'_>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
+const CLAUDE_LOG_STAMP: &[BorrowedFormatItem<'_>] = format_description!("[hour]:[minute]:[second]");
 const ROTATED_LOG_FILE: &str = "server.log.1";
 const LATEST_LOG_LINK: &str = "latest";
 const LOG_TAIL_LINES: usize = 200;
@@ -260,6 +261,8 @@ impl RemoteControlStatus {
 pub enum ServerProblem {
     /// Claude rejected Claude Code's sign-in, or it is missing or not a claude.ai sign-in.
     SignIn,
+    /// A Claude Code setting or environment variable stops Remote Control.
+    BlockedBySetting,
     /// Remote Control is off for the account, which a new sign-in rechecks.
     NotEnabled,
     /// The organization does not allow Remote Control.
@@ -270,11 +273,26 @@ pub enum ServerProblem {
 
 impl ServerProblem {
     /// Parts of the messages Claude Code 2.1 prints, checked in this order.
-    const MESSAGES: [(&str, Self); 20] = [
+    const MESSAGES: [(&str, Self); 27] = [
+        (
+            "so this session is using API-key auth",
+            Self::BlockedBySetting,
+        ),
+        ("using CLAUDE_CODE_OAUTH_TOKEN auth", Self::BlockedBySetting),
+        ("requires a full-scope login token", Self::BlockedBySetting),
+        ("ANTHROPIC_UNIX_SOCKET is set", Self::BlockedBySetting),
+        ("requires feature-flag evaluation", Self::BlockedBySetting),
+        (
+            "only available when using Claude via api.anthropic.com",
+            Self::BlockedBySetting,
+        ),
+        (
+            "not available inside a cloud session",
+            Self::BlockedBySetting,
+        ),
         ("You must be logged in to use Remote Control", Self::SignIn),
         ("Unable to determine your organization", Self::SignIn),
         ("Authentication failed (401)", Self::SignIn),
-        ("requires a full-scope login token", Self::SignIn),
         ("requires a claude.ai subscription", Self::SignIn),
         ("requires claude.ai subscription auth", Self::SignIn),
         ("this device is not enrolled", Self::SignIn),
@@ -294,6 +312,10 @@ impl ServerProblem {
         ("service was unreachable", Self::Offline),
         (
             "Couldn't verify your organization's Remote Control policy",
+            Self::Offline,
+        ),
+        (
+            "Couldn't verify your organization's policy for",
             Self::Offline,
         ),
         ("EAI_AGAIN", Self::Offline),
@@ -1331,20 +1353,22 @@ impl ServerOutput {
         let mut reader = BufReader::new(stream);
         let mut bytes = Vec::new();
         let mut in_debug_dump = false;
+        let mut redraws = RedrawFilter::default();
         loop {
             bytes.clear();
             match reader.read_until(b'\n', &mut bytes).await {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
-            let line = String::from_utf8_lossy(&bytes)
-                .trim_end()
-                .without_terminal_codes();
+            let raw = String::from_utf8_lossy(&bytes);
+            let line = raw.trim_end().without_terminal_codes();
+            for logged in redraws.lines_to_log(line.clone(), raw.starts_redraw()) {
+                if let Err(error) = launch.log.append_output(&logged).await {
+                    tracing::debug!("could not log to {}: {error}", launch.log.0.display());
+                }
+            }
             if line.trim().is_empty() {
                 continue;
-            }
-            if let Err(error) = launch.log.append_output(&line).await {
-                tracing::debug!("could not log to {}: {error}", launch.log.0.display());
             }
             in_debug_dump = line.starts_with("[debug] ")
                 || (in_debug_dump && line.starts_with(char::is_whitespace));
@@ -1374,6 +1398,11 @@ impl ServerOutput {
                 kept.pop_front();
             }
         }
+        for logged in redraws.shorter_redraw() {
+            if let Err(error) = launch.log.append_output(&logged).await {
+                tracing::debug!("could not log to {}: {error}", launch.log.0.display());
+            }
+        }
     }
 
     fn describe_exit(&self, exit: io::Result<ExitStatus>) -> Failure {
@@ -1396,13 +1425,81 @@ impl ServerOutput {
     }
 }
 
+/// Logs a status block redraw only when it differs from the one before.
+#[derive(Debug, Default)]
+struct RedrawFilter {
+    previous: Vec<String>,
+    current: Vec<String>,
+    in_redraw: bool,
+    differs: bool,
+}
+
+impl RedrawFilter {
+    fn lines_to_log(&mut self, line: String, starts_redraw: bool) -> Vec<String> {
+        let mut logged = Vec::new();
+        if starts_redraw {
+            logged.extend(self.shorter_redraw());
+            self.previous = std::mem::take(&mut self.current);
+            self.in_redraw = true;
+            self.differs = false;
+        }
+        if line.trim().is_empty() {
+            return logged;
+        }
+        if !self.in_redraw || line.has_log_stamp() {
+            logged.push(line);
+            return logged;
+        }
+        let index = self.current.len();
+        self.current.push(line);
+        if self.differs {
+            logged.extend(self.current.last().cloned());
+        } else if self.previous.get(index) != self.current.last() {
+            self.differs = true;
+            logged.extend(self.current.iter().cloned());
+        }
+        logged
+    }
+
+    /// The redraw so far, when it only dropped lines from the end of the one before.
+    fn shorter_redraw(&self) -> Vec<String> {
+        if self.in_redraw && !self.differs && self.current.len() != self.previous.len() {
+            self.current.clone()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 trait RemoteControlLineExt {
+    /// `ESC[<n>A` then `ESC[J`: Claude is redrawing its status block.
+    fn starts_redraw(&self) -> bool;
+
+    /// Starts with the `[HH:MM:SS]` stamp of Claude's log lines.
+    fn has_log_stamp(&self) -> bool;
+
     /// The claude.ai link printed once the server is connected: the server's, or its one
     /// session's at capacity 1.
     fn connect_url(&self) -> Option<String>;
 }
 
 impl RemoteControlLineExt for str {
+    fn starts_redraw(&self) -> bool {
+        self.split_once("\u{1b}[J").is_some_and(|(before, _)| {
+            before.split("\u{1b}[").skip(1).any(|sequence| {
+                let after_count =
+                    sequence.trim_start_matches(|character: char| character.is_ascii_digit());
+                after_count.len() < sequence.len() && after_count.starts_with('A')
+            })
+        })
+    }
+
+    fn has_log_stamp(&self) -> bool {
+        self.strip_prefix('[')
+            .and_then(|rest| rest.split_once(']'))
+            .is_some_and(|(stamp, _)| Time::parse(stamp, CLAUDE_LOG_STAMP).is_ok())
+    }
+
     fn connect_url(&self) -> Option<String> {
         self.split_whitespace()
             .find(|word| {
@@ -1598,6 +1695,52 @@ mod tests {
                 .split_once(" [OUTPUT] ")
                 .is_some_and(|(stamp, _)| time::PrimitiveDateTime::parse(stamp, LOG_TIME).is_ok())),
             "{log:?}"
+        );
+
+        state.remote_control.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn only_status_block_redraws_that_change_are_logged() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            r"printf 'Connecting\n'; \
+            printf '\033[1A\033[JReady\n    Capacity: 0/4\n'; \
+            printf '\033[2A\033[JReady\n    Capacity: 0/4\n'; \
+            printf '\033[2A\033[J[12:00:01] Warning: slow\nReady\n    Capacity: 0/4\n'; \
+            printf '\033[2A\033[J[12:00:01] Warning: slow\nReady\n    Capacity: 0/4\n'; \
+            printf '\033[2A\033[JReady\n    Capacity: 0/4\n'; \
+            printf '\033[2A\033[JConnected\n    Capacity: 1/4\n'; \
+            printf '\033[2A\033[JConnected\n'; exit 1",
+        );
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+
+        wait_for(&state, ServerState::Retrying).await;
+        let log = state
+            .remote_control
+            .log(&Served::Projects)
+            .tail()
+            .expect("log is readable");
+        let output: Vec<&str> = log
+            .iter()
+            .filter_map(|line| line.split_once(" [OUTPUT] ").map(|(_, output)| output))
+            .collect();
+        assert_eq!(
+            output,
+            [
+                "Connecting",
+                "Ready",
+                "    Capacity: 0/4",
+                "[12:00:01] Warning: slow",
+                "[12:00:01] Warning: slow",
+                "Connected",
+                "    Capacity: 1/4",
+                "Connected",
+            ]
         );
 
         state.remote_control.begin_shut_down();
@@ -1954,6 +2097,64 @@ mod tests {
     }
 
     #[test]
+    fn a_redraw_starts_after_the_cursor_moves_up_and_the_screen_clears() {
+        assert!("\u{1b}[3A\u{1b}[J·✔︎· Ready".starts_redraw());
+        assert!("\u{1b}[12A\u{1b}[J".starts_redraw());
+        assert!(!"\u{1b}[J cleared only".starts_redraw());
+        assert!(!"\u{1b}[94mhttps://x\u{1b}[0m".starts_redraw());
+        assert!(!"Capacity: 1/4".starts_redraw());
+    }
+
+    #[test]
+    fn only_redraws_that_change_reach_the_log() {
+        let mut filter = RedrawFilter::default();
+        let mut log =
+            |line: &str, starts_redraw: bool| filter.lines_to_log(line.to_owned(), starts_redraw);
+        assert_eq!(log("Connected", false), ["Connected"]);
+        assert_eq!(log("Ready", true), ["Ready"]);
+        assert_eq!(log("Capacity: 1/4", false), ["Capacity: 1/4"]);
+        assert!(log("Ready", true).is_empty());
+        assert!(log("Capacity: 1/4", false).is_empty());
+        assert!(log("Ready", true).is_empty());
+        assert_eq!(log("Capacity: 2/4", false), ["Ready", "Capacity: 2/4"]);
+        assert!(log("Ready", true).is_empty());
+        assert_eq!(log("Capacity: 1/4", false), ["Ready", "Capacity: 1/4"]);
+        assert!(log("Ready", true).is_empty());
+        assert_eq!(log("", true), ["Ready"]);
+        assert!(log("Ready", false).is_empty());
+        assert_eq!(log("Session ended", false), ["Ready", "Session ended"]);
+        assert!(log("Ready", true).is_empty());
+        assert_eq!(filter.shorter_redraw(), ["Ready"]);
+    }
+
+    #[test]
+    fn claude_log_lines_reach_the_log_apart_from_the_status_block() {
+        let mut filter = RedrawFilter::default();
+        let mut log =
+            |line: &str, starts_redraw: bool| filter.lines_to_log(line.to_owned(), starts_redraw);
+        assert_eq!(log("Ready", true), ["Ready"]);
+        assert_eq!(
+            log("[12:00:01] Warning: slow", true),
+            ["[12:00:01] Warning: slow"]
+        );
+        assert!(log("Ready", false).is_empty());
+        assert_eq!(
+            log("[12:00:01] Warning: slow", true),
+            ["[12:00:01] Warning: slow"]
+        );
+        assert!(log("Ready", false).is_empty());
+        assert!(log("Ready", true).is_empty());
+    }
+
+    #[test]
+    fn claude_log_lines_start_with_a_time() {
+        assert!("[12:00:01] Session started".has_log_stamp());
+        assert!(!"[debug] Remote Control auth state:".has_log_stamp());
+        assert!(!"[12:00] Ready".has_log_stamp());
+        assert!(!"Ready [12:00:01]".has_log_stamp());
+    }
+
+    #[test]
     fn connect_url_comes_from_the_continue_line() {
         assert_eq!(
             "Continue coding in the Claude mobile app or https://claude.ai/code?environment=env_01AB"
@@ -2014,7 +2215,7 @@ mod tests {
             ),
             (
                 "Error: Remote Control requires a full-scope login token. Long-lived tokens (from `claude setup-token` or CLAUDE_CODE_OAUTH_TOKEN) are limited to inference-only for security reasons. Run `claude auth login` to use Remote Control.",
-                Some(ServerProblem::SignIn),
+                Some(ServerProblem::BlockedBySetting),
             ),
             (
                 "Error: Your organization requires Trusted Devices for Remote Control, but this device is not enrolled. Please run `/login` in Claude Code to enroll this device.",
@@ -2055,6 +2256,42 @@ mod tests {
             (
                 "Error: Couldn't verify your organization's Remote Control policy. Retry, or run `claude doctor` for details.",
                 Some(ServerProblem::Offline),
+            ),
+            (
+                "Error: Couldn't verify your organization's policy for remote control. Check your network connection and try again.",
+                Some(ServerProblem::Offline),
+            ),
+            (
+                "Error: Remote Control requires a claude.ai subscription. Run `claude auth login` to sign in with your claude.ai account.",
+                Some(ServerProblem::SignIn),
+            ),
+            (
+                "Error: Remote Control requires claude.ai subscription auth. Unset ANTHROPIC_API_KEY / apiKeyHelper / ANTHROPIC_AUTH_TOKEN to use Remote Control.",
+                Some(ServerProblem::SignIn),
+            ),
+            (
+                "Error: Remote Control requires claude.ai subscription auth. apiKeyHelper is configured, so this session is using API-key auth — unset it to use Remote Control.",
+                Some(ServerProblem::BlockedBySetting),
+            ),
+            (
+                "Error: Remote Control requires claude.ai subscription auth. This session is using CLAUDE_CODE_OAUTH_TOKEN auth — Unset the CLAUDE_CODE_OAUTH_TOKEN environment variable.",
+                Some(ServerProblem::BlockedBySetting),
+            ),
+            (
+                "Error: Remote Control requires claude.ai subscription auth. ANTHROPIC_UNIX_SOCKET is set without CLAUDE_CODE_OAUTH_TOKEN, so requests on the socket carry no claude.ai login (on a claude ssh remote: the local machine is API-key-authed).",
+                Some(ServerProblem::BlockedBySetting),
+            ),
+            (
+                "Error: Remote Control is not available inside a cloud session.",
+                Some(ServerProblem::BlockedBySetting),
+            ),
+            (
+                "Error: Remote Control requires feature-flag evaluation, which is disabled because DISABLE_GROWTHBOOK is set. Unset it (or run in a shell without it) to use Remote Control.",
+                Some(ServerProblem::BlockedBySetting),
+            ),
+            (
+                "Error: Remote Control is only available when using Claude via api.anthropic.com.",
+                Some(ServerProblem::BlockedBySetting),
             ),
             (
                 "Opus with 1M context is not available for your account. Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m",
