@@ -32,6 +32,8 @@ use super::state::AppState;
 use crate::path_ext::PathExt;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
+const CONFIG_LOCK_STALE: Duration = Duration::from_secs(10);
+const CONFIG_LOCK_WAIT: Duration = Duration::from_secs(15);
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(35);
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const GROUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -585,12 +587,13 @@ impl Launch {
     }
 
     /// Answers Claude's onboarding, Remote Control consent and folder trust prompts in advance.
-    fn accept_prompts(&self) -> Result<(), String> {
+    async fn accept_prompts(&self) -> Result<(), String> {
         let Some(config_directory) = &self.config_directory else {
             return Ok(());
         };
         ClaudeGlobalConfig(config_directory.join(".claude.json"))
             .accept_remote_control_in(&self.directory)
+            .await
             .map_err(|error| format!("could not prepare Claude's settings: {error}"))
     }
 
@@ -609,9 +612,10 @@ impl Launch {
 struct ClaudeGlobalConfig(PathBuf);
 
 impl ClaudeGlobalConfig {
-    /// Writes only when something changes.
-    fn accept_remote_control_in(&self, directory: &Path) -> io::Result<()> {
-        let original = match fs::read(&self.0) {
+    /// Writes only when something changes, holding Claude's lock on the file.
+    async fn accept_remote_control_in(&self, directory: &Path) -> io::Result<()> {
+        let _lock = ConfigLock::take(&self.0).await?;
+        let original = match tokio::fs::read(&self.0).await {
             Ok(bytes) => Some(serde_json::from_slice::<Map<String, Value>>(&bytes)?),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
@@ -636,13 +640,55 @@ impl ClaudeGlobalConfig {
         if original.as_ref() == Some(&config) {
             return Ok(());
         }
-        if let Some(directory) = self.0.parent() {
-            fs::create_dir_all(directory)?;
-        }
         let staging = self.0.with_extension("json.ezra");
-        fs::write(&staging, serde_json::to_vec_pretty(&config)?)?;
-        fs::set_permissions(&staging, fs::Permissions::from_mode(0o600))?;
-        fs::rename(&staging, &self.0)
+        tokio::fs::write(&staging, serde_json::to_vec_pretty(&config)?).await?;
+        tokio::fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).await?;
+        tokio::fs::rename(&staging, &self.0).await
+    }
+}
+
+/// The lock Claude takes on a config file: a directory next to it, stale once unchanged for 10 s.
+struct ConfigLock(PathBuf);
+
+impl ConfigLock {
+    async fn take(file: &Path) -> io::Result<Self> {
+        if let Some(directory) = file.parent() {
+            tokio::fs::create_dir_all(directory).await?;
+        }
+        let mut lock = file.as_os_str().to_owned();
+        lock.push(".lock");
+        let lock = PathBuf::from(lock);
+        let deadline = Instant::now().checked_add(CONFIG_LOCK_WAIT);
+        loop {
+            match tokio::fs::create_dir(&lock).await {
+                Ok(()) => return Ok(Self(lock)),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            let stale = tokio::fs::metadata(&lock)
+                .await
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > CONFIG_LOCK_STALE);
+            if stale {
+                let _already_gone = tokio::fs::remove_dir(&lock).await;
+                continue;
+            }
+            if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("{} stayed locked", file.display()),
+                ));
+            }
+            sleep(GROUP_POLL_INTERVAL).await;
+        }
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        let _already_gone = fs::remove_dir(&self.0);
     }
 }
 
@@ -1006,7 +1052,7 @@ impl AppState {
         if signals.is_shutting_down() {
             return RunEnd::ShutDown;
         }
-        if let Err(message) = launch.accept_prompts() {
+        if let Err(message) = launch.accept_prompts().await {
             return RunEnd::Failed(message.into());
         }
         if let Err(error) = launch.log.prepare() {
@@ -1780,8 +1826,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn prompts_are_accepted_and_other_settings_kept() {
+    #[tokio::test]
+    async fn prompts_are_accepted_and_other_settings_kept() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = directory.path().join(".claude.json");
         fs::write(
@@ -1791,6 +1837,7 @@ mod tests {
         .expect("config is written");
         ClaudeGlobalConfig(config.clone())
             .accept_remote_control_in(Path::new("/projects"))
+            .await
             .expect("prompts are accepted");
         let written: Value =
             serde_json::from_slice(&fs::read(&config).expect("config is read")).expect("JSON");
@@ -1815,14 +1862,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn accepted_config_is_not_rewritten() {
+    #[tokio::test]
+    async fn accepted_config_is_not_rewritten() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = directory.path().join(".claude.json");
         let accepted = r#"{"hasCompletedOnboarding":true,"remoteDialogSeen":true,"projects":{"/projects":{"hasTrustDialogAccepted":true}}}"#;
         fs::write(&config, accepted).expect("config is written");
         ClaudeGlobalConfig(config.clone())
             .accept_remote_control_in(Path::new("/projects"))
+            .await
             .expect("prompts are accepted");
         assert_eq!(
             fs::read_to_string(&config).expect("config is read"),
@@ -1830,12 +1878,54 @@ mod tests {
         );
     }
 
-    #[test]
-    fn missing_config_is_created_and_broken_config_is_left_alone() {
+    #[tokio::test]
+    async fn the_config_is_written_once_claudes_lock_is_released_or_stale() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = directory.path().join(".claude.json");
+        let lock = directory.path().join(".claude.json.lock");
+        fs::create_dir(&lock).expect("Claude holds the lock");
+        let released = tokio::spawn({
+            let lock = lock.clone();
+            async move {
+                sleep(Duration::from_millis(300)).await;
+                fs::remove_dir(&lock).expect("Claude releases the lock");
+            }
+        });
+        ClaudeGlobalConfig(config.clone())
+            .accept_remote_control_in(Path::new("/projects"))
+            .await
+            .expect("prompts are accepted");
+        assert!(
+            released.is_finished(),
+            "the config was written under Claude's lock"
+        );
+        assert!(config.exists());
+        assert!(!lock.exists());
+
+        fs::create_dir(&lock).expect("a crashed Claude left its lock");
+        fs::File::open(&lock)
+            .and_then(|lock| {
+                lock.set_modified(
+                    std::time::SystemTime::now()
+                        .checked_sub(Duration::from_secs(60))
+                        .expect("the time fits"),
+                )
+            })
+            .expect("the lock is old");
+        ClaudeGlobalConfig(config.clone())
+            .accept_remote_control_in(Path::new("/other"))
+            .await
+            .expect("prompts are accepted");
+        assert!(!lock.exists());
+    }
+
+    #[tokio::test]
+    async fn missing_config_is_created_and_broken_config_is_left_alone() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = directory.path().join(".claude.json");
         ClaudeGlobalConfig(config.clone())
             .accept_remote_control_in(Path::new("/projects"))
+            .await
             .expect("prompts are accepted");
         assert!(config.exists());
 
@@ -1843,6 +1933,7 @@ mod tests {
         assert!(
             ClaudeGlobalConfig(config.clone())
                 .accept_remote_control_in(Path::new("/projects"))
+                .await
                 .is_err()
         );
         assert_eq!(
