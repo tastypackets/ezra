@@ -30,7 +30,9 @@ impl From<SettingsFileError> for ApiError {
             SettingsFileError::Invalid(problem) => Self::Invalid(problem),
             SettingsFileError::TooLarge => Self::TooLarge(error.to_string()),
             SettingsFileError::Changed(_) => Self::Conflict(error.to_string()),
-            SettingsFileError::NotText(_) => Self::Unprocessable(error.to_string()),
+            SettingsFileError::NotText(_)
+            | SettingsFileError::NotRegular(_)
+            | SettingsFileError::FileTooLarge(_) => Self::Unprocessable(error.to_string()),
             SettingsFileError::Io { .. } => Self::Internal(error.to_string()),
         }
     }
@@ -48,7 +50,7 @@ impl From<SettingsFileError> for ApiError {
         (status = 200, description = "The file", body = SettingsFileText),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody),
         (status = 404, description = "The agent's config directory is not set", body = ErrorBody),
-        (status = 422, description = "The file is not UTF-8 text", body = ErrorBody)
+        (status = 422, description = "The file is not UTF-8 text, not a regular file or larger than 2 MiB", body = ErrorBody)
     )
 )]
 pub async fn read(
@@ -82,7 +84,8 @@ pub async fn read(
         (status = 401, description = "Not signed in to the manager", body = ErrorBody),
         (status = 404, description = "The agent's config directory is not set", body = ErrorBody),
         (status = 409, description = "The file changed since that version", body = ErrorBody),
-        (status = 413, description = "The text is larger than 2 MiB", body = ErrorBody)
+        (status = 413, description = "The text is larger than 2 MiB", body = ErrorBody),
+        (status = 422, description = "The file is not a regular file or larger than 2 MiB", body = ErrorBody)
     )
 )]
 pub async fn save(
@@ -113,12 +116,14 @@ pub async fn save(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, File};
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use futures_util::{Stream, StreamExt};
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
     use serde_json::{Value, json};
 
     use super::super::test_support::{ResponseExt, TestManager};
@@ -323,6 +328,47 @@ mod tests {
             error["error"]
                 .as_str()
                 .is_some_and(|message| message.ends_with("settings.json is not UTF-8 text")),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_not_regular_or_too_large_cannot_be_opened_or_saved() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let claude = path_of(&manager, Agent::Claude);
+        fs::create_dir_all(claude.parent().expect("the path has a parent"))
+            .expect("the directory is created");
+        mkfifo(&claude, Mode::S_IRUSR | Mode::S_IWUSR).expect("the pipe is created");
+        let response = manager.get(CLAUDE, Some(&cookie)).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error: Value = response.json().await;
+        assert!(
+            error["error"]
+                .as_str()
+                .is_some_and(|message| message.ends_with("settings.json is not a regular file")),
+            "{error}"
+        );
+        let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        assert_eq!(
+            manager
+                .put(CLAUDE, &body("{}", empty), Some(&cookie))
+                .await
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        fs::remove_file(&claude).expect("the pipe is removed");
+        File::create(&claude)
+            .and_then(|file| file.set_len(4 * 1024 * 1024 * 1024))
+            .expect("the sparse file is created");
+        let response = manager.get(CLAUDE, Some(&cookie)).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error: Value = response.json().await;
+        assert!(
+            error["error"]
+                .as_str()
+                .is_some_and(|message| message.ends_with("settings.json is larger than 2 MiB")),
             "{error}"
         );
     }

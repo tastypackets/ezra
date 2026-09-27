@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions, Permissions};
-use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use nix::fcntl::OFlag;
 use notify::EventKind;
 use notify::event::{AccessKind, AccessMode};
 use serde::de::IgnoredAny;
@@ -21,8 +22,9 @@ use super::watcher::SettledWatcher;
 use crate::bytes_ext::BytesExt;
 use crate::path_ext::PathExt;
 
-/// The largest text saved.
+/// The largest text read or saved.
 pub const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;
+const READ_LIMIT: u64 = MAX_TEXT_BYTES as u64 + 1;
 const NEW_FILE_MODE: u32 = 0o600;
 const STAGING_PREFIX: &str = ".ezra.";
 const RECHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -68,6 +70,10 @@ pub enum SettingsFileError {
     Changed(String),
     #[error("{0} is not UTF-8 text")]
     NotText(String),
+    #[error("{0} is not a regular file")]
+    NotRegular(String),
+    #[error("{0} is larger than 2 MiB")]
+    FileTooLarge(String),
     #[error("could not read or write {path}: {source}")]
     Io { path: String, source: io::Error },
 }
@@ -170,8 +176,7 @@ impl InstallPaths {
 impl SettingsFile {
     /// The file's text, empty when it does not exist. Blocks.
     pub fn read(&self) -> Result<SettingsFileText, SettingsFileError> {
-        let bytes = self.bytes().map_err(|source| self.failed(source))?;
-        let text = String::from_utf8(bytes)
+        let text = String::from_utf8(self.bytes()?)
             .map_err(|_| SettingsFileError::NotText(self.path.display().to_string()))?;
         Ok(self.with_text(text))
     }
@@ -189,7 +194,7 @@ impl SettingsFile {
             .stage(text.as_bytes())
             .map_err(|source| self.failed(source))?;
         let _saving = SAVING.lock().unwrap_or_else(PoisonError::into_inner);
-        let current = self.bytes().map_err(|source| self.failed(source))?;
+        let current = self.bytes()?;
         if Self::version_of(&current) != version {
             return Err(SettingsFileError::Changed(self.path.display().to_string()));
         }
@@ -219,12 +224,36 @@ impl SettingsFile {
         Sha256::digest(bytes).to_hex()
     }
 
-    /// The file's bytes, none when it does not exist. Blocks.
-    fn bytes(&self) -> io::Result<Vec<u8>> {
-        match fs::read(&self.path) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-            bytes => bytes,
+    /// The file's bytes, none when it does not exist. Refuses anything but a regular file of at
+    /// most 2 MiB without waiting on it. Blocks.
+    fn bytes(&self) -> Result<Vec<u8>, SettingsFileError> {
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(OFlag::O_NONBLOCK.bits())
+            .open(&self.path)
+        {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            file => file.map_err(|source| self.failed(source))?,
+        };
+        if !file
+            .metadata()
+            .map_err(|source| self.failed(source))?
+            .is_file()
+        {
+            return Err(SettingsFileError::NotRegular(
+                self.path.display().to_string(),
+            ));
         }
+        let mut bytes = Vec::new();
+        file.take(READ_LIMIT)
+            .read_to_end(&mut bytes)
+            .map_err(|source| self.failed(source))?;
+        if bytes.len() > MAX_TEXT_BYTES {
+            return Err(SettingsFileError::FileTooLarge(
+                self.path.display().to_string(),
+            ));
+        }
+        Ok(bytes)
     }
 
     /// Writes `bytes` to a new file beside the file the path's links lead to, with that file's
@@ -293,7 +322,7 @@ impl StagedFile {
 /// directories that hold the files and their link targets, and also rereads the files every 5 s.
 pub struct SettingsFileWatcher {
     files: Vec<SettingsFile>,
-    versions: Vec<Option<String>>,
+    versions: Vec<String>,
     watcher: SettledWatcher,
     relevant: Arc<RelevantPaths>,
 }
@@ -390,11 +419,12 @@ impl SettingsFileWatcher {
             files
                 .iter()
                 .map(|file| {
-                    file.bytes()
-                        .ok()
-                        .map(|bytes| SettingsFile::version_of(&bytes))
+                    file.bytes().map_or_else(
+                        |error| error.to_string(),
+                        |bytes| SettingsFile::version_of(&bytes),
+                    )
                 })
-                .collect::<Vec<Option<String>>>()
+                .collect::<Vec<String>>()
         })
         .await
         else {
@@ -408,10 +438,13 @@ impl SettingsFileWatcher {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
-    use std::sync::Barrier;
+    use std::fs::File;
+    use std::os::unix::fs::{FileTypeExt, symlink};
+    use std::sync::{Barrier, mpsc};
     use std::thread;
 
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
     use tokio::time::timeout;
 
     use super::*;
@@ -434,6 +467,20 @@ mod tests {
             .permissions()
             .mode()
             & 0o7777
+    }
+
+    fn promptly<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || sender.send(work()));
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the work finishes within 2 s")
+    }
+
+    fn sparse_file(path: &Path, length: u64) {
+        File::create(path)
+            .and_then(|file| file.set_len(length))
+            .expect("the sparse file is created");
     }
 
     struct Files {
@@ -904,6 +951,64 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn only_a_regular_file_of_at_most_2_mib_is_read() {
+        let files = Files::new();
+        let claude = files.of(Agent::Claude);
+        fs::create_dir_all(files.path("config/claude")).expect("the directory is created");
+        mkfifo(&claude.path, Mode::S_IRUSR | Mode::S_IWUSR).expect("the pipe is created");
+        let pipe = claude.clone();
+        assert!(matches!(
+            promptly(move || pipe.read()),
+            Err(SettingsFileError::NotRegular(_))
+        ));
+        let pipe = claude.clone();
+        assert!(matches!(
+            promptly(move || pipe.save("{}".to_owned(), EMPTY_VERSION)),
+            Err(SettingsFileError::NotRegular(_))
+        ));
+        assert!(
+            fs::symlink_metadata(&claude.path)
+                .expect("the pipe stays")
+                .file_type()
+                .is_fifo()
+        );
+        assert_eq!(files.names_in("config/claude"), ["settings.json"]);
+
+        fs::remove_file(&claude.path).expect("the pipe is removed");
+        symlink("/dev/zero", &claude.path).expect("the link is created");
+        let endless = claude.clone();
+        assert!(matches!(
+            promptly(move || endless.read()),
+            Err(SettingsFileError::NotRegular(_))
+        ));
+
+        fs::remove_file(&claude.path).expect("the link is removed");
+        fs::create_dir(&claude.path).expect("the directory is created");
+        assert!(matches!(
+            claude.read(),
+            Err(SettingsFileError::NotRegular(_))
+        ));
+
+        fs::remove_dir(&claude.path).expect("the directory is removed");
+        sparse_file(&claude.path, MAX_TEXT_BYTES as u64);
+        assert_eq!(
+            claude.read().expect("2 MiB reads").text.len(),
+            MAX_TEXT_BYTES
+        );
+        sparse_file(&claude.path, 4 * 1024 * 1024 * 1024);
+        let huge = claude.clone();
+        assert!(matches!(
+            promptly(move || huge.read()),
+            Err(SettingsFileError::FileTooLarge(_))
+        ));
+        let huge = claude.clone();
+        assert!(matches!(
+            promptly(move || huge.save("{}".to_owned(), EMPTY_VERSION)),
+            Err(SettingsFileError::FileTooLarge(_))
+        ));
+    }
+
     async fn noticed(watcher: &mut SettingsFileWatcher, what: &str) {
         timeout(Duration::from_secs(4), watcher.next_change())
             .await
@@ -963,6 +1068,34 @@ mod tests {
         let settings = files.path("config/claude/settings.json");
         fs::set_permissions(&settings, Permissions::from_mode(0o600)).expect("the mode is set");
         not_noticed(&mut watcher, "a change to other files").await;
+    }
+
+    #[tokio::test]
+    async fn files_that_are_not_regular_or_too_large_do_not_stall_the_watcher() {
+        let files = Files::new();
+        let claude = files.path("config/claude/settings.json");
+        let codex = files.path("config/codex/config.toml");
+        fs::create_dir_all(files.path("config/claude")).expect("the directory is created");
+        fs::create_dir_all(files.path("config/codex")).expect("the directory is created");
+        mkfifo(&claude, Mode::S_IRUSR | Mode::S_IWUSR).expect("the pipe is created");
+        symlink("/dev/zero", &codex).expect("the link is created");
+        let mut watcher = timeout(
+            Duration::from_secs(2),
+            SettingsFileWatcher::start(&files.paths),
+        )
+        .await
+        .expect("the watcher starts");
+
+        fs::remove_file(&claude).expect("the pipe is removed");
+        files.write("config/claude/settings.json", b"{}");
+        noticed(&mut watcher, "a file in place of a pipe").await;
+
+        fs::remove_file(&codex).expect("the link is removed");
+        sparse_file(&codex, READ_LIMIT);
+        noticed(&mut watcher, "a file over 2 MiB in place of a link").await;
+
+        files.write("config/claude/settings.json", b"{\"a\":1}");
+        noticed(&mut watcher, "a change beside a file over 2 MiB").await;
     }
 
     #[tokio::test]

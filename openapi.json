@@ -425,7 +425,7 @@
             }
           },
           "422": {
-            "description": "The file is not UTF-8 text",
+            "description": "The file is not UTF-8 text, not a regular file or larger than 2 MiB",
             "content": {
               "application/json": {
                 "schema": {
@@ -517,6 +517,16 @@
           },
           "413": {
             "description": "The text is larger than 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The file is not a regular file or larger than 2 MiB",
             "content": {
               "application/json": {
                 "schema": {
