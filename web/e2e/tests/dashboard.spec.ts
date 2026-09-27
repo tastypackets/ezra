@@ -24,6 +24,9 @@ test("the dashboard arrives with its data, then fetches only what changes", asyn
     await expect(row.getByRole("button", { name: "Install" })).toHaveAccessibleDescription(agent);
   }
   await expect(
+    page.getByText("An agent started in ~/projects can also clone and set up repositories."),
+  ).toBeVisible();
+  await expect(
     page.getByText(
       "No projects yet. Clone a repository, or ask an agent started in ~/projects to.",
     ),
@@ -173,6 +176,7 @@ test.describe("with Claude Code installed", () => {
   test("Remote Control waits for Claude Code's sign-in", async ({ page }) => {
     await page.goto("./");
     const projects = page.getByRole("listitem").filter({ hasText: "All projects" });
+    await expect(projects.getByText("~/projects", { exact: true })).toBeVisible();
     await expect(projects.getByText("Waiting")).toBeVisible();
     await expect(projects.getByText("Starts once Claude Code is signed in.")).toBeVisible();
     await expect(page.getByRole("row", { name: /Claude Code/ })).toContainText("Waiting");

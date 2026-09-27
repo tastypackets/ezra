@@ -31,6 +31,9 @@ test("a repository is cloned from its URL and deleted after confirming", async (
     const dialog = page.getByRole("dialog", { name: "Clone repository" });
     const serve = dialog.getByRole("switch", { name: "Serve in the Claude app" });
     await expect(serve).toBeChecked();
+    await expect(dialog.getByLabel("Folder")).toHaveAccessibleDescription(
+      "The new folder in ~/projects.",
+    );
     await dialog.getByRole("combobox", { name: "Repository" }).fill(`file://${source}`);
     await expect(dialog.getByLabel("Folder")).toHaveValue(source.split("/").at(-1) ?? "");
     await dialog.getByLabel("Folder").fill(folder);
