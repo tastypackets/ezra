@@ -8,6 +8,7 @@ mod environment;
 mod events;
 mod folders;
 mod git;
+mod https_redirect;
 mod login;
 mod processes;
 mod remote_control;
@@ -145,12 +146,12 @@ async fn serve() -> Result<(), ManagerError> {
     let remote_control = Arc::clone(&state.remote_control);
     let codex_remote = Arc::clone(&state.codex_remote);
     let app = state.into_router(web_directory);
-    let served =
-        axum_server::bind_rustls(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), tls_config)
-            .handle(handle)
-            .serve(app.into_make_service())
-            .await
-            .map_err(|source| ManagerError::Serve { port, source });
+    let served = axum_server::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
+        .acceptor(https_redirect::HttpsRedirectAcceptor::new(tls_config))
+        .handle(handle)
+        .serve(app.into_make_service())
+        .await
+        .map_err(|source| ManagerError::Serve { port, source });
     let (claude_stopped, codex_stopped) = tokio::join!(
         remote_control
             .supervision

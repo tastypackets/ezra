@@ -576,6 +576,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "http-body-util",
+ "httparse",
  "nix",
  "notify",
  "qrcode",
