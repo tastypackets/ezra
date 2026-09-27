@@ -559,18 +559,30 @@ test.describe("with Claude Code installed", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
+    const allowed = Array.from({ length: 40 }, (_, index) => `      "Bash(tool-${index}:*)"`);
     writeInContainer(
       CLAUDE_FILE,
-      `{"permissions": {"allow": [${Array.from({ length: 30 }, (_, index) => `"Bash(tool-${index}:*)"`).join(", ")}]}}\n`,
+      `{\n  "permissions": {\n    "allow": [\n${allowed.join(",\n")}\n    ]\n  }\n}\n`,
     );
-    const { editor } = await openSettings(page, CLAUDE_TITLE);
+    const { box, editor } = await openSettings(page, CLAUDE_TITLE);
     await editor.scrollIntoViewIfNeeded();
-    await expect(editor).toContainText("tool-29");
+    await expect(editor).toContainText("tool-39");
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       ),
     ).toBe(0);
+    expect(
+      await editor.evaluate((content) => {
+        const scroller = content.parentElement;
+        return scroller ? scroller.scrollHeight - scroller.clientHeight : -1;
+      }),
+    ).toBe(0);
+    await editor.click();
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.type(",");
+    await expect(editor).toHaveAttribute("aria-invalid", "true");
+    await expect(box.locator(".cm-gutter-lint")).toBeHidden();
     await expect(editor).toHaveCSS("font-size", "16px");
     await expect(editor).toHaveAttribute("spellcheck", "false");
     await expect(editor).toHaveAttribute("autocorrect", "off");

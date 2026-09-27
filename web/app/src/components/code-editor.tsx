@@ -77,7 +77,7 @@ export default function CodeEditor({
   return (
     <div
       ref={parent}
-      className="overflow-hidden rounded-lg border border-input font-mono text-base transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 has-aria-invalid:border-destructive has-aria-invalid:ring-3 has-aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:has-aria-invalid:border-destructive/50 dark:has-aria-invalid:ring-destructive/40"
+      className="overflow-hidden rounded-lg border border-input font-mono text-base transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 has-aria-invalid:border-destructive has-aria-invalid:ring-3 has-aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:has-aria-invalid:border-destructive/50 dark:has-aria-invalid:ring-destructive/40 md:[&_.cm-editor]:max-h-128 max-md:[&_.cm-gutter-lint]:hidden!"
     />
   );
 }

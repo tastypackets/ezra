@@ -61,7 +61,7 @@ import { capitalized } from "@/lib/utils";
 const CHECK_DELAY_MS = 300;
 
 const THEME = EditorView.theme({
-  "&": { color: "var(--foreground)", backgroundColor: "transparent", maxHeight: "32rem" },
+  "&": { color: "var(--foreground)", backgroundColor: "transparent" },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": { fontFamily: "inherit", lineHeight: "1.6" },
   ".cm-content": { caretColor: "var(--foreground)" },
