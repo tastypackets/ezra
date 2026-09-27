@@ -207,7 +207,10 @@ impl FoldersBlock<'_> {
             "{BLOCK_START}\n\
              This file applies only when the working directory is /projects. Inside a project \
              folder, ignore it.\n\
-             /projects holds the projects in this box, one per folder.\n"
+             /projects holds the projects in this box, one per folder.\n\
+             mise is set up. Install missing tools with `mise use -g <tool>`, which keeps them on \
+             /config when the container is recreated.\n\
+             Tools installed with apt or into /home/dev are lost when the container is recreated.\n"
         );
         match self.github_account {
             Some("") => markdown.push_str("gh is signed in to GitHub.\n"),
@@ -924,6 +927,10 @@ mod tests {
             "{second}"
         );
         assert!(!first.contains("gh is signed in"), "{first}");
+        assert!(
+            first.contains("Install missing tools with `mise use -g <tool>`"),
+            "{first}"
+        );
         assert!(!second.contains("- app"), "{second}");
         assert!(
             second.ends_with("<!-- ezra:folders:end -->\n\nAfter the block.\n"),
