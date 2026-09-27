@@ -249,6 +249,7 @@ mod tests {
         force: Duration::ZERO,
         request: Duration::ZERO,
         mfa_retry: Duration::ZERO,
+        usage: Duration::ZERO,
     };
 
     fn arguments(command: &Command) -> Vec<&str> {

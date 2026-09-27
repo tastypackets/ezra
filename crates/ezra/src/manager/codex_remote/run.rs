@@ -45,19 +45,22 @@ impl CodexServerRun {
         })
     }
 
-    /// Reads which processes the server started. Keeps the earlier reading when the server
-    /// exited meanwhile.
-    pub async fn sample_family(&mut self) {
-        let Some(leader) = self.leader() else {
-            return;
-        };
-        let Ok(family) = tokio::task::spawn_blocking(move || ProcessFamily::of(leader)).await
-        else {
-            return;
-        };
-        if matches!(self.child.try_wait(), Ok(None)) {
-            self.family = Some(family);
+    /// Reads which processes the server started, and returns the memory they use. Keeps the
+    /// earlier reading when the server exited meanwhile.
+    pub async fn sample_family(&mut self) -> Option<u64> {
+        let leader = self.leader()?;
+        let (family, memory_bytes) = tokio::task::spawn_blocking(move || {
+            let family = ProcessFamily::of(leader);
+            let memory_bytes = family.memory_bytes();
+            (family, memory_bytes)
+        })
+        .await
+        .ok()?;
+        if !matches!(self.child.try_wait(), Ok(None)) {
+            return None;
         }
+        self.family = Some(family);
+        Some(memory_bytes)
     }
 
     /// Sends SIGTERM, a second SIGTERM after the drain budget, and SIGKILL after the force
@@ -143,6 +146,7 @@ pub(super) mod tests {
         force: Duration::from_millis(500),
         request: Duration::from_secs(1),
         mfa_retry: Duration::ZERO,
+        usage: Duration::ZERO,
     };
 
     /// A fake `codex` whose `app-server` runs `server`.

@@ -266,42 +266,36 @@ impl ControlRequest for AccountRead {
 }
 
 /// Lists one page of the chats the server has loaded.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 pub struct LoadedThreads {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
-#[cfg(test)]
 impl ControlRequest for LoadedThreads {
     const METHOD: &'static str = "thread/loaded/list";
     type Response = ThreadPageWire;
 }
 
 /// Reads one chat.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadRead {
     pub thread_id: ThreadId,
 }
 
-#[cfg(test)]
 impl ControlRequest for ThreadRead {
     const METHOD: &'static str = "thread/read";
     type Response = ThreadReadWire;
 }
 
 /// Stops this connection following a chat.
-#[cfg(test)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadUnsubscribe {
     pub thread_id: ThreadId,
 }
 
-#[cfg(test)]
 impl ControlRequest for ThreadUnsubscribe {
     const METHOD: &'static str = "thread/unsubscribe";
     type Response = UnsubscribeWire;
@@ -451,7 +445,6 @@ impl AccountWire {
     }
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadPageWire {
@@ -459,7 +452,6 @@ pub struct ThreadPageWire {
     pub next_cursor: Option<String>,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ThreadReadWire {
     pub thread: ThreadWire,
@@ -481,13 +473,11 @@ pub enum ThreadStatusWire {
     Active,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct UnsubscribeWire {
     pub status: UnsubscribeStatus,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UnsubscribeStatus {
@@ -805,6 +795,7 @@ pub(super) mod tests {
         force: Duration::ZERO,
         request: Duration::from_secs(5),
         mfa_retry: Duration::ZERO,
+        usage: Duration::ZERO,
     };
     const ENABLE_FIRST: &str = "remote control pairing requires remote control to be enabled";
 
@@ -856,23 +847,6 @@ pub(super) mod tests {
             server_name: "ezra-dev".to_owned(),
             environment_id: Some(ENVIRONMENT.to_owned()),
         }
-    }
-
-    fn thread_params(id: &str, status: Value) -> Value {
-        json!({
-            "id": id,
-            "sessionId": id,
-            "forkedFromId": null,
-            "parentThreadId": null,
-            "preview": "",
-            "ephemeral": false,
-            "modelProvider": "openai",
-            "createdAt": 1_790_000_000,
-            "updatedAt": 1_790_000_000,
-            "status": status,
-            "cwd": "/projects",
-            "cliVersion": "0.157.1",
-        })
     }
 
     fn thread() -> ThreadId {
@@ -1351,7 +1325,7 @@ pub(super) mod tests {
         );
         fake.reply(
             "thread/read",
-            [Reply::Result(json!({"thread": thread_params(
+            [Reply::Result(json!({"thread": FakeControlServer::thread(
                 "thread-1",
                 json!({"type": "active", "activeFlags": ["waitingOnApproval"]}),
             )}))],
@@ -1499,7 +1473,7 @@ pub(super) mod tests {
             ),
             (
                 "thread/started",
-                json!({"thread": thread_params("thread-1", json!({"type": "idle"}))}),
+                json!({"thread": FakeControlServer::thread("thread-1", json!({"type": "idle"}))}),
                 ControlNotification::ThreadStarted {
                     thread: ThreadWire {
                         id: thread(),
@@ -1564,7 +1538,8 @@ pub(super) mod tests {
     #[tokio::test]
     async fn answers_reach_the_request_with_their_id_in_any_order() {
         let (_home, fake, client, _events) = connected().await;
-        let thread_answer = json!({"thread": thread_params("thread-1", json!({"type": "idle"}))});
+        let thread_answer =
+            json!({"thread": FakeControlServer::thread("thread-1", json!({"type": "idle"}))});
         fake.reply(
             "thread/read",
             [Reply::Late(

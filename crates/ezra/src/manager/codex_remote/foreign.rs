@@ -128,6 +128,7 @@ pub(super) mod tests {
         force: Duration::from_millis(500),
         request: Duration::ZERO,
         mfa_retry: Duration::ZERO,
+        usage: Duration::ZERO,
     };
     const RELEASE: &str = "releases/0.157.1-x86_64-unknown-linux-musl/bin";
     const UPDATER: [&str; 3] = ["app-server", "daemon", UPDATE_LOOP];

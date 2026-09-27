@@ -153,6 +153,39 @@ impl FakeControlServer {
         })
     }
 
+    /// A Codex chat with `status`, as `thread/read` and `thread/started` give it.
+    pub fn thread(id: &str, status: Value) -> Value {
+        json!({
+            "id": id,
+            "sessionId": id,
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "",
+            "ephemeral": false,
+            "modelProvider": "openai",
+            "createdAt": 1_790_000_000,
+            "updatedAt": 1_790_000_000,
+            "status": status,
+            "cwd": "/projects",
+            "cliVersion": "0.157.1",
+            "projectId": null,
+            "source": "appServer",
+            "turns": [],
+        })
+    }
+
+    /// The notification Codex pushes when a chat's status becomes `status`.
+    pub fn thread_status_changed(id: &str, status: &str) -> Value {
+        let status = match status {
+            "active" => json!({"type": "active", "activeFlags": []}),
+            status => json!({"type": status}),
+        };
+        json!({
+            "method": "thread/status/changed",
+            "params": {"threadId": id, "status": status},
+        })
+    }
+
     /// The notification Codex pushes when the relay status becomes `status`.
     pub fn status_changed(status: &str) -> Value {
         json!({

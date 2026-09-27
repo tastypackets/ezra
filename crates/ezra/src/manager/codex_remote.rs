@@ -1,3 +1,4 @@
+mod chats;
 mod control;
 #[cfg(test)]
 mod fake;
@@ -18,7 +19,9 @@ use utoipa::ToSchema;
 
 use super::events::{Events, Topic};
 use super::remote_control::ServerState;
-use super::supervision::{Failure, OUTPUT_DRAIN_TIMEOUT, Published, ServerLog, Supervision};
+use super::supervision::{
+    Failure, OUTPUT_DRAIN_TIMEOUT, Published, ServerLog, Supervision, USAGE_INTERVAL,
+};
 pub use control::ControlError;
 use control::{ControlClient, Enable, RelayStatusWire, RelayWire};
 use launch::LaunchFlagCache;
@@ -65,6 +68,8 @@ pub struct ServerBudget {
     /// After ezra turned the relay off because ChatGPT asks for multi-factor authentication,
     /// before it turns it on again.
     pub mfa_retry: Duration,
+    /// Between readings of what the server and its chats use.
+    pub usage: Duration,
 }
 
 impl ServerBudget {
@@ -85,6 +90,7 @@ impl Default for ServerBudget {
             force: Duration::from_secs(10),
             request: Duration::from_secs(45),
             mfa_retry: Duration::from_secs(10 * 60),
+            usage: USAGE_INTERVAL,
         }
     }
 }
@@ -225,6 +231,19 @@ pub struct CodexRemoteStatus {
     pub last_error: Option<String>,
     /// Unexpected stops since the manager started.
     pub restarts: u32,
+    /// What the server and its chats use, absent while no server runs.
+    pub usage: Option<CodexUsage>,
+}
+
+/// What a running Codex server and its chats use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CodexUsage {
+    /// Chats the server has loaded.
+    pub chats: u32,
+    /// Chats running a turn or waiting for an answer, and chats whose state is not known yet.
+    pub running_chats: u32,
+    /// Memory the server, its chats and their commands use, with shared memory counted once.
+    pub memory_bytes: u64,
 }
 
 impl CodexRemoteStatus {
@@ -234,6 +253,7 @@ impl CodexRemoteStatus {
         self.relay = None;
         self.server_name = None;
         self.server_version = None;
+        self.usage = None;
     }
 
     /// Shows no server running, and the problem keeping it from starting.
@@ -492,6 +512,11 @@ mod tests {
             problem: Some(problem),
             last_error: Some("the line that named it".to_owned()),
             restarts: 1,
+            usage: Some(CodexUsage {
+                chats: 2,
+                running_chats: 1,
+                memory_bytes: 400_000_000,
+            }),
         }
     }
 
@@ -669,6 +694,7 @@ mod tests {
                         relay: None,
                         server_name: None,
                         server_version: None,
+                        usage: None,
                         ..before
                     }
                 }

@@ -7,21 +7,23 @@ use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep_until};
 
+use super::chats::Chats;
 use super::control::{
     AccountRead, AccountWire, ControlClient, ControlError, ControlEvent, ControlNotification,
-    ControlSocket, Disable, Enable, RelayStatusWire, RelayWire, StatusRead,
+    ControlSocket, Disable, Enable, LoadedThreads, RelayStatusWire, RelayWire, StatusRead,
+    ThreadId, ThreadRead, ThreadUnsubscribe, ThreadWire, UnsubscribeStatus,
 };
 use super::foreign::ForeignServer;
 use super::launch::CodexLaunch;
 use super::problem::{CodexProblem, ProblemLine};
 use super::run::CodexServerRun;
-use super::{CodexRemote, CodexRemoteStatus, Control, RelayState, ServerBudget};
+use super::{CodexRemote, CodexRemoteStatus, CodexUsage, Control, RelayState, ServerBudget};
 use crate::manager::agents::Agent;
 use crate::manager::checks::AgentChecks;
 use crate::manager::remote_control::ServerState;
 use crate::manager::state::AppState;
 use crate::manager::supervision::{
-    Failures, FlagExt, RECHECK_INTERVAL, RunEnd, Signals, USAGE_INTERVAL, Verdict, Wake, Wanted,
+    Failures, FlagExt, RECHECK_INTERVAL, RunEnd, Signals, Verdict, Wake, Wanted,
 };
 
 /// How often the control socket is tried while the server starts.
@@ -29,6 +31,7 @@ const CONNECT_INTERVAL: Duration = Duration::from_millis(250);
 const LONGEST_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const LARGEST_LOG: u64 = 10 * 1024 * 1024;
 const TURNED_OFF: &str = "Codex turned remote control off";
+const LOADED_THREAD_PAGES: usize = 10;
 
 impl AppState {
     /// Runs Codex's remote control server while it is wanted, until shutdown.
@@ -192,11 +195,13 @@ impl AppState {
             ),
             asking: Asking::default(),
             mfa_retry_at: None,
+            chats: Chats::default(),
+            memory_bytes: None,
         };
         let mut recheck = interval(RECHECK_INTERVAL);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         recheck.reset();
-        let mut usage = interval(USAGE_INTERVAL);
+        let mut usage = interval(codex_remote.budget.usage);
         usage.set_missed_tick_behavior(MissedTickBehavior::Delay);
         usage.reset();
         loop {
@@ -214,13 +219,16 @@ impl AppState {
                 event = run.link.next() => {
                     match event {
                         LinkEvent::Ready { relay, client } => {
-                            server.sample_family().await;
+                            run.memory_bytes = server.sample_family().await.or(run.memory_bytes);
                             run.ready(self, relay, client);
                         }
                         LinkEvent::Control(ControlEvent::Notification(notification)) => {
                             run.notified(self, notification);
                         }
-                        LinkEvent::Control(ControlEvent::ServerRequest { .. } | ControlEvent::Closed) => {}
+                        LinkEvent::Control(ControlEvent::ServerRequest { thread_id: Some(thread_id), .. }) => {
+                            run.asked_about(codex_remote, thread_id);
+                        }
+                        LinkEvent::Control(ControlEvent::ServerRequest { thread_id: None, .. } | ControlEvent::Closed) => {}
                         LinkEvent::Lost => {
                             tracing::warn!("lost Codex's control connection, opening it again");
                             codex_remote.with_control(|control| control.client = None);
@@ -261,7 +269,8 @@ impl AppState {
                     });
                 }
                 _ = usage.tick() => {
-                    server.sample_family().await;
+                    run.memory_bytes = server.sample_family().await.or(run.memory_bytes);
+                    run.show_usage(codex_remote);
                     continue;
                 }
                 () = signals.shutdown.until_set() => {
@@ -322,6 +331,9 @@ struct CodexRun {
     asking: Asking,
     /// When to turn the relay on again while ChatGPT asks for multi-factor authentication.
     mfa_retry_at: Option<Instant>,
+    chats: Chats,
+    /// From the last reading of the server's processes.
+    memory_bytes: Option<u64>,
 }
 
 impl CodexRun {
@@ -354,8 +366,48 @@ impl CodexRun {
         }
         tracing::info!("Codex remote control answers as {}", relay.server_name);
         codex_remote.with_control(|control| control.client = Some(Arc::clone(&client)));
-        codex_remote.status.update(|status| status.answer(relay));
+        self.chats = Chats::default();
+        let usage = self.usage();
+        codex_remote.status.update(|status| {
+            status.answer(relay);
+            status.usage = usage;
+        });
+        self.asking.threads(Arc::clone(&client));
         self.asking.account(client, None);
+    }
+
+    fn usage(&self) -> Option<CodexUsage> {
+        Some(CodexUsage {
+            chats: self.chats.count(),
+            running_chats: self.chats.running(),
+            memory_bytes: self.memory_bytes?,
+        })
+    }
+
+    fn show_usage(&self, codex_remote: &CodexRemote) {
+        if let Some(usage) = self.usage() {
+            codex_remote
+                .status
+                .update(|status| status.usage = Some(usage));
+        }
+    }
+
+    /// Codex asked ezra about a chat, so ezra's connection follows it.
+    fn asked_about(&mut self, codex_remote: &CodexRemote, thread_id: ThreadId) {
+        let leave = self.chats.asked_about(thread_id);
+        self.leave(codex_remote, leave);
+        self.show_usage(codex_remote);
+    }
+
+    /// Unsubscribes from the chat `leave` names, if any.
+    fn leave(&mut self, codex_remote: &CodexRemote, leave: Option<ThreadId>) {
+        let Some(thread_id) = leave else {
+            return;
+        };
+        match codex_remote.client() {
+            Some(client) => self.asking.leave(client, thread_id),
+            None => self.chats.left(&thread_id, None),
+        }
     }
 
     fn notified(&mut self, state: &AppState, notification: ControlNotification) {
@@ -385,9 +437,20 @@ impl CodexRun {
                         .account(client, Some(Arc::clone(&state.agent_checks)));
                 }
             }
-            ControlNotification::ThreadStarted { .. }
-            | ControlNotification::ThreadStatusChanged { .. }
-            | ControlNotification::ThreadClosed { .. } => {}
+            ControlNotification::ThreadStarted { thread } => {
+                let leave = self.chats.started(thread);
+                self.leave(codex_remote, leave);
+                self.show_usage(codex_remote);
+            }
+            ControlNotification::ThreadStatusChanged { thread_id, status } => {
+                let leave = self.chats.changed(thread_id, status);
+                self.leave(codex_remote, leave);
+                self.show_usage(codex_remote);
+            }
+            ControlNotification::ThreadClosed { thread_id } => {
+                self.chats.closed(&thread_id);
+                self.show_usage(codex_remote);
+            }
         }
     }
 
@@ -421,6 +484,20 @@ impl CodexRun {
                     == Some(RelayState::Disabled)
                     && !codex_remote.with_control(|control| control.relay_off);
             }
+            Answer::Threads(listed) => {
+                let unread = self.chats.listed(listed);
+                if let Some(client) = codex_remote.client() {
+                    for thread_id in unread {
+                        self.asking.read(Arc::clone(&client), thread_id);
+                    }
+                }
+                self.show_usage(codex_remote);
+            }
+            Answer::Thread(thread) => {
+                self.chats.read(thread);
+                self.show_usage(codex_remote);
+            }
+            Answer::Left { thread_id, status } => self.chats.left(&thread_id, status),
             Answer::Nothing => {}
         }
         false
@@ -479,6 +556,15 @@ enum Answer {
     },
     /// Codex turned the relay off by itself, and its sign-in was checked again since.
     TurnedOff,
+    /// The chats the server has loaded.
+    Threads(Vec<ThreadId>),
+    /// A chat as read.
+    Thread(ThreadWire),
+    /// Codex answered an unsubscribe with `status`, absent when it failed.
+    Left {
+        thread_id: ThreadId,
+        status: Option<UnsubscribeStatus>,
+    },
     Nothing,
 }
 
@@ -526,6 +612,59 @@ impl Asking {
                     Answer::Nothing
                 }
             }
+        });
+    }
+
+    /// Lists the chats the server has loaded, from at most ten pages.
+    fn threads(&mut self, client: Arc<ControlClient>) {
+        self.0.spawn(async move {
+            let mut listed = Vec::new();
+            let mut cursor = None;
+            for _ in 0..LOADED_THREAD_PAGES {
+                match client.request(LoadedThreads { cursor }).await {
+                    Ok(page) => {
+                        listed.extend(page.data);
+                        cursor = page.next_cursor;
+                    }
+                    Err(error) => {
+                        tracing::warn!("could not list Codex's chats: {error}");
+                        break;
+                    }
+                }
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            Answer::Threads(listed)
+        });
+    }
+
+    fn read(&mut self, client: Arc<ControlClient>, thread_id: ThreadId) {
+        self.0.spawn(async move {
+            match client.request(ThreadRead { thread_id }).await {
+                Ok(read) => Answer::Thread(read.thread),
+                Err(error) => {
+                    tracing::warn!("could not read a Codex chat: {error}");
+                    Answer::Nothing
+                }
+            }
+        });
+    }
+
+    /// Unsubscribes ezra's connection from a chat.
+    fn leave(&mut self, client: Arc<ControlClient>, thread_id: ThreadId) {
+        self.0.spawn(async move {
+            let unsubscribe = ThreadUnsubscribe {
+                thread_id: thread_id.clone(),
+            };
+            let status = match client.request(unsubscribe).await {
+                Ok(left) => Some(left.status),
+                Err(error) => {
+                    tracing::warn!("could not unsubscribe from a Codex chat: {error}");
+                    None
+                }
+            };
+            Answer::Left { thread_id, status }
         });
     }
 
@@ -765,6 +904,7 @@ impl Drop for Attempts {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::unix::fs::FileTypeExt;
     use std::process::Command;
 
     use axum::http::StatusCode;
@@ -802,6 +942,7 @@ mod tests {
         force: Duration::from_secs(1),
         request: Duration::from_secs(5),
         mfa_retry: Duration::from_secs(10 * 60),
+        usage: Duration::from_secs(15),
     };
     const SHORT_READINESS: ServerBudget = ServerBudget {
         readiness: Duration::from_secs(1),
@@ -1897,6 +2038,225 @@ mod tests {
         shut_down(&manager, supervisor).await;
     }
 
+    const UNSUBSCRIBE: &str = "thread/unsubscribe";
+
+    fn chats(status: &CodexRemoteStatus) -> Option<(u32, u32)> {
+        status.usage.map(|usage| (usage.chats, usage.running_chats))
+    }
+
+    /// Starts a supervisor whose Codex lists `loaded` chats, reads them with `reads` and
+    /// unsubscribes with `left` in turn, and waits until Codex is connected.
+    async fn with_chats(
+        manager: &TestManager,
+        loaded: &[&str],
+        reads: Vec<Reply>,
+        left: &[&str],
+    ) -> (JoinHandle<()>, FakeControlServer) {
+        install_codex(manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(manager, CHATGPT);
+        let supervisor = supervise(manager);
+        servers_started(manager, 1).await;
+        let fake = control(manager, "connected");
+        fake.reply(
+            "thread/loaded/list",
+            [Reply::Result(json!({"data": loaded, "nextCursor": null}))],
+        );
+        fake.reply("thread/read", reads);
+        fake.reply(
+            UNSUBSCRIBE,
+            left.iter()
+                .map(|status| Reply::Result(json!({"status": status}))),
+        );
+        status_until(manager, connected).await;
+        (supervisor, fake)
+    }
+
+    #[tokio::test]
+    async fn chats_are_counted_from_the_loaded_list_and_what_codex_reports() {
+        let manager = manager(BUDGET);
+        let reads = vec![
+            Reply::Result(json!({"thread": FakeControlServer::thread(
+                "thread-1",
+                json!({"type": "active", "activeFlags": []}),
+            )})),
+            Reply::Result(json!({"thread": FakeControlServer::thread(
+                "thread-2",
+                json!({"type": "idle"}),
+            )})),
+        ];
+        let (supervisor, fake) = with_chats(
+            &manager,
+            &["thread-1", "thread-2"],
+            reads,
+            &["notSubscribed"],
+        )
+        .await;
+
+        let read = status_until(&manager, |status| chats(status) == Some((2, 1))).await;
+        assert!(
+            read.usage.is_some_and(|usage| usage.memory_bytes > 0),
+            "{read:?}"
+        );
+        assert_eq!(fake.requests_of("thread/read").len(), 2);
+
+        fake.push(FakeControlServer::thread_status_changed("thread-1", "idle"));
+        status_until(&manager, |status| chats(status) == Some((2, 0))).await;
+        fake.push(json!({"method": "thread/closed", "params": {"threadId": "thread-2"}}));
+        status_until(&manager, |status| chats(status) == Some((1, 0))).await;
+        assert_eq!(
+            fake.requests_of(UNSUBSCRIBE),
+            [json!({"threadId": "thread-1"})]
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn ezra_unsubscribes_from_a_chat_another_client_started_once() {
+        let manager = manager(BUDGET);
+        let (supervisor, fake) = with_chats(&manager, &[], Vec::new(), &["notSubscribed"]).await;
+
+        fake.push(json!({
+            "method": "thread/started",
+            "params": {"thread": FakeControlServer::thread("thread-1", json!({"type": "idle"}))},
+        }));
+        status_until(&manager, |status| chats(status) == Some((1, 0))).await;
+        fake.until_requested(UNSUBSCRIBE, 1).await;
+        wait_until(WAIT, || fake.answered(UNSUBSCRIBE), |answered| *answered).await;
+
+        fake.push(FakeControlServer::thread_status_changed(
+            "thread-1", "active",
+        ));
+        status_until(&manager, |status| chats(status) == Some((1, 1))).await;
+        fake.push(FakeControlServer::thread_status_changed("thread-1", "idle"));
+        status_until(&manager, |status| chats(status) == Some((1, 0))).await;
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            fake.requests_of(UNSUBSCRIBE),
+            [json!({"threadId": "thread-1"})]
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codex_asking_about_a_chat_unsubscribes_from_it() {
+        let manager = manager(BUDGET);
+        let (supervisor, fake) = with_chats(&manager, &[], Vec::new(), &["unsubscribed"]).await;
+
+        fake.push(json!({
+            "id": 0,
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "startedAtMs": 1_790_000_000_000_i64,
+            },
+        }));
+
+        fake.until_requested(UNSUBSCRIBE, 1).await;
+        assert_eq!(
+            fake.requests_of(UNSUBSCRIBE),
+            [json!({"threadId": "thread-1"})]
+        );
+        let asked = status_until(&manager, |status| chats(status) == Some((1, 1))).await;
+        assert_eq!(asked.state, ServerState::Running);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_chat_codex_does_not_read_counts_as_running_until_codex_says_otherwise() {
+        let manager = manager(BUDGET);
+        let (supervisor, fake) = with_chats(
+            &manager,
+            &["thread-1"],
+            vec![Reply::Never],
+            &["notSubscribed"],
+        )
+        .await;
+
+        fake.until_requested("thread/read", 1).await;
+        status_until(&manager, |status| chats(status) == Some((1, 1))).await;
+
+        fake.push(FakeControlServer::thread_status_changed("thread-1", "idle"));
+        status_until(&manager, |status| chats(status) == Some((1, 0))).await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn chats_are_counted_again_after_a_lost_control_connection() {
+        let manager = manager(BUDGET);
+        let reads = vec![Reply::Result(json!({"thread": FakeControlServer::thread(
+            "thread-1",
+            json!({"type": "active", "activeFlags": []}),
+        )}))];
+        let (supervisor, fake) =
+            with_chats(&manager, &["thread-1"], reads, &["notSubscribed"]).await;
+        status_until(&manager, |status| chats(status) == Some((1, 1))).await;
+        fake.reply(
+            "thread/loaded/list",
+            [Reply::Result(json!({"data": [], "nextCursor": null}))],
+        );
+
+        fake.disconnect();
+        fake.until_requested("thread/loaded/list", 2).await;
+        let recounted = status_until(&manager, |status| {
+            connected(status) && chats(status) == Some((0, 0))
+        })
+        .await;
+        assert_eq!(recounted.restarts, 0);
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(chats(&manager.state.codex_remote.status()), Some((0, 0)));
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn the_memory_codex_uses_is_read_again_while_it_runs() {
+        let manager = manager(ServerBudget {
+            usage: Duration::from_millis(100),
+            ..BUDGET
+        });
+        install_codex(
+            &manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            "mkfifo \"$CODEX_HOME/grow\"\n\
+             ( read _ < \"$CODEX_HOME/grow\"; sleep 60 & sleep 60 & sleep 60 & wait ) &\n\
+             exec sleep 60",
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        let _fake = serve_control(&manager, "connected").await;
+        let grow = codex_home(&manager).join("grow");
+        wait_until(
+            WAIT,
+            || fs::metadata(&grow).is_ok_and(|grow| grow.file_type().is_fifo()),
+            |made| *made,
+        )
+        .await;
+        sleep(Duration::from_millis(500)).await;
+        let before = status_until(&manager, |status| status.usage.is_some())
+            .await
+            .usage
+            .map(|usage| usage.memory_bytes)
+            .expect("the memory was read");
+
+        fs::write(&grow, "\n").expect("the server is told to start more processes");
+
+        status_until(&manager, |status| {
+            status
+                .usage
+                .is_some_and(|usage| usage.memory_bytes > before)
+        })
+        .await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
     #[tokio::test]
     async fn a_codex_server_that_exits_is_retried_and_its_output_logged() {
         let manager = manager(BUDGET);
@@ -2192,7 +2552,7 @@ mod tests {
         let methods: Vec<&str> = requests
             .iter()
             .map(|(method, _)| method.as_str())
-            .filter(|method| *method != "account/read")
+            .filter(|method| ["initialize", "remoteControl/status/read"].contains(method))
             .collect();
         assert_eq!(
             methods,

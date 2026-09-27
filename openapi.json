@@ -1904,6 +1904,17 @@
           },
           "state": {
             "$ref": "#/components/schemas/ServerState"
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CodexUsage",
+                "description": "What the server and its chats use, absent while no server runs."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -1925,6 +1936,35 @@
         "properties": {
           "remote_control": {
             "$ref": "#/components/schemas/CodexRemoteSettings"
+          }
+        }
+      },
+      "CodexUsage": {
+        "type": "object",
+        "description": "What a running Codex server and its chats use.",
+        "required": [
+          "chats",
+          "running_chats",
+          "memory_bytes"
+        ],
+        "properties": {
+          "chats": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Chats the server has loaded.",
+            "minimum": 0
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Memory the server, its chats and their commands use, with shared memory counted once.",
+            "minimum": 0
+          },
+          "running_chats": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Chats running a turn or waiting for an answer, and chats whose state is not known yet.",
+            "minimum": 0
           }
         }
       },
