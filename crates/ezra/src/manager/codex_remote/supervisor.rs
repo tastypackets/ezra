@@ -43,6 +43,7 @@ impl AppState {
             .signals(self.agent_checks.watch_sign_in(Agent::Codex));
         let mut failures = Failures::default();
         let mut look_for_foreign = true;
+        let mut older = None;
         if let Some(codex_home) = self.install_paths.config_directory(Agent::Codex) {
             DaemonLeftovers::of(codex_home).remove_when_unused().await;
         }
@@ -50,7 +51,13 @@ impl AppState {
             if !codex_remote.is_held() && !self.check_sign_in(Agent::Codex, &mut signals).await {
                 break;
             }
-            let run = match self.wanted_codex_server().await {
+            let wanted = match (self.wanted_codex_server().await, older.take()) {
+                (Wanted::Waiting(Some(CodexProblem::UnsupportedVersion)), Some(older)) => {
+                    Wanted::Server(self.codex_launch_as_set(older).await)
+                }
+                (wanted, _) => wanted,
+            };
+            let run = match wanted {
                 Wanted::Off => {
                     self.idle_codex_server(
                         |status| status.idle(ServerState::Off, None),
@@ -83,7 +90,9 @@ impl AppState {
                 }
                 Wanted::Server(launch) => {
                     let started = Instant::now();
-                    let end = self.run_codex_server(&launch, &mut signals).await;
+                    let end = self
+                        .run_codex_server(&launch, &mut signals, &mut older)
+                        .await;
                     codex_remote.with_control(|control| *control = Control::default());
                     failures.forget_after_healthy_run(started);
                     if !matches!(end, RunEnd::ShutDown) {
@@ -172,10 +181,27 @@ impl AppState {
         })
     }
 
+    /// `launch` with the settings and sign-in a new launch would take now.
+    async fn codex_launch_as_set(&self, launch: CodexLaunch) -> CodexLaunch {
+        let settings = self.settings.lock().await.agents.codex.remote_control;
+        CodexLaunch {
+            sandbox: settings.sandbox,
+            approvals: settings.approvals,
+            sign_in: self
+                .agent_checks
+                .sign_in(Agent::Codex)
+                .and_then(|sign_in| sign_in.method),
+            ..launch
+        }
+    }
+
+    /// Runs `launch` until what should run changes. Sets `older` when it stops an older Codex
+    /// to run it again with other settings.
     async fn run_codex_server(
         &self,
         launch: &CodexLaunch,
         signals: &mut Signals,
+        older: &mut Option<CodexLaunch>,
     ) -> RunEnd<CodexProblem> {
         signals.restarts.mark_unchanged();
         if signals.is_shutting_down() {
@@ -314,6 +340,14 @@ impl AppState {
                         wanted,
                         Wanted::Waiting(Some(CodexProblem::UnsupportedVersion))
                     );
+                    if unsupported {
+                        let as_set = self.codex_launch_as_set(launch.clone()).await;
+                        if as_set != *launch {
+                            self.stop_codex_server(server).await;
+                            *older = Some(as_set);
+                            return RunEnd::Reconsidered;
+                        }
+                    }
                     codex_remote
                         .status
                         .update(|status| status.keep(unsupported));
@@ -3169,6 +3203,72 @@ mod tests {
         shut_down(&manager, supervisor).await;
     }
 
+    #[tokio::test]
+    async fn a_version_without_remote_control_restarts_the_running_codex_on_new_settings() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let runs = |version: &str| format!("echo {version} >> \"$CODEX_HOME/ran\"\n{SERVE}");
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, &runs("0.157.1"));
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        let _fake = serve_control(&manager, "connected").await;
+        status_until(&manager, connected).await;
+        install_codex(
+            &manager,
+            "0.100.0",
+            "'app-server --remote-control --help') exit 2 ;;",
+            &runs("0.100.0"),
+        );
+        save(&manager, &cookie, CodexRemoteSettings::default()).await;
+        status_until(&manager, |status| status.problem.is_some()).await;
+
+        let read_only = CodexRemoteSettings {
+            sandbox: CodexSandbox::ReadOnly,
+            ..CodexRemoteSettings::default()
+        };
+        save(&manager, &cookie, read_only).await;
+
+        let started = servers_started(&manager, 2).await;
+        started
+            .first()
+            .expect("a server started")
+            .wait_until_gone()
+            .await;
+        let kept = status_until(&manager, |status| {
+            connected(status) && status.problem == Some(CodexProblem::UnsupportedVersion)
+        })
+        .await;
+        assert_eq!(kept.server_version.as_deref(), Some("0.157.1"));
+        assert_eq!(
+            fs::read_to_string(manager.codex_home().join("ran")).expect("the runs are written"),
+            "0.157.1\n0.157.1\n"
+        );
+        assert_eq!(
+            server_arguments(&manager).last().map(String::as_str),
+            Some(
+                r#"app-server --remote-control --managed-daemon --listen unix:// -c sandbox_mode="read-only" -c approval_policy="on-request""#
+            )
+        );
+
+        sign_in_now(&manager, ACCESS_TOKEN).await;
+        let started = servers_started(&manager, 3).await;
+        started
+            .get(1)
+            .expect("a second server started")
+            .wait_until_gone()
+            .await;
+        status_until(&manager, |status| {
+            connected(status) && status.problem == Some(CodexProblem::UnsupportedVersion)
+        })
+        .await;
+        assert_eq!(
+            fs::read_to_string(manager.codex_home().join("ran")).expect("the runs are written"),
+            "0.157.1\n0.157.1\n0.157.1\n"
+        );
+
+        shut_down(&manager, supervisor).await;
+    }
+
     const LOGIN: &str = "/api/v1/agents/codex/login";
     const LOGOUT: &str = "/api/v1/agents/codex/logout";
 
@@ -3465,15 +3565,21 @@ mod tests {
             .signals(manager.state.agent_checks.watch_sign_in(Agent::Codex));
         let hold = codex_remote.hold_for_sign_in().await;
 
-        let end = manager.state.run_codex_server(&launch, &mut signals).await;
+        let end = manager
+            .state
+            .run_codex_server(&launch, &mut signals, &mut None)
+            .await;
 
         assert!(matches!(end, RunEnd::Reconsidered));
         assert!(servers(&manager).is_empty());
         assert_eq!(codex_remote.status(), CodexRemoteStatus::default());
 
         drop(hold);
+        let mut older = None;
         let (end, ()) = tokio::join!(
-            manager.state.run_codex_server(&launch, &mut signals),
+            manager
+                .state
+                .run_codex_server(&launch, &mut signals, &mut older),
             async {
                 servers_started(&manager, 1).await;
                 let starting = codex_remote.status();
