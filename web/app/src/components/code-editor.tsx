@@ -1,13 +1,21 @@
 import { EditorView } from "@codemirror/view";
 import type { ParseProblem, SettingsFileFormat } from "@ezra/client";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { type Ref, useEffect, useEffectEvent, useImperativeHandle, useRef } from "react";
 
 import { editorState, markServerProblem } from "@/lib/code-editor";
 
+/** What a parent can do with a mounted editor. */
+export interface CodeEditorHandle {
+  focus: () => void;
+}
+
 interface CodeEditorProps {
+  ref?: Ref<CodeEditorHandle>;
   format: SettingsFileFormat;
   /** Read once, remount with a new `key` to load other text. */
   initialText: string;
+  /** Read once, focuses the text once it mounts. */
+  autoFocus?: boolean;
   /** Where the server said the text stops parsing, marked until the text changes, with the cursor moved to it. */
   serverProblem?: ParseProblem;
   onChange: (text: string) => void;
@@ -19,8 +27,10 @@ interface CodeEditorProps {
 
 /** Edits a settings file's text, keeping its line breaks and marking where it stops parsing. */
 export default function CodeEditor({
+  ref,
   format,
   initialText,
+  autoFocus = false,
   serverProblem,
   onChange,
   onProblem,
@@ -28,21 +38,26 @@ export default function CodeEditor({
 }: CodeEditorProps) {
   const parent = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(undefined);
-  const initial = useEffectEvent(() => ({ text: initialText, attributes: aria }));
+  const initial = useEffectEvent(() => ({ text: initialText, focus: autoFocus, attributes: aria }));
   const changed = useEffectEvent(onChange);
   const checked = useEffectEvent(onProblem);
+
+  useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), []);
 
   useEffect(() => {
     const element = parent.current;
     if (!element) {
       return undefined;
     }
-    const { text, attributes } = initial();
+    const { text, focus, attributes } = initial();
     const created = new EditorView({
       parent: element,
       state: editorState({ format, text, attributes, onChange: changed, onProblem: checked }),
     });
     view.current = created;
+    if (focus) {
+      created.focus();
+    }
     return () => {
       view.current = undefined;
       created.destroy();

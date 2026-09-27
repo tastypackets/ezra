@@ -33,7 +33,7 @@ import {
   SETTINGS_DESCRIPTIONS,
 } from "@/content/settings";
 import { errorMessage } from "@/lib/utils";
-import { agentsQueryOptions, isClaudeInstalled } from "@/queries/agent-queries";
+import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { foldersQueryOptions } from "@/queries/folder-queries";
 
 import { RadioChoice } from "./radio-choice";
@@ -64,7 +64,7 @@ export function ClaudeSettingsCard() {
   const { data: settings } = useSuspenseQuery(getClaudeSettingsOptions());
   const { data: installed } = useSuspenseQuery({
     ...agentsQueryOptions,
-    select: isClaudeInstalled,
+    select: isInstalled("claude"),
   });
   const save = useMutation({
     ...updateClaudeSettingsMutation(),

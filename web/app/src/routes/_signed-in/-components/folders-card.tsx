@@ -37,7 +37,7 @@ import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-con
 import { useCloneActions, useFolderActions } from "@/hooks/use-folder-actions";
 import { SERVER_BADGES } from "@/lib/remote-control";
 import { errorMessage } from "@/lib/utils";
-import { agentsQueryOptions, isClaudeInstalled } from "@/queries/agent-queries";
+import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
@@ -54,7 +54,7 @@ export function FoldersCard() {
   const { data: remoteControl } = useSuspenseQuery(remoteControlQueryOptions);
   const { data: claudeInstalled } = useSuspenseQuery({
     ...agentsQueryOptions,
-    select: isClaudeInstalled,
+    select: isInstalled("claude"),
   });
   const listed = folders.data ?? [];
   const cloning = clones.data ?? [];
