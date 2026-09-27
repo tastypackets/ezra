@@ -24,7 +24,6 @@ use crate::manager::git::GitTools;
 use crate::manager::settings::Settings;
 use crate::manager::state::AppState;
 use crate::manager::status::AgentStatus;
-use crate::path_ext::PathExt;
 
 pub const PASSWORD: &str = r#"{"password": "correct horse"}"#;
 
@@ -99,10 +98,7 @@ impl TestManager {
     /// Writes the script where a release in `version` keeps the agent's command, without this
     /// process holding it open for writing, and links the command to it.
     fn install_fake(&self, agent: Agent, version: &Path, script: &str) -> PathBuf {
-        let command = match agent {
-            Agent::Claude => version.to_path_buf(),
-            Agent::Codex => version.join("bin/codex"),
-        };
+        let command = agent.command_in(version);
         let fakes = self.directory.path().join("fakes");
         for directory in [&fakes, command.parent().expect("the command has a parent")] {
             fs::create_dir_all(directory).expect("fake directory is created");
@@ -125,8 +121,7 @@ impl TestManager {
         assert!(writer.wait().expect("sh ends").success());
         self.state
             .install_paths
-            .command(agent)
-            .replace_symlink(&command)
+            .link(agent, version)
             .expect("command link is created");
         command
     }

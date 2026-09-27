@@ -5,6 +5,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
 use crate::manager::remote_control::{RemoteControlOverview, Served};
+use crate::manager::supervision::ServerLog;
 
 #[utoipa::path(
     get,
@@ -46,7 +47,9 @@ pub async fn projects_log(
     _: Session,
     State(state): State<AppState>,
 ) -> Result<Json<ServerLogTail>, ApiError> {
-    state.server_log_tail(Served::Projects).await.map(Json)
+    ServerLogTail::read(state.remote_control.log(&Served::Projects))
+        .await
+        .map(Json)
 }
 
 #[utoipa::path(
@@ -75,18 +78,19 @@ pub async fn folder_log(
     {
         return Err(ApiError::NotFound("the folder has no server"));
     }
-    state.server_log_tail(Served::Folder(name)).await.map(Json)
+    ServerLogTail::read(state.remote_control.log(&Served::Folder(name)))
+        .await
+        .map(Json)
 }
 
-impl AppState {
-    async fn server_log_tail(&self, served: Served) -> Result<ServerLogTail, ApiError> {
-        let log = self.remote_control.log(&served);
+impl ServerLogTail {
+    async fn read(log: ServerLog) -> Result<Self, ApiError> {
         let path = log.debug_file().display().to_string();
         let lines = tokio::task::spawn_blocking(move || log.tail())
             .await
             .map_err(internal)?
             .map_err(internal)?;
-        Ok(ServerLogTail { path, lines })
+        Ok(Self { path, lines })
     }
 }
 
@@ -185,7 +189,7 @@ mod tests {
             tail.path
         );
 
-        manager.state.remote_control.begin_shut_down();
+        manager.state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
     }
 }

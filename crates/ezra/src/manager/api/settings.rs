@@ -85,7 +85,7 @@ impl AppState {
             self.recheck_claude_release();
         }
         if remote_control_changed {
-            self.remote_control.reconsider();
+            self.remote_control.supervision.reconsider();
             self.events.publish(Topic::Folders);
         }
         Ok(body)

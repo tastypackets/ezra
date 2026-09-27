@@ -97,7 +97,7 @@ pub async fn submit_code(
     let submitted = tokio::spawn(async move {
         let submitted = login.submit_code(&body.code).await;
         if submitted.is_ok() {
-            finishing.remote_control.restart();
+            finishing.remote_control.supervision.restart();
         }
         finishing.agent_checks.refresh(agent).await;
         finishing.events.publish(Topic::Agents);

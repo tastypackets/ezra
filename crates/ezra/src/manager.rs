@@ -13,6 +13,7 @@ mod remote_control;
 mod settings;
 mod state;
 mod status;
+mod supervision;
 mod tls;
 mod updates;
 mod web;
@@ -33,6 +34,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use crate::environment_config::FromEnvironment;
 use agents::TlsVerification;
 use processes::OpenFileLimit;
+use remote_control::RemoteControl;
 use state::AppState;
 
 const STATE_DIRECTORY: &str = "/config/ezra";
@@ -135,7 +137,13 @@ async fn serve() -> Result<(), ManagerError> {
             .serve(app.into_make_service())
             .await
             .map_err(|source| ManagerError::Serve { port, source });
-    remote_control.wait_until_stopped().await;
+    if !remote_control
+        .supervision
+        .wait_until_stopped(RemoteControl::LONGEST_STOP)
+        .await
+    {
+        tracing::warn!("Claude Remote Control did not stop in time");
+    }
     served
 }
 
@@ -185,7 +193,7 @@ impl HandleExt for Handle<SocketAddr> {
             _ = terminate.recv() => {}
             _ = tokio::signal::ctrl_c() => {}
         }
-        state.remote_control.begin_shut_down();
+        state.remote_control.supervision.begin_shut_down();
         state.events.close();
         self.graceful_shutdown(Some(SHUTDOWN_GRACE_PERIOD));
     }
