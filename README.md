@@ -37,6 +37,15 @@ volumes:
 | `/home/dev/projects` | Your repositories |
 | `/cache` | Installed agent versions and tools |
 
+> [!IMPORTANT]
+> On an Ubuntu 24.04 host, Codex's sandbox also needs Ubuntu's AppArmor profile for bubblewrap. Ubuntu 26.04 loads it by default.
+>
+> ```sh
+> sudo apt install apparmor-profiles
+> sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+> sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+> ```
+
 ## Set it up
 
 1. Open `https://<host>:8443`, accept the self-signed certificate and set a password.
