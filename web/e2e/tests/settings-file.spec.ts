@@ -706,21 +706,22 @@ test.describe("with Codex installed", () => {
 
     await page.keyboard.press("Control+A");
     await page.keyboard.type("d = 1979-02-28");
-    await expect(box.getByText("Line 2, column 1: Duplicate key")).toBeHidden();
+    await expect(duplicate).toBeHidden();
     await page.keyboard.press("Backspace");
     await page.keyboard.press("Backspace");
+    const malformed = box.getByText(/^Line 1, column 5: Invalid date-time/);
+    await expect(malformed).toBeVisible();
     await page.keyboard.type("30");
+    await expect(malformed).toBeHidden();
+    await expect(editor).not.toHaveAttribute("aria-invalid");
     const refused = savedFile(page);
     await save.click();
     expect((await refused).status()).toBe(400);
     const problem = box.getByText("Line 1, column 5: Invalid date, expected day between 01 and 28");
     await expect(problem).toBeVisible();
     await expect(editor).toBeFocused();
-    await expect(save).toBeDisabled();
-    // The check still due from the typing runs after the reply.
-    await page.waitForTimeout(600);
     await expect(editor).toHaveAttribute("aria-invalid", "true");
-    await expect(problem).toBeVisible();
+    await expect(save).toBeDisabled();
     inContainer("test", "!", "-e", CODEX_FILE);
 
     await page.keyboard.type("X");
