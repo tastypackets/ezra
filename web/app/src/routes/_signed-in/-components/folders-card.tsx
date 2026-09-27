@@ -4,6 +4,10 @@ import type {
   RemoteControlOverview,
   RemoteControlStatus,
 } from "@ezra/client";
+import {
+  getFolderRemoteControlLogOptions,
+  getRemoteControlLogOptions,
+} from "@ezra/client/react-query.gen";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { EllipsisIcon, ExternalLinkIcon } from "lucide-react";
@@ -37,7 +41,7 @@ import { REMOTE_CONTROL_DESCRIPTIONS, SERVER_STATES } from "@/content/remote-con
 import { useCloneActions, useFolderActions } from "@/hooks/use-folder-actions";
 import { SERVER_BADGES } from "@/lib/remote-control";
 import { errorMessage } from "@/lib/utils";
-import { agentsQueryOptions, isClaudeInstalled } from "@/queries/agent-queries";
+import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
@@ -54,7 +58,7 @@ export function FoldersCard() {
   const { data: remoteControl } = useSuspenseQuery(remoteControlQueryOptions);
   const { data: claudeInstalled } = useSuspenseQuery({
     ...agentsQueryOptions,
-    select: isClaudeInstalled,
+    select: isInstalled("claude"),
   });
   const listed = folders.data ?? [];
   const cloning = clones.data ?? [];
@@ -156,7 +160,12 @@ function ProjectsRow({ overview }: { overview: RemoteControlOverview }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <ServerLogDialog open={logOpen} onOpenChange={setLogOpen} />
+      <ServerLogDialog
+        query={getRemoteControlLogOptions()}
+        title={REMOTE_CONTROL_DESCRIPTIONS.projects_log_title}
+        open={logOpen}
+        onOpenChange={setLogOpen}
+      />
     </li>
   );
 }
@@ -309,7 +318,12 @@ function FolderRow({ folder, server, claudeInstalled }: FolderRowProps) {
         onOpenChange={setDeleting}
       />
       {server ? (
-        <ServerLogDialog folder={folder.name} open={logOpen} onOpenChange={setLogOpen} />
+        <ServerLogDialog
+          query={getFolderRemoteControlLogOptions({ path: { name: folder.name } })}
+          title={REMOTE_CONTROL_DESCRIPTIONS.log_title(folder.name)}
+          open={logOpen}
+          onOpenChange={setLogOpen}
+        />
       ) : null}
     </li>
   );

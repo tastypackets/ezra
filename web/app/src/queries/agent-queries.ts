@@ -1,4 +1,4 @@
-import type { AgentStatus } from "@ezra/client";
+import type { Agent, AgentStatus } from "@ezra/client";
 import { listAgentsOptions } from "@ezra/client/react-query.gen";
 import { queryOptions } from "@tanstack/react-query";
 
@@ -16,7 +16,7 @@ export function pollInterval(agents: AgentStatus[] | undefined): number | false 
   return agents?.some((agent) => agent.install_progress) ? INSTALL_POLL_MS : false;
 }
 
-/** Whether Claude Code is installed, as a `select` on the agents. */
-export function isClaudeInstalled(agents: AgentStatus[]): boolean {
-  return Boolean(agents.find((status) => status.agent === "claude")?.installed_version);
+/** Whether `agent` is installed, as a `select` on the agents. */
+export function isInstalled(agent: Agent): (agents: AgentStatus[]) => boolean {
+  return (agents) => Boolean(agents.find((status) => status.agent === agent)?.installed_version);
 }

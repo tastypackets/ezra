@@ -58,7 +58,8 @@ export function WaitingForWebsite() {
   );
 }
 
-function Step({
+/** One numbered step: its title, then what to do. */
+export function Step({
   number,
   title,
   children,

@@ -1,7 +1,7 @@
 import type { AgentStatus } from "@ezra/client";
 import { describe, expect, it } from "vitest";
 
-import { INSTALL_POLL_MS, isClaudeInstalled, pollInterval } from "./agent-queries";
+import { INSTALL_POLL_MS, isInstalled, pollInterval } from "./agent-queries";
 
 const idle: AgentStatus = { agent: "claude", configured: false, logged_in: false };
 
@@ -28,10 +28,19 @@ describe("pollInterval", () => {
   });
 });
 
-describe("isClaudeInstalled", () => {
-  it("follows Claude Code's installed version, not Codex's", () => {
-    const codex: AgentStatus = { ...idle, agent: "codex", installed_version: "0.1.0" };
-    expect(isClaudeInstalled([idle, codex])).toBe(false);
-    expect(isClaudeInstalled([{ ...idle, installed_version: "2.1.283" }, codex])).toBe(true);
+describe("isInstalled", () => {
+  const codex: AgentStatus = { ...idle, agent: "codex" };
+  const claudeInstalled = { ...idle, installed_version: "2.1.283" };
+  const codexInstalled = { ...codex, installed_version: "0.157.1" };
+
+  it("follows each agent's own installed version", () => {
+    expect(isInstalled("claude")([idle, codexInstalled])).toBe(false);
+    expect(isInstalled("claude")([claudeInstalled, codex])).toBe(true);
+    expect(isInstalled("codex")([claudeInstalled, codex])).toBe(false);
+    expect(isInstalled("codex")([idle, codexInstalled])).toBe(true);
+  });
+
+  it("is false for an agent missing from the list", () => {
+    expect(isInstalled("codex")([claudeInstalled])).toBe(false);
   });
 });

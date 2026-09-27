@@ -19,8 +19,8 @@ export const REMOTE_CONTROL_DESCRIPTIONS = {
   memory_hint: "Memory this server and its sessions use.",
   show_log: "Show log",
   sign_in_again: "Sign in again",
-  update_waiting: (version: string, time: string) =>
-    `Restarts on Claude Code ${version} by ${time}.`,
+  update_waiting: (agent: string, version: string, time: string) =>
+    `Restarts on ${agent} ${version} by ${time}.`,
   update_waiting_short: (version: string) => `Waits to restart on Claude Code ${version}.`,
   projects_log_title: "/projects log",
   log_title: (folder: string) => `${folder} log`,
