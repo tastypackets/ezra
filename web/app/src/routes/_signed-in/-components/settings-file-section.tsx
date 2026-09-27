@@ -22,13 +22,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
+import { CardContent, CardHeader } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
-import { toast } from "@/components/ui/toast";
+import { AGENTS_DESCRIPTIONS } from "@/content/agents";
 import { APP_DESCRIPTIONS } from "@/content/app";
 import { SETTINGS_FILE_DESCRIPTIONS, SETTINGS_FILES } from "@/content/settings-file";
+import { useAgentActions } from "@/hooks/use-agent-actions";
+import { serversRun } from "@/lib/remote-control";
 import { capitalized, errorMessage } from "@/lib/utils";
+import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { settingsFileQueryOptions } from "@/queries/settings-file-queries";
 
 const CodeEditor = lazy(() => import("@/components/code-editor"));
@@ -39,87 +42,56 @@ const BROWSER_CHECK_BLOCKS_SAVE: Record<SettingsFileFormat, boolean> = {
   toml: false,
 };
 
-/** An agent's own settings file as text, at the end of its card, saved only when it parses and nothing changed it meanwhile. */
-export function SettingsFileSection({ agent }: { agent: Agent }) {
-  const ids = { title: useId(), applies: useId() };
-  const { data: file, error, isFetching, refetch } = useQuery(settingsFileQueryOptions(agent));
-  return (
-    <section
-      aria-labelledby={ids.title}
-      className="flex flex-col gap-(--card-spacing) not-has-data-[slot=card-footer]:pb-(--card-spacing)"
-    >
-      <CardHeader>
-        <h3 id={ids.title} className="text-base font-medium">
-          {SETTINGS_FILES[agent].title}
-        </h3>
-        <CardDescription id={ids.applies}>{SETTINGS_FILES[agent].applies}</CardDescription>
-      </CardHeader>
-      {file ? (
-        <SettingsFileEditor
-          agent={agent}
-          file={file}
-          rereadError={error}
-          labelledBy={ids.title}
-          describedBy={ids.applies}
-        />
-      ) : error ? (
-        <CardContent className="flex flex-col items-start gap-3">
-          <p role="alert" className="text-destructive">
-            {errorMessage(error)}
-          </p>
-          <Button variant="outline" loading={isFetching} onClick={() => void refetch()}>
-            {APP_DESCRIPTIONS.retry}
-          </Button>
-        </CardContent>
-      ) : (
-        <CardContent className="flex justify-center py-8 text-muted-foreground">
-          <Spinner className="size-6" />
-        </CardContent>
-      )}
-    </section>
-  );
+interface Draft {
+  /** The file as the page opened it, or as it was last saved. */
+  opened: SettingsFileText;
+  /** The text last put into the editor from outside, by opening, Revert or a reload. */
+  loaded: { text: string };
+  text: string;
+  /** The problem the browser's own check marks. */
+  marked?: ParseProblem;
+  /** The server's answer for `text`, a problem or none. */
+  judged?: { text: string; problem?: ParseProblem };
 }
 
-function SettingsFileEditor({
-  agent,
-  file,
-  rereadError,
-  labelledBy,
-  describedBy,
-}: {
-  agent: Agent;
-  /** The file as the manager last read it. */
-  file: SettingsFileText;
-  /** Why the manager could not read the file again, such as it no longer being text. */
-  rereadError: GetSettingsFileError | null;
-  labelledBy: string;
-  describedBy: string;
-}) {
+export type SettingsFileDraft = ReturnType<typeof useSettingsFileDraft>;
+
+/** A draft of `file` as the page first shows it. */
+function opening(file: SettingsFileText): Draft {
+  return { opened: file, loaded: { text: file.text }, text: file.text };
+}
+
+/**
+ * An agent's own settings file as the user edits it, saved by the card's one Save button only when
+ * it parses and nothing changed it meanwhile. Nothing loads while `enabled` is false.
+ */
+export function useSettingsFileDraft(agent: Agent, enabled: boolean) {
   const queryClient = useQueryClient();
-  const problemId = useId();
-  const editor = useRef<CodeEditorHandle>(null);
-  const saveButton = useRef<HTMLButtonElement>(null);
-  const [opened, setOpened] = useState(file);
-  const [loaded, setLoaded] = useState({ text: file.text });
-  const [text, setText] = useState(file.text);
-  const [marked, setMarked] = useState<ParseProblem>();
-  const [judged, setJudged] = useState<{ text: string; problem?: ParseProblem }>();
   const { queryKey } = settingsFileQueryOptions(agent);
-  const save = useMutation({
+  const query = useQuery({ ...settingsFileQueryOptions(agent), enabled });
+  const file = enabled ? query.data : undefined;
+  const editor = useRef<CodeEditorHandle>(null);
+  const [draft, setDraft] = useState<Draft>();
+  const { data: serving = false } = useQuery({
+    ...remoteControlQueryOptions,
+    enabled,
+    select: (overview) => serversRun(agent, overview),
+  });
+  const { restartServers } = useAgentActions(agent);
+  const [savedWhileServing, setSavedWhileServing] = useState(false);
+  const write = useMutation({
     ...updateSettingsFileMutation(),
     onSuccess: async (saved) => {
-      if (document.activeElement === saveButton.current) {
-        editor.current?.focus();
-      }
-      setOpened(saved);
-      setJudged({ text: saved.text });
-      toast.add({ title: SETTINGS_FILE_DESCRIPTIONS.saved(saved.path) });
+      setSavedWhileServing(serving);
+      setDraft((current) => current && { ...current, opened: saved, judged: { text: saved.text } });
       await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData(queryKey, saved);
     },
     onError: async (error, { body }) => {
       if ("line" in error) {
-        setJudged({ text: body.text, problem: error });
+        setDraft(
+          (current) => current && { ...current, judged: { text: body.text, problem: error } },
+        );
         editor.current?.focus();
       } else {
         await queryClient.invalidateQueries({ queryKey });
@@ -127,93 +99,184 @@ function SettingsFileEditor({
     },
   });
 
-  const load = (next: SettingsFileText) => {
-    setOpened(next);
-    setLoaded({ text: next.text });
-    setText(next.text);
-    setMarked(undefined);
-    setJudged(undefined);
-  };
-  const dirty = text !== opened.text;
-  const changedOnDisk = !save.isPending && file.version !== opened.version;
-  if (changedOnDisk && text === file.text) {
-    setOpened(file);
-  } else if (changedOnDisk && !dirty) {
-    load(file);
+  if (file && !draft) {
+    setDraft(opening(file));
   }
-  const verdict = judged?.text === text ? judged : undefined;
-  const blocked = verdict
-    ? Boolean(verdict.problem)
-    : BROWSER_CHECK_BLOCKS_SAVE[file.format] && Boolean(marked);
-  const notice = changedOnDisk
-    ? SETTINGS_FILE_DESCRIPTIONS.changed_on_disk(file.path)
-    : rereadError
-      ? errorMessage(rereadError)
-      : save.isError && !("line" in save.error)
-        ? errorMessage(save.error)
-        : undefined;
+  const dirty = Boolean(draft && draft.text !== draft.opened.text);
+  const changedOnDisk = Boolean(
+    file && draft && !write.isPending && file.version !== draft.opened.version,
+  );
+  if (file && draft && changedOnDisk && draft.text === file.text) {
+    setDraft({ ...draft, opened: file });
+  } else if (file && draft && changedOnDisk && !dirty) {
+    setDraft(opening(file));
+  }
+  const verdict = draft?.judged?.text === draft?.text ? draft?.judged : undefined;
+  const blocked =
+    dirty &&
+    (verdict
+      ? Boolean(verdict.problem)
+      : Boolean(file && BROWSER_CHECK_BLOCKS_SAVE[file.format] && draft?.marked));
+  const notice = !file
+    ? undefined
+    : changedOnDisk
+      ? SETTINGS_FILE_DESCRIPTIONS.changed_on_disk(file.path)
+      : query.error
+        ? errorMessage(query.error)
+        : write.isError && !("line" in write.error)
+          ? errorMessage(write.error)
+          : undefined;
 
+  return {
+    agent,
+    file,
+    readError: query.error,
+    retrying: query.isFetching,
+    retry: () => void query.refetch(),
+    editor,
+    draft,
+    dirty,
+    blocked,
+    changedOnDisk,
+    verdict,
+    notice,
+    saving: write.isPending,
+    /** Set after a save while the agent's servers run, which still use the old file. */
+    offerRestart: savedWhileServing && serving,
+    restarting: restartServers.isPending,
+    restart: () =>
+      restartServers.mutate({ path: { agent } }, { onSuccess: () => setSavedWhileServing(false) }),
+    edit: (text: string) => {
+      setSavedWhileServing(false);
+      setDraft((current) => current && { ...current, text, judged: undefined });
+      if (write.isError) {
+        write.reset();
+      }
+    },
+    mark: (marked: ParseProblem | undefined) =>
+      setDraft((current) => current && { ...current, marked }),
+    /** Saves the edited text over the version the page last read. Throws when the save fails. */
+    save: async () => {
+      if (!file || !draft) {
+        return;
+      }
+      await write.mutateAsync({
+        path: { agent },
+        body: { text: draft.text, version: file.version },
+      });
+    },
+    /** Puts the file as it is on disk back into the editor. */
+    revert: () => {
+      write.reset();
+      if (file) {
+        setDraft(opening(file));
+      }
+    },
+  };
+}
+
+/** The file's part of its agent's card: a title, the editor, and a restart once saved. */
+export function SettingsFileSection({ draft }: { draft: SettingsFileDraft }) {
+  const titleId = useId();
+  const { agent, file, readError } = draft;
   return (
-    <>
-      <CardContent className="flex flex-col gap-2">
-        <Suspense
-          fallback={
-            <div className="flex justify-center py-8 text-muted-foreground">
-              <Spinner className="size-6" />
-            </div>
-          }
-        >
-          <CodeEditor
-            ref={editor}
-            format={file.format}
-            loaded={loaded}
-            serverVerdict={verdict}
-            onChange={(next) => {
-              setText(next);
-              setJudged(undefined);
-              if (save.isError) {
-                save.reset();
-              }
-            }}
-            onProblem={setMarked}
-            aria-labelledby={labelledBy}
-            aria-describedby={`${describedBy} ${problemId}`}
-          />
-        </Suspense>
-        {marked ? (
-          <FieldError id={problemId}>
-            {SETTINGS_FILE_DESCRIPTIONS.problem({ ...marked, error: capitalized(marked.error) })}
-          </FieldError>
-        ) : null}
-      </CardContent>
-      <LeaveGuard path={file.path} dirty={dirty} />
-      <CardFooter className="flex-wrap justify-between gap-4">
-        <p role="alert" className="text-destructive">
-          {notice}
-        </p>
-        <div className="ml-auto flex gap-2">
+    <section aria-labelledby={titleId} className="flex flex-col gap-(--card-spacing)">
+      <CardHeader>
+        <h3 id={titleId} className="text-base font-medium">
+          {SETTINGS_FILES[agent].title}
+        </h3>
+      </CardHeader>
+      {file && draft.draft ? (
+        <SettingsFileEditor draft={draft} labelledBy={titleId} />
+      ) : readError ? (
+        <ReadFailed error={readError} retrying={draft.retrying} retry={draft.retry} />
+      ) : (
+        <CardContent className="flex justify-center py-8 text-muted-foreground">
+          <Spinner className="size-6" />
+        </CardContent>
+      )}
+      {draft.offerRestart ? (
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <p className="text-muted-foreground">{SETTINGS_FILES[agent].still_running}</p>
           <Button
+            type="button"
             variant="outline"
-            disabled={!dirty || save.isPending}
-            onClick={() => {
-              save.reset();
-              load(file);
-              editor.current?.focus();
-            }}
+            size="sm"
+            loading={draft.restarting}
+            onClick={draft.restart}
           >
-            {SETTINGS_FILE_DESCRIPTIONS.revert}
+            {AGENTS_DESCRIPTIONS.restart_servers[agent]}
           </Button>
-          <Button
-            ref={saveButton}
-            disabled={!dirty || blocked}
-            loading={save.isPending}
-            onClick={() => save.mutate({ path: { agent }, body: { text, version: file.version } })}
-          >
-            {changedOnDisk ? SETTINGS_FILE_DESCRIPTIONS.overwrite : SETTINGS_FILE_DESCRIPTIONS.save}
-          </Button>
-        </div>
-      </CardFooter>
-    </>
+        </CardContent>
+      ) : null}
+    </section>
+  );
+}
+
+function ReadFailed({
+  error,
+  retrying,
+  retry,
+}: {
+  error: GetSettingsFileError;
+  retrying: boolean;
+  retry: () => void;
+}) {
+  return (
+    <CardContent className="flex flex-col items-start gap-3">
+      <p role="alert" className="text-destructive">
+        {errorMessage(error)}
+      </p>
+      <Button type="button" variant="outline" loading={retrying} onClick={retry}>
+        {APP_DESCRIPTIONS.retry}
+      </Button>
+    </CardContent>
+  );
+}
+
+function SettingsFileEditor({
+  draft,
+  labelledBy,
+}: {
+  draft: SettingsFileDraft;
+  labelledBy: string;
+}) {
+  const problemId = useId();
+  const { file, editor, verdict } = draft;
+  const state = draft.draft;
+  if (!file || !state) {
+    return null;
+  }
+  return (
+    <CardContent className="flex flex-col gap-2">
+      <Suspense
+        fallback={
+          <div className="flex justify-center py-8 text-muted-foreground">
+            <Spinner className="size-6" />
+          </div>
+        }
+      >
+        <CodeEditor
+          ref={editor}
+          format={file.format}
+          loaded={state.loaded}
+          serverVerdict={verdict}
+          onChange={draft.edit}
+          onProblem={draft.mark}
+          aria-labelledby={labelledBy}
+          aria-describedby={problemId}
+        />
+      </Suspense>
+      {state.marked ? (
+        <FieldError id={problemId}>
+          {SETTINGS_FILE_DESCRIPTIONS.problem({
+            ...state.marked,
+            error: capitalized(state.marked.error),
+          })}
+        </FieldError>
+      ) : null}
+      <LeaveGuard path={file.path} dirty={draft.dirty} />
+    </CardContent>
   );
 }
 

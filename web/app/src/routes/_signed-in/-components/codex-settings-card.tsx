@@ -3,8 +3,7 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useId } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Field,
   FieldContent,
@@ -24,11 +23,13 @@ import {
   SANDBOX_MODES,
   SETTINGS_DESCRIPTIONS,
 } from "@/content/settings";
+import { SETTINGS_FILE_DESCRIPTIONS } from "@/content/settings-file";
 import { errorMessage } from "@/lib/utils";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { RadioChoice } from "./radio-choice";
-import { SettingsFileSection } from "./settings-file-section";
+import { SettingsCardFooter } from "./settings-card-footer";
+import { SettingsFileSection, useSettingsFileDraft } from "./settings-file-section";
 
 /** How the manager serves this box to the ChatGPT app through Codex, and Codex's own config.toml. */
 export function CodexSettingsCard() {
@@ -52,21 +53,34 @@ export function CodexSettingsCard() {
     ...updateCodexSettingsMutation(),
     onSuccess: (saved) => {
       queryClient.setQueryData(getCodexSettingsOptions().queryKey, saved);
-      toast.add({ title: SETTINGS_DESCRIPTIONS.codex_saved });
     },
   });
+  const file = useSettingsFileDraft("codex", true);
   const form = useForm({
     defaultValues: settings,
     onSubmit: async ({ value, formApi }) => {
+      const fileChanged = file.dirty;
+      const settingsChanged = !formApi.state.isDefaultValue || !fileChanged;
       try {
-        formApi.reset(await save.mutateAsync({ body: value }));
+        if (settingsChanged) {
+          formApi.reset(await save.mutateAsync({ body: value }));
+        }
+        if (fileChanged) {
+          await file.save();
+        }
       } catch {
         return;
       }
+      toast.add({
+        title:
+          settingsChanged || !file.file
+            ? SETTINGS_DESCRIPTIONS.codex_saved
+            : SETTINGS_FILE_DESCRIPTIONS.saved(file.file.path),
+      });
     },
   });
   return (
-    <Card aria-labelledby={ids.title}>
+    <Card id="codex" aria-labelledby={ids.title}>
       <CardHeader>
         <CardTitle id={ids.title}>{AGENT_NAMES.codex}</CardTitle>
       </CardHeader>
@@ -165,20 +179,23 @@ export function CodexSettingsCard() {
             </form.Field>
           </FieldSet>
         </CardContent>
-        <CardFooter className="justify-between gap-4 rounded-none border-b">
-          <p role="alert" className="text-destructive">
-            {save.isError ? errorMessage(save.error) : null}
-          </p>
-          <form.Subscribe selector={(state) => state.isSubmitting}>
-            {(isSubmitting) => (
-              <Button type="submit" loading={isSubmitting}>
-                {SETTINGS_DESCRIPTIONS.save}
-              </Button>
-            )}
-          </form.Subscribe>
-        </CardFooter>
+        <SettingsFileSection draft={file} />
+        <form.Subscribe selector={(state) => [state.isSubmitting, !state.isDefaultValue] as const}>
+          {([isSubmitting, settingsChanged]) => (
+            <SettingsCardFooter
+              error={save.isError ? errorMessage(save.error) : undefined}
+              file={file}
+              submitting={isSubmitting}
+              settingsChanged={settingsChanged}
+              onRevert={() => {
+                form.reset();
+                save.reset();
+                file.revert();
+              }}
+            />
+          )}
+        </form.Subscribe>
       </form>
-      <SettingsFileSection agent="codex" />
     </Card>
   );
 }

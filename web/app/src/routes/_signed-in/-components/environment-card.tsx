@@ -9,7 +9,7 @@ import { managerQueryOptions } from "@/queries/manager-queries";
 export function EnvironmentCard() {
   const { data: manager } = useSuspenseQuery(managerQueryOptions);
   return (
-    <Card>
+    <Card id="environment">
       <CardHeader>
         <CardTitle>{ENVIRONMENT_DESCRIPTIONS.title}</CardTitle>
         <CardDescription>{ENVIRONMENT_DESCRIPTIONS.description}</CardDescription>

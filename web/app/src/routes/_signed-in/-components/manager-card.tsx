@@ -28,7 +28,7 @@ import { managerQueryOptions } from "@/queries/manager-queries";
 export function ManagerCard() {
   const { data: manager } = useSuspenseQuery(managerQueryOptions);
   return (
-    <Card>
+    <Card id="manager">
       <CardHeader>
         <CardTitle>{MANAGER_DESCRIPTIONS.title}</CardTitle>
       </CardHeader>

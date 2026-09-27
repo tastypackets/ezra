@@ -16,17 +16,16 @@ export const SETTINGS_FILE_DESCRIPTIONS = {
   leave: "Discard changes",
 } as const;
 
-/** Each agent's own settings file, and when the agent applies a saved change. */
-export const SETTINGS_FILES: Record<Agent, { title: string; applies: string }> = {
+/** Each agent's own settings file, and what still runs with the old one after a save. */
+export const SETTINGS_FILES: Record<Agent, { title: string; still_running: string }> = {
   claude: {
     title: "Claude Code settings.json",
-    applies:
-      "Running Claude Code sessions apply most changes within seconds, Remote Control servers only when they start.",
+    still_running:
+      "Remote Control servers keep the old settings. Restarting them ends their running sessions.",
   },
   codex: {
     title: "Codex config.toml",
-    applies:
-      "New Codex sessions use the saved file, running ones keep the settings they started with.",
+    still_running: "Chats already running keep the old settings. Restarting the server ends them.",
   },
 };
 

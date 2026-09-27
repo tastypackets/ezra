@@ -129,3 +129,26 @@ export async function removeFakeCodex(request: APIRequestContext): Promise<void>
   inContainer("rm", "-rf", CODEX_COMMAND, CODEX_VERSIONS);
   await nudgeCodex(request);
 }
+
+const GH_COMMAND = "/home/dev/.local/bin/gh";
+
+/** Puts a `gh` ahead of the real one that says it is signed in and has no repositories, then makes the manager check. */
+export async function installFakeGitHubSignIn(request: APIRequestContext): Promise<void> {
+  writeInContainer(
+    GH_COMMAND,
+    `#!/bin/sh
+case "$1 $2" in
+  "auth status") echo '{"hosts":{"github.com":[{"state":"success","active":true,"login":"e2e"}]}}' ;;
+  "api "*) echo '[]' ;;
+  *) exec /usr/local/share/ezra/shims/gh "$@" ;;
+esac
+`,
+    "755",
+  );
+  expect((await request.get("api/v1/git")).ok()).toBe(true);
+}
+
+export async function removeFakeGitHubSignIn(request: APIRequestContext): Promise<void> {
+  inContainer("rm", "-f", GH_COMMAND);
+  expect((await request.get("api/v1/git")).ok()).toBe(true);
+}

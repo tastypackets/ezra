@@ -14,6 +14,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Hint } from "@/components/ui/hint";
@@ -40,7 +41,7 @@ import type { AgentStep } from "@/lib/agent-steps";
 import { codexPairable, codexRemoteView } from "@/lib/codex-remote";
 import type { CodexFix, RemoteView } from "@/lib/codex-remote";
 import { handOffFocus } from "@/lib/focus";
-import { remoteControlSummary } from "@/lib/remote-control";
+import { remoteControlSummary, serversRun } from "@/lib/remote-control";
 import { signInEnd } from "@/lib/sign-in";
 import type { SignInEnd } from "@/lib/sign-in";
 import { downloadPercent, formatDateTime } from "@/lib/utils";
@@ -49,6 +50,17 @@ import { CodexSignInDialog } from "./codex-sign-in-dialog";
 import { PairPhoneDialog } from "./pair-phone-dialog";
 import { PairedPhonesDialog } from "./paired-phones-dialog";
 import { ServerLogDialog } from "./server-log-dialog";
+import { RestartServersDialog } from "./restart-servers-dialog";
+import { UninstallAgentDialog } from "./uninstall-agent-dialog";
+
+/** On a phone card the actions join the card's grid, so the menu sits beside the badge. */
+const ACTIONS_LAYOUT = {
+  row: {
+    actions: "flex w-52 flex-col items-end gap-1",
+    buttons: "flex items-center justify-end gap-1",
+  },
+  card: { actions: "contents", buttons: "contents" },
+} as const;
 
 /** How often the sign-in warning is checked against the clock. */
 const CLOCK_MS = 60_000;
@@ -66,6 +78,8 @@ interface AgentProps {
   remote: RemoteView;
   /** Whether a phone can pair with Codex. */
   pairable: boolean;
+  /** Whether any of the agent's remote control servers runs. */
+  serving: boolean;
 }
 
 /** Every agent with its install and sign-in actions: a table on wide screens, a list on phones. */
@@ -95,7 +109,7 @@ export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
               <TableHead className="text-right">
                 <SavedDataLabel />
               </TableHead>
-              <TableHead>
+              <TableHead className="w-52">
                 <span className="sr-only">{AGENTS_DESCRIPTIONS.column_actions}</span>
               </TableHead>
             </TableRow>
@@ -108,6 +122,7 @@ export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
                 end={signInEnd(status, now)}
                 remote={remote(status)}
                 pairable={pairable}
+                serving={serversRun(status.agent, remoteControl)}
               />
             ))}
           </TableBody>
@@ -122,6 +137,7 @@ export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
               end={signInEnd(status, now)}
               remote={remote(status)}
               pairable={pairable}
+              serving={serversRun(status.agent, remoteControl)}
             />
           ))}
         </ul>
@@ -130,7 +146,7 @@ export function AgentsCard({ agents, remoteControl }: AgentsCardProps) {
   );
 }
 
-function AgentRow({ status, end, remote, pairable }: AgentProps) {
+function AgentRow({ status, end, remote, pairable, serving }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status, end);
@@ -158,26 +174,27 @@ function AgentRow({ status, end, remote, pairable }: AgentProps) {
           ending={Boolean(end)}
           remote={remote}
           pairable={pairable}
-          className="items-end"
+          serving={serving}
+          layout="row"
         />
       </TableCell>
     </TableRow>
   );
 }
 
-function AgentListItem({ status, end, remote, pairable }: AgentProps) {
+function AgentListItem({ status, end, remote, pairable, serving }: AgentProps) {
   const nameId = useId();
   const facts = agentFacts(status);
   const state = agentState(status, end);
   return (
-    <li className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0">
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-3 py-4 first:pt-0 last:pb-0">
       <div className="flex items-center justify-between gap-3">
         <span id={nameId} className="font-medium">
           {AGENT_NAMES[status.agent]}
         </span>
         <Badge variant={state.variant}>{state.label}</Badge>
       </div>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
+      <dl className="col-span-full grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
         <dt className="text-muted-foreground">{AGENTS_DESCRIPTIONS.column_version}</dt>
         <dd className={cn(status.installed_version && "font-mono")}>{facts.version}</dd>
         <dt className="text-muted-foreground">{AGENTS_DESCRIPTIONS.column_account}</dt>
@@ -202,7 +219,8 @@ function AgentListItem({ status, end, remote, pairable }: AgentProps) {
         ending={Boolean(end)}
         remote={remote}
         pairable={pairable}
-        className="items-start"
+        serving={serving}
+        layout="card"
       />
     </li>
   );
@@ -257,30 +275,35 @@ function AgentActions({
   ending,
   remote,
   pairable,
-  className,
+  serving,
+  layout,
 }: {
   status: AgentStatus;
   nameId: string;
   ending: boolean;
   remote: RemoteView;
   pairable: boolean;
-  className: string;
+  serving: boolean;
+  layout: keyof typeof ACTIONS_LAYOUT;
 }) {
   const { install, startSignIn, signOut } = useAgentActions(status.agent);
   const codex = useCodexActions();
   const pairing = useCodexPairing();
   const [logOpen, setLogOpen] = useState(false);
   const [phonesOpen, setPhonesOpen] = useState(false);
+  const [uninstalling, setUninstalling] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [signingInFor, setSigningInFor] = useState<CodexFix>();
   const installPending = useAgentActionPending(status.agent, "install");
   const signInPending = useAgentActionPending(status.agent, "start_sign_in");
   const signOutPending = useAgentActionPending(status.agent, "sign_out");
   const retryPending = useAgentActionPending(status.agent, "retry_remote_control");
   const menuTrigger = useRef<HTMLButtonElement>(null);
-  const keepFocusInRow = useCallback(
-    (button: HTMLButtonElement | null) => handOffFocus(button, () => menuTrigger.current),
-    [],
-  );
+  const stepButton = useRef<HTMLButtonElement>(null);
+  const keepFocusInRow = useCallback((button: HTMLButtonElement | null) => {
+    stepButton.current = button;
+    return handOffFocus(button, () => menuTrigger.current);
+  }, []);
   const name = AGENT_NAMES[status.agent];
   const installed = Boolean(status.installed_version);
   const installing = installPending || Boolean(status.install_progress);
@@ -332,14 +355,15 @@ function AgentActions({
   };
   const menuInstall = menuOffersInstall(status, step);
   return (
-    <div className={cn("flex flex-col gap-1", className)}>
-      <div data-agent-actions={status.agent} className="flex items-center gap-1">
+    <div className={ACTIONS_LAYOUT[layout].actions}>
+      <div data-agent-actions={status.agent} className={ACTIONS_LAYOUT[layout].buttons}>
         {step ? (
           <Button
             ref={keepFocusInRow}
             size="sm"
             loading={steps[step].pending}
             aria-describedby={nameId}
+            className="justify-self-start tabular-nums"
             onClick={steps[step].run}
           >
             {steps[step].label}
@@ -353,6 +377,7 @@ function AgentActions({
                 <Button
                   variant="ghost"
                   size="icon-sm"
+                  className="col-start-2 row-start-1"
                   loading={signOutPending}
                   aria-label={AGENTS_DESCRIPTIONS.more_actions(name)}
                 />
@@ -371,6 +396,11 @@ function AgentActions({
                   {AGENTS_DESCRIPTIONS.sign_out}
                 </DropdownMenuItem>
               ) : null}
+              {serving ? (
+                <DropdownMenuItem onClick={() => setRestarting(true)}>
+                  {AGENTS_DESCRIPTIONS.restart_servers[status.agent]}
+                </DropdownMenuItem>
+              ) : null}
               {status.agent === "codex" ? (
                 <>
                   <DropdownMenuItem
@@ -387,18 +417,40 @@ function AgentActions({
                   </DropdownMenuItem>
                 </>
               ) : null}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={installing}
+                onClick={() => setUninstalling(true)}
+              >
+                {AGENTS_DESCRIPTIONS.uninstall}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
       </div>
+      <RestartServersDialog
+        agent={status.agent}
+        open={restarting}
+        onOpenChange={setRestarting}
+        finalFocus={() => menuTrigger.current}
+      />
+      <UninstallAgentDialog
+        agent={status.agent}
+        open={uninstalling}
+        onOpenChange={setUninstalling}
+        finalFocus={() =>
+          menuTrigger.current?.isConnected ? menuTrigger.current : stepButton.current
+        }
+      />
       {failure ? (
-        <p role="alert" className="max-w-sm whitespace-normal text-destructive">
+        <p role="alert" className="col-span-full whitespace-normal text-destructive">
           {failure}
         </p>
       ) : null}
       {status.agent === "codex" ? (
         <>
-          <div role="status" className="empty:sr-only">
+          <div role="status" className="col-span-full empty:sr-only">
             {pairing.start.isPending && !pairing.open ? (
               <Waiting label={PAIRING_DESCRIPTIONS.getting_code} />
             ) : null}

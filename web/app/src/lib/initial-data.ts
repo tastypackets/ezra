@@ -2,6 +2,7 @@ import type {
   AgentStatus,
   CloneStatus,
   FolderStatus,
+  GitStatus,
   RemoteControlOverview,
   SessionStatus,
 } from "@ezra/client";
@@ -9,6 +10,7 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import { agentsQueryOptions } from "@/queries/agent-queries";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
+import { gitStatusQueryOptions } from "@/queries/git-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { sessionQueryOptions } from "@/queries/session-queries";
 
@@ -20,6 +22,7 @@ interface InitialData {
   folders: FolderStatus[] | null;
   clones: CloneStatus[] | null;
   remote_control: RemoteControlOverview | null;
+  git: GitStatus | null;
 }
 
 /**
@@ -52,6 +55,9 @@ export function seedInitialData(queryClient: QueryClient): number | undefined {
       updatedAt,
     });
   }
+  if (initialData.git) {
+    queryClient.setQueryData(gitStatusQueryOptions.queryKey, initialData.git, { updatedAt });
+  }
   element.remove();
   return initialData.revision;
 }
@@ -65,11 +71,12 @@ export function isInitialData(value: unknown): value is InitialData {
     !("agents" in value) ||
     !("folders" in value) ||
     !("clones" in value) ||
-    !("remote_control" in value)
+    !("remote_control" in value) ||
+    !("git" in value)
   ) {
     return false;
   }
-  const { revision, session, agents, folders, clones, remote_control: remoteControl } = value;
+  const { revision, session, agents, folders, clones, remote_control: remoteControl, git } = value;
   return (
     typeof revision === "number" &&
     typeof session === "object" &&
@@ -79,6 +86,7 @@ export function isInitialData(value: unknown): value is InitialData {
     (agents === null || Array.isArray(agents)) &&
     (folders === null || Array.isArray(folders)) &&
     (clones === null || Array.isArray(clones)) &&
-    (remoteControl === null || typeof remoteControl === "object")
+    (remoteControl === null || typeof remoteControl === "object") &&
+    (git === null || typeof git === "object")
   );
 }

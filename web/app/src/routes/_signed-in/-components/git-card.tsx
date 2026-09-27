@@ -28,9 +28,9 @@ import { gitStatusQueryOptions } from "@/queries/git-queries";
 
 /** The GitHub sign-in and commit identity every agent's git uses. */
 export function GitCard() {
-  const { data: git } = useSuspenseQuery(gitStatusQueryOptions);
+  const { data: git } = useSuspenseQuery({ ...gitStatusQueryOptions, refetchOnMount: "always" });
   return (
-    <Card>
+    <Card id="git">
       <CardHeader>
         <CardTitle>{GIT_DESCRIPTIONS.title}</CardTitle>
         <CardDescription>{GIT_DESCRIPTIONS.description}</CardDescription>

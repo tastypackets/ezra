@@ -1389,6 +1389,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restarting_the_servers_through_the_api_starts_codex_again() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake, first) = running(&manager, "0.157.1").await;
+
+        let response = manager
+            .post("/api/v1/agents/codex/restart-servers", "", Some(&cookie))
+            .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        servers_started(&manager, 2).await;
+        first.wait_until_gone().await;
+        status_until(&manager, connected).await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
     async fn codex_shows_the_relay_and_the_first_line_of_a_problem_while_it_runs() {
         let manager = manager(BUDGET);
         let signed_out = relay_warning(

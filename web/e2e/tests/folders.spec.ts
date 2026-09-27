@@ -3,7 +3,14 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { inContainer, installFakeClaude, PROJECTS_DIRECTORY, removeFakeClaude } from "./manager.ts";
+import {
+  inContainer,
+  installFakeClaude,
+  installFakeGitHubSignIn,
+  PROJECTS_DIRECTORY,
+  removeFakeClaude,
+  removeFakeGitHubSignIn,
+} from "./manager.ts";
 
 const COMMIT = ["-c", "user.name=E2E", "-c", "user.email=e2e@example.com", "commit", "--quiet"];
 
@@ -25,6 +32,7 @@ test("a repository is cloned from its URL and deleted after confirming", async (
   const folder = `cloned-${randomUUID().slice(0, 8)}`;
   makeRepository(source);
   installFakeClaude("2.1.0-e2e");
+  await installFakeGitHubSignIn(request);
   try {
     await page.goto("./");
     await page.getByRole("button", { name: "Clone repository" }).click();
@@ -58,6 +66,7 @@ test("a repository is cloned from its URL and deleted after confirming", async (
   } finally {
     inContainer("rm", "-rf", source, `${PROJECTS_DIRECTORY}/${folder}`);
     await removeFakeClaude(request);
+    await removeFakeGitHubSignIn(request);
   }
 });
 
@@ -86,21 +95,37 @@ test("deleting a repository names the work only it has", async ({ page }) => {
   }
 });
 
-test("a failed clone says why, can be retried, and is dismissed", async ({ page }) => {
+test("a failed clone says why, can be retried, and is dismissed", async ({ page, request }) => {
   const folder = `missing-${randomUUID().slice(0, 8)}`;
-  await page.goto("./");
-  const dialog = page.getByRole("dialog", { name: "Clone repository" });
-  const row = folderRow(page, folder);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    await page.getByRole("button", { name: "Clone repository" }).click();
-    await dialog.getByRole("combobox", { name: "Repository" }).fill(`/tmp/${folder}`);
-    await expect(dialog.getByLabel("Folder")).toHaveValue(folder);
-    await dialog.getByRole("button", { name: "Clone", exact: true }).click();
-    await expect(dialog).toBeHidden();
-    await expect(row).toContainText("Could not clone");
-    await expect(row).toContainText("does not exist");
-    await expect(row).toHaveCount(1);
+  await installFakeGitHubSignIn(request);
+  try {
+    await page.goto("./");
+    const dialog = page.getByRole("dialog", { name: "Clone repository" });
+    const row = folderRow(page, folder);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await page.getByRole("button", { name: "Clone repository" }).click();
+      await dialog.getByRole("combobox", { name: "Repository" }).fill(`/tmp/${folder}`);
+      await expect(dialog.getByLabel("Folder")).toHaveValue(folder);
+      await dialog.getByRole("button", { name: "Clone", exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(row).toContainText("Could not clone");
+      await expect(row).toContainText("does not exist");
+      await expect(row).toHaveCount(1);
+    }
+    await row.getByRole("button", { name: `Dismiss the failed clone of ${folder}` }).click();
+    await expect(row).toBeHidden();
+  } finally {
+    await removeFakeGitHubSignIn(request);
   }
-  await row.getByRole("button", { name: `Dismiss the failed clone of ${folder}` }).click();
-  await expect(row).toBeHidden();
+});
+
+test("without Git set up, the dashboard offers to set it up and scrolls to it", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("./");
+  await expect(page.getByRole("button", { name: "Clone repository" })).toBeHidden();
+  await page.getByRole("link", { name: "Set up Git" }).click();
+  await expect(page).toHaveURL(/\/settings#git$/);
+  await expect(page.getByRole("heading", { name: "Git", exact: true, level: 2 })).toBeInViewport();
 });

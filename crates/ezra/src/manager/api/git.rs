@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session};
 use crate::manager::events::Topic;
-use crate::manager::git::{CommitIdentity, GitError, GitHubRepository};
+use crate::manager::git::{CommitIdentity, GitError, GitHubRepository, GitHubSignIn};
 use crate::manager::login::{LoginProcess, LoginPrompt};
 
 impl From<GitError> for ApiError {
@@ -103,7 +103,7 @@ pub async fn log_out_of_github(
     let signed_out = state.git_tools.log_out_of_github().await;
     state.events.publish(Topic::Git);
     signed_out?;
-    state.note_github_account(None);
+    state.note_github_sign_in(GitHubSignIn::default());
     tracing::info!("GitHub is signed out");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -125,7 +125,7 @@ pub async fn github_repositories(
     _: Session,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<GitHubRepository>>, ApiError> {
-    if state.github_account.borrow().is_none() {
+    if !state.github_sign_in.borrow().signed_in {
         return Ok(Json(Vec::new()));
     }
     Ok(Json(state.git_tools.github_repositories().await?))
@@ -156,8 +156,16 @@ pub async fn update_identity(
 }
 
 impl AppState {
-    /// While a sign-in runs, GitHub's part is only its prompt.
     async fn git_status(&self) -> GitStatus {
+        if self.finish_github_login().await.is_none() {
+            self.note_github_sign_in(self.git_tools.github_sign_in().await);
+        }
+        self.known_git_status().await
+    }
+
+    /// The GitHub sign-in as the last check found it, without asking GitHub again or finishing a
+    /// sign-in. While a sign-in runs, GitHub's part is only its prompt.
+    pub(crate) async fn known_git_status(&self) -> GitStatus {
         let identity = match self.git_tools.commit_identity().await {
             Ok(identity) => identity,
             Err(error) => {
@@ -165,33 +173,25 @@ impl AppState {
                 CommitIdentity::default()
             }
         };
-        let from_environment = self.git_tools.token_from_environment();
-        let login_prompt = self.finish_github_login().await;
-        if login_prompt.is_some() {
-            return GitStatus {
-                github: GitHubStatus {
-                    signed_in: false,
-                    account: None,
-                    failing: false,
-                    from_environment,
-                    login_prompt,
-                },
-                identity,
-            };
-        }
-        let sign_in = self.git_tools.github_sign_in().await;
-        self.note_github_account(
-            sign_in
-                .signed_in
-                .then(|| sign_in.account.clone().unwrap_or_default()),
-        );
+        let login_prompt = self
+            .github_login
+            .lock()
+            .await
+            .as_ref()
+            .filter(|login| login.outcome().is_none())
+            .and_then(|login| login.prompt().cloned());
+        let sign_in = if login_prompt.is_some() {
+            GitHubSignIn::default()
+        } else {
+            self.github_sign_in.borrow().clone()
+        };
         GitStatus {
             github: GitHubStatus {
                 signed_in: sign_in.signed_in,
                 account: sign_in.account,
                 failing: sign_in.failing,
-                from_environment,
-                login_prompt: None,
+                from_environment: self.git_tools.token_from_environment(),
+                login_prompt,
             },
             identity,
         }
@@ -221,20 +221,17 @@ impl AppState {
             tracing::warn!("could not make git ignore .claude/worktrees: {error}");
         }
         let sign_in = self.git_tools.github_sign_in().await;
-        self.note_github_account(
-            sign_in
-                .signed_in
-                .then(|| sign_in.account.unwrap_or_default()),
-        );
-        if sign_in.signed_in {
+        let signed_in = sign_in.signed_in;
+        self.note_github_sign_in(sign_in);
+        if signed_in {
             self.lend_github_sign_in_to_git().await;
         }
     }
 
-    fn note_github_account(&self, account: Option<String>) {
-        let changed = self.github_account.send_if_modified(|current| {
-            let changed = *current != account;
-            *current = account;
+    fn note_github_sign_in(&self, sign_in: GitHubSignIn) {
+        let changed = self.github_sign_in.send_if_modified(|current| {
+            let changed = *current != sign_in;
+            *current = sign_in;
             changed
         });
         if changed {

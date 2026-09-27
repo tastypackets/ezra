@@ -5,9 +5,11 @@ import {
   CLAUDE_CREDENTIALS,
   inContainer,
   installFakeClaude,
+  installFakeGitHubSignIn,
   nudgeRemoteControl,
   PROJECTS_DIRECTORY,
   removeFakeClaude,
+  removeFakeGitHubSignIn,
   writeInContainer,
 } from "./manager.ts";
 
@@ -144,12 +146,37 @@ test("the agents card warns days before Claude Code's sign-in ends until it is r
   await expect(claude.getByRole("button", { name: "Sign in again" })).toBeHidden();
 });
 
+test("the agent menu restarts Claude Code's servers while they run", async ({ page, request }) => {
+  installFakeClaude("2.1.0-e2e", CONNECTED);
+  await nudgeRemoteControl(request);
+  await page.goto("./");
+  const running = projectsRow(page).getByText("Running", { exact: true });
+  await expect(running).toBeVisible();
+  await page
+    .getByRole("row", { name: /Claude Code/ })
+    .getByRole("button", { name: "More Claude Code actions" })
+    .click();
+  await page.getByRole("menuitem", { name: "Restart servers" }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Restart the Claude Code servers?" });
+  await expect(confirm).toContainText("Their running sessions end.");
+  await confirm.getByRole("button", { name: "Restart servers" }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.getByText("Restarting the Claude Code servers.")).toBeVisible();
+  await expect(
+    page
+      .getByRole("row", { name: /Claude Code/ })
+      .getByRole("button", { name: "More Claude Code actions" }),
+  ).toBeFocused();
+  await expect(running).toBeVisible();
+});
+
 test("Claude Code's parts are hidden until it is installed", async ({
   page,
   request,
 }, testInfo) => {
   const folder = `parts-${testInfo.retry}`;
   inContainer("mkdir", `${PROJECTS_DIRECTORY}/${folder}`);
+  await installFakeGitHubSignIn(request);
   try {
     await page.goto("./settings");
     const settings = page.locator("section[data-slot=card]", {
@@ -203,6 +230,7 @@ test("Claude Code's parts are hidden until it is installed", async ({
     await expect(serveAll).toBeVisible();
   } finally {
     inContainer("rmdir", `${PROJECTS_DIRECTORY}/${folder}`);
+    await removeFakeGitHubSignIn(request);
   }
 });
 
