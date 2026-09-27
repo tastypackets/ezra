@@ -7,9 +7,20 @@ import type {
 } from "@ezra/client";
 import { updateSettingsFileMutation } from "@ezra/client/react-query.gen";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useId, useRef, useState } from "react";
+import { useBlocker } from "@tanstack/react-router";
+import { lazy, Suspense, useCallback, useId, useRef, useState } from "react";
 
 import type { CodeEditorHandle } from "@/components/code-editor";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -177,6 +188,7 @@ function SettingsFileEditor({
           </FieldError>
         ) : null}
       </CardContent>
+      <LeaveGuard path={file.path} dirty={dirty} />
       <CardFooter className="flex-wrap justify-between gap-4">
         <p role="alert" className="text-destructive">
           {notice}
@@ -204,5 +216,36 @@ function SettingsFileEditor({
         </div>
       </CardFooter>
     </>
+  );
+}
+
+/** Asks before leaving the page while `dirty`. */
+function LeaveGuard({ path, dirty }: { path: string; dirty: boolean }) {
+  const shouldBlockFn = useCallback(() => dirty, [dirty]);
+  const leaving = useBlocker({ shouldBlockFn, enableBeforeUnload: dirty, withResolver: true });
+  return (
+    <AlertDialog
+      open={leaving.status === "blocked"}
+      onOpenChange={(open) => {
+        if (!open) {
+          leaving.reset?.();
+        }
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{SETTINGS_FILE_DESCRIPTIONS.leave_title}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {SETTINGS_FILE_DESCRIPTIONS.leave_description(path)}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{SETTINGS_FILE_DESCRIPTIONS.stay}</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => leaving.proceed?.()}>
+            {SETTINGS_FILE_DESCRIPTIONS.leave}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

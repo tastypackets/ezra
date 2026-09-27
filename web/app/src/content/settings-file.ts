@@ -10,6 +10,10 @@ export const SETTINGS_FILE_DESCRIPTIONS = {
   changed_on_disk: (path: string) =>
     `${path} changed on disk. Revert loads it, Overwrite replaces it with your text.`,
   problem: ({ line, column, error }: ParseProblem) => `Line ${line}, column ${column}: ${error}`,
+  leave_title: "Leave without saving?",
+  leave_description: (path: string) => `Leaving discards your changes to ${path}.`,
+  stay: "Stay",
+  leave: "Discard changes",
 } as const;
 
 /** Each agent's own settings file, and when the agent applies a saved change. */

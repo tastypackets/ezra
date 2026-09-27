@@ -577,6 +577,37 @@ test.describe("with Claude Code installed", () => {
     await expect(editor).toHaveAttribute("autocapitalize", "off");
   });
 
+  test("leaving with unsaved text asks first", async ({ page }) => {
+    writeInContainer(CLAUDE_FILE, "{}");
+    const { editor } = await openSettings(page, CLAUDE_TITLE);
+    await expect(editor).toHaveText("{}");
+    const agents = page.getByRole("link", { name: "Agents", exact: true });
+    const leave = page.getByRole("alertdialog", { name: "Leave without saving?" });
+    await editor.click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" ");
+    await agents.click();
+    await expect(leave).toContainText(`Leaving discards your changes to ${CLAUDE_FILE}.`);
+    await leave.getByRole("button", { name: "Stay" }).click();
+    await expect(leave).toBeHidden();
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(editor).toHaveText("{} ");
+
+    page.once("dialog", (dialog) => void dialog.accept());
+    const prompted = page.waitForEvent("dialog");
+    await page.reload();
+    expect((await prompted).type()).toBe("beforeunload");
+    await expect(editor).toHaveText("{}");
+
+    await editor.click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" ");
+    await agents.click();
+    await leave.getByRole("button", { name: "Discard changes" }).click();
+    await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+    expect(bytesOf(CLAUDE_FILE).toString()).toBe("{}");
+  });
+
   test("Tab moves focus out of the editor instead of typing", async ({ page }) => {
     writeInContainer(CLAUDE_FILE, "{}");
     const { editor, save } = await openSettings(page, CLAUDE_TITLE);
