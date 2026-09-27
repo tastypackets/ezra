@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 concurrency:
@@ -53,10 +51,12 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [[ -z ${BASE} ]] || git diff --name-only "${BASE}...HEAD" | grep --quiet --invert-match '\.md$'; then
-            echo "image=true" >> "$GITHUB_OUTPUT"
-          else
+          if [[ -n ${BASE} ]] && git diff --quiet "${BASE}...HEAD" -- \
+            crates Cargo.toml Cargo.lock web openapi.json Dockerfile .dockerignore image mise.toml \
+            .github/workflows/ci.yml .github/scripts; then
             echo "image=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=true" >> "$GITHUB_OUTPUT"
           fi
 
   image:
@@ -82,7 +82,9 @@ jobs:
           build-contexts: ezra-build=${{ runner.temp }}/ezra-build
           load: true
           tags: ezra:ci
-          cache-from: type=gha
+          cache-from: |
+            type=gha
+            type=gha,scope=release-amd64
           cache-to: type=gha,mode=max
       - name: Container tests
         run: .github/scripts/container-tests.sh
