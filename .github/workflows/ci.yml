@@ -57,7 +57,19 @@ jobs:
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
       - name: Container tests
-        run: cargo test --locked --test '*' -- --ignored
+        # They mount host folders that the container's dev user (uid 1000) writes.
+        run: |
+          getent passwd 1000 || sudo useradd --uid 1000 --create-home ezra-test
+          tester="$(getent passwd 1000 | cut -d: -f1)"
+          sudo usermod --append --groups docker "$tester"
+          binaries="$(mktemp --directory)"
+          cargo test --locked --test '*' --no-run --message-format=json \
+            | jq -r 'select(.executable != null) | .executable' \
+            | xargs install --mode=755 --target-directory="$binaries"
+          chmod 755 "$binaries"
+          for tests in "$binaries"/*; do
+            sudo --user="$tester" --preserve-env=EZRA_TEST_IMAGE "$tests" --ignored
+          done
       - run: mise run web:install
       - run: pnpm --filter @ezra/e2e exec playwright install --with-deps chromium
         working-directory: web
