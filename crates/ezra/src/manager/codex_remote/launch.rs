@@ -250,6 +250,7 @@ mod tests {
         request: Duration::ZERO,
         mfa_retry: Duration::ZERO,
         usage: Duration::ZERO,
+        update_deadline: Duration::ZERO,
     };
 
     fn arguments(command: &Command) -> Vec<&str> {

@@ -796,6 +796,7 @@ pub(super) mod tests {
         request: Duration::from_secs(5),
         mfa_retry: Duration::ZERO,
         usage: Duration::ZERO,
+        update_deadline: Duration::ZERO,
     };
     const ENABLE_FIRST: &str = "remote control pairing requires remote control to be enabled";
 

@@ -26,8 +26,8 @@ use super::processes::ProcessFamily;
 use super::state::AppState;
 use super::supervision::{
     Failure, Failures, FlagExt, LineWatcher, OUTPUT_DRAIN_TIMEOUT, PendingUpdate, Published,
-    RECHECK_INTERVAL, RunEnd, ServerLog, ServerOutput, Signals, Supervision, USAGE_INTERVAL,
-    UpdateWait, Verdict, Wake, Wanted,
+    RECHECK_INTERVAL, RunEnd, ServerLog, ServerOutput, Signals, Supervision,
+    UPDATE_RESTART_DEADLINE, USAGE_INTERVAL, UpdateWait, Verdict, Wake, Wanted,
 };
 use crate::path_ext::PathExt;
 
@@ -828,8 +828,9 @@ impl AppState {
                 Verdict::Stop => return self.stop_server(server, launch).await,
                 Verdict::Update(version) => {
                     let usage = server.note_usage(&self.remote_control, launch).await;
-                    let waiting =
-                        update.get_or_insert_with(|| UpdateWait::starting_now(version.clone()));
+                    let waiting = update.get_or_insert_with(|| {
+                        UpdateWait::starting_now(version.clone(), UPDATE_RESTART_DEADLINE)
+                    });
                     waiting.version = version;
                     if waiting.is_due(usage.is_some_and(|usage| usage.sessions > 0)) {
                         tracing::info!(

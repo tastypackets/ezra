@@ -20,7 +20,8 @@ use utoipa::ToSchema;
 use super::events::{Events, Topic};
 use super::remote_control::ServerState;
 use super::supervision::{
-    Failure, OUTPUT_DRAIN_TIMEOUT, Published, ServerLog, Supervision, USAGE_INTERVAL,
+    Failure, OUTPUT_DRAIN_TIMEOUT, PendingUpdate, Published, ServerLog, Supervision,
+    UPDATE_RESTART_DEADLINE, USAGE_INTERVAL,
 };
 pub use control::ControlError;
 use control::{ControlClient, Enable, RelayStatusWire, RelayWire};
@@ -70,6 +71,8 @@ pub struct ServerBudget {
     pub mfa_retry: Duration,
     /// Between readings of what the server and its chats use.
     pub usage: Duration,
+    /// While chats run, before the server restarts on a newer Codex anyway.
+    pub update_deadline: Duration,
 }
 
 impl ServerBudget {
@@ -91,6 +94,7 @@ impl Default for ServerBudget {
             request: Duration::from_secs(45),
             mfa_retry: Duration::from_secs(10 * 60),
             usage: USAGE_INTERVAL,
+            update_deadline: UPDATE_RESTART_DEADLINE,
         }
     }
 }
@@ -233,6 +237,8 @@ pub struct CodexRemoteStatus {
     pub restarts: u32,
     /// What the server and its chats use, absent while no server runs.
     pub usage: Option<CodexUsage>,
+    /// A newer Codex the server restarts on once no chat runs, absent while none waits.
+    pub update: Option<PendingUpdate>,
 }
 
 /// What a running Codex server and its chats use.
@@ -254,6 +260,7 @@ impl CodexRemoteStatus {
         self.server_name = None;
         self.server_version = None;
         self.usage = None;
+        self.update = None;
     }
 
     /// Shows no server running, and the problem keeping it from starting.
@@ -340,14 +347,21 @@ impl CodexRemoteStatus {
         }
     }
 
-    /// The running server is kept, and the installed version cannot replace it when
-    /// `unsupported`.
+    /// The running server is kept with no restart waiting, and the installed version cannot
+    /// replace it when `unsupported`.
     fn keep(&mut self, unsupported: bool) {
+        self.update = None;
         if unsupported {
             self.problem = Some(CodexProblem::UnsupportedVersion);
         } else if self.problem == Some(CodexProblem::UnsupportedVersion) {
             self.problem = None;
         }
+    }
+
+    /// The running server waits to restart on `update`, which can replace it.
+    fn wait_for_update(&mut self, update: PendingUpdate) {
+        self.keep(false);
+        self.update = Some(update);
     }
 
     fn fail(&mut self, Failure { message, problem }: Failure<CodexProblem>) {
@@ -412,6 +426,7 @@ mod tests {
     use std::fmt::Debug;
 
     use serde::de::DeserializeOwned;
+    use time::macros::datetime;
 
     use super::*;
     use crate::manager::codex_remote::fake::FakeControlServer;
@@ -516,6 +531,10 @@ mod tests {
                 chats: 2,
                 running_chats: 1,
                 memory_bytes: 400_000_000,
+            }),
+            update: Some(PendingUpdate {
+                version: "0.157.2".to_owned(),
+                restart_by: datetime!(2026-09-27 18:00 UTC),
             }),
         }
     }
@@ -660,15 +679,36 @@ mod tests {
     }
 
     #[test]
-    fn a_kept_server_shows_only_whether_the_installed_version_can_replace_it() {
+    fn a_kept_server_waits_for_no_update_and_shows_whether_the_installed_version_can_replace_it() {
+        let kept = |problem| CodexRemoteStatus {
+            update: None,
+            ..errored_with(problem)
+        };
         let mut status = errored_with(CodexProblem::RelayUnavailable);
         status.keep(false);
-        assert_eq!(status, errored_with(CodexProblem::RelayUnavailable));
+        assert_eq!(status, kept(CodexProblem::RelayUnavailable));
 
         status.keep(true);
-        assert_eq!(status, errored_with(CodexProblem::UnsupportedVersion));
+        assert_eq!(status, kept(CodexProblem::UnsupportedVersion));
 
         status.keep(false);
+        assert_eq!(
+            status,
+            CodexRemoteStatus {
+                problem: None,
+                ..kept(CodexProblem::UnsupportedVersion)
+            }
+        );
+    }
+
+    #[test]
+    fn a_server_waiting_for_an_update_shows_it_and_no_version_problem() {
+        let mut status = errored_with(CodexProblem::UnsupportedVersion);
+        let update = status
+            .update
+            .take()
+            .expect("the fixture waits for an update");
+        status.wait_for_update(update);
         assert_eq!(
             status,
             CodexRemoteStatus {
@@ -676,6 +716,14 @@ mod tests {
                 ..errored_with(CodexProblem::UnsupportedVersion)
             }
         );
+
+        let mut status = errored_with(CodexProblem::RelayUnavailable);
+        let update = status
+            .update
+            .take()
+            .expect("the fixture waits for an update");
+        status.wait_for_update(update);
+        assert_eq!(status, errored_with(CodexProblem::RelayUnavailable));
     }
 
     #[test]
@@ -695,6 +743,7 @@ mod tests {
                         server_name: None,
                         server_version: None,
                         usage: None,
+                        update: None,
                         ..before
                     }
                 }

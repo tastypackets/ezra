@@ -1905,6 +1905,17 @@
           "state": {
             "$ref": "#/components/schemas/ServerState"
           },
+          "update": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PendingUpdate",
+                "description": "A newer Codex the server restarts on once no chat runs, absent while none waits."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "usage": {
             "oneOf": [
               {
@@ -2352,7 +2363,7 @@
       },
       "PendingUpdate": {
         "type": "object",
-        "description": "A newer Claude Code a running server waits to restart on.",
+        "description": "A newer version of the agent a running server waits to restart on.",
         "required": [
           "version",
           "restart_by"
@@ -2361,7 +2372,7 @@
           "restart_by": {
             "type": "string",
             "format": "date-time",
-            "description": "When it restarts even with sessions running."
+            "description": "When it restarts even while it is busy."
           },
           "version": {
             "type": "string",

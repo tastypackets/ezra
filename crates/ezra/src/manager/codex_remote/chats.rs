@@ -5,7 +5,11 @@ use super::control::{ThreadId, ThreadStatusWire, ThreadWire, UnsubscribeStatus};
 
 /// The chats a Codex server has loaded, and whether ezra's connection still follows each.
 #[derive(Debug, Default)]
-pub struct Chats(HashMap<ThreadId, Chat>);
+pub struct Chats {
+    loaded: HashMap<ThreadId, Chat>,
+    /// Codex answered the list of loaded chats.
+    listed: bool,
+}
 
 #[derive(Debug, Default)]
 struct Chat {
@@ -39,9 +43,10 @@ impl Chat {
 impl Chats {
     /// Adds the chats Codex listed that are not known yet, and returns them to read.
     pub fn listed(&mut self, ids: Vec<ThreadId>) -> Vec<ThreadId> {
+        self.listed = true;
         let mut unread = Vec::new();
         for id in ids {
-            if let Entry::Vacant(entry) = self.0.entry(id) {
+            if let Entry::Vacant(entry) = self.loaded.entry(id) {
                 unread.push(entry.key().clone());
                 entry.insert(Chat::default());
             }
@@ -51,7 +56,7 @@ impl Chats {
 
     /// A chat started. Returns the chat to unsubscribe from.
     pub fn started(&mut self, thread: ThreadWire) -> Option<ThreadId> {
-        let chat = self.0.entry(thread.id.clone()).or_default();
+        let chat = self.loaded.entry(thread.id.clone()).or_default();
         chat.status = Some(thread.status);
         chat.leave(thread.id)
     }
@@ -60,10 +65,10 @@ impl Chats {
     /// try that did not settle it.
     pub fn changed(&mut self, id: ThreadId, status: ThreadStatusWire) -> Option<ThreadId> {
         if status == ThreadStatusWire::NotLoaded {
-            self.0.remove(&id);
+            self.loaded.remove(&id);
             return None;
         }
-        let chat = self.0.entry(id.clone()).or_default();
+        let chat = self.loaded.entry(id.clone()).or_default();
         chat.status = Some(status);
         if chat.leaving == Leaving::Due {
             chat.leave(id)
@@ -74,34 +79,34 @@ impl Chats {
 
     /// Takes a status read while none arrived since.
     pub fn read(&mut self, thread: ThreadWire) {
-        let Some(chat) = self.0.get_mut(&thread.id) else {
+        let Some(chat) = self.loaded.get_mut(&thread.id) else {
             return;
         };
         if chat.status.is_some() {
             return;
         }
         if thread.status == ThreadStatusWire::NotLoaded {
-            self.0.remove(&thread.id);
+            self.loaded.remove(&thread.id);
         } else {
             chat.status = Some(thread.status);
         }
     }
 
     pub fn closed(&mut self, id: &ThreadId) {
-        self.0.remove(id);
+        self.loaded.remove(id);
     }
 
     /// Codex asked ezra something about a chat, so ezra follows it. Returns the chat to
     /// unsubscribe from.
     pub fn asked_about(&mut self, id: ThreadId) -> Option<ThreadId> {
-        let chat = self.0.entry(id.clone()).or_default();
+        let chat = self.loaded.entry(id.clone()).or_default();
         chat.joined = true;
         chat.leave(id)
     }
 
     /// Codex answered an unsubscribe with `status`, absent when it failed.
     pub fn left(&mut self, id: &ThreadId, status: Option<UnsubscribeStatus>) {
-        let Some(chat) = self.0.get_mut(id) else {
+        let Some(chat) = self.loaded.get_mut(id) else {
             return;
         };
         chat.leaving = match status {
@@ -112,13 +117,13 @@ impl Chats {
     }
 
     pub fn count(&self) -> u32 {
-        u32::try_from(self.0.len()).unwrap_or(u32::MAX)
+        u32::try_from(self.loaded.len()).unwrap_or(u32::MAX)
     }
 
     /// Chats running a turn or waiting for an answer, and chats whose state is not known yet.
     pub fn running(&self) -> u32 {
         let running = self
-            .0
+            .loaded
             .values()
             .filter(|chat| {
                 chat.status
@@ -126,6 +131,11 @@ impl Chats {
             })
             .count();
         u32::try_from(running).unwrap_or(u32::MAX)
+    }
+
+    /// Whether a chat runs or may run, which is so until Codex listed its chats.
+    pub fn are_busy(&self) -> bool {
+        !self.listed || self.running() > 0
     }
 }
 
@@ -160,6 +170,23 @@ mod tests {
 
         assert_eq!(chats.listed(vec![id("a"), id("c")]), [id("c")]);
         assert_eq!(counts(&chats), (3, 2));
+    }
+
+    #[test]
+    fn chats_are_busy_until_listed_and_while_one_runs() {
+        let mut chats = Chats::default();
+        chats.started(thread("a", ThreadStatusWire::Idle));
+        assert!(chats.are_busy());
+
+        chats.listed(Vec::new());
+        assert!(!chats.are_busy());
+
+        chats.changed(id("a"), ThreadStatusWire::Active);
+        assert!(chats.are_busy());
+        chats.changed(id("a"), ThreadStatusWire::Idle);
+        assert!(!chats.are_busy());
+        chats.listed(vec![id("b")]);
+        assert!(chats.are_busy());
     }
 
     #[test]

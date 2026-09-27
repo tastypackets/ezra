@@ -23,7 +23,7 @@ use crate::manager::checks::AgentChecks;
 use crate::manager::remote_control::ServerState;
 use crate::manager::state::AppState;
 use crate::manager::supervision::{
-    Failures, FlagExt, RECHECK_INTERVAL, RunEnd, Signals, Verdict, Wake, Wanted,
+    Failures, FlagExt, RECHECK_INTERVAL, RunEnd, Signals, UpdateWait, Verdict, Wake, Wanted,
 };
 
 /// How often the control socket is tried while the server starts.
@@ -197,6 +197,7 @@ impl AppState {
             mfa_retry_at: None,
             chats: Chats::default(),
             memory_bytes: None,
+            update: None,
         };
         let mut recheck = interval(RECHECK_INTERVAL);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -207,6 +208,7 @@ impl AppState {
         loop {
             run.plan_mfa_retry(codex_remote);
             let mfa_retry_at = run.mfa_retry_at;
+            let update_due_at = run.update.as_ref().and_then(UpdateWait::wakes_at);
             let mut turned_off = false;
             tokio::select! {
                 exit = server.child.wait() => {
@@ -241,11 +243,13 @@ impl AppState {
                             return RunEnd::Failed(message.into());
                         }
                     }
-                    continue;
+                    if !run.update_is_due() {
+                        continue;
+                    }
                 }
                 Some(answer) = run.asking.next() => {
                     turned_off = run.answered(codex_remote, answer);
-                    if !turned_off {
+                    if !turned_off && !run.update_is_due() {
                         continue;
                     }
                 }
@@ -253,6 +257,7 @@ impl AppState {
                     run.retry_mfa(codex_remote);
                     continue;
                 }
+                () = sleep_until(update_due_at.unwrap_or_else(Instant::now)), if update_due_at.is_some() => {}
                 _ = signals.restarts.changed() => {
                     self.stop_codex_server(server).await;
                     return RunEnd::Reconsidered;
@@ -286,11 +291,12 @@ impl AppState {
                 }
             };
             match wanted.verdict(launch) {
-                Verdict::Keep | Verdict::Unsure if turned_off => {
+                Verdict::Keep | Verdict::Unsure | Verdict::Update(_) if turned_off => {
                     self.stop_codex_server(server).await;
                     return RunEnd::Failed(TURNED_OFF.to_owned().into());
                 }
                 Verdict::Keep => {
+                    run.update = None;
                     let unsupported = matches!(
                         wanted,
                         Wanted::Waiting(Some(CodexProblem::UnsupportedVersion))
@@ -305,9 +311,27 @@ impl AppState {
                     return RunEnd::Reconsidered;
                 }
                 Verdict::Update(version) => {
-                    tracing::info!("restarting Codex remote control on Codex {version}");
-                    self.stop_codex_server(server).await;
-                    return RunEnd::Reconsidered;
+                    let busy = run.chats.are_busy();
+                    let waiting = run.update.get_or_insert_with(|| {
+                        UpdateWait::starting_now(
+                            version.clone(),
+                            codex_remote.budget.update_deadline,
+                        )
+                    });
+                    waiting.version = version;
+                    if waiting.is_due(busy) {
+                        tracing::info!(
+                            "restarting Codex remote control on Codex {}",
+                            waiting.version
+                        );
+                        self.stop_codex_server(server).await;
+                        self.remove_unused_versions(Agent::Codex).await;
+                        return RunEnd::Reconsidered;
+                    }
+                    let pending = waiting.pending();
+                    codex_remote
+                        .status
+                        .update(|status| status.wait_for_update(pending));
                 }
             }
         }
@@ -334,6 +358,8 @@ struct CodexRun {
     chats: Chats,
     /// From the last reading of the server's processes.
     memory_bytes: Option<u64>,
+    /// A newer Codex to restart on once no chat runs.
+    update: Option<UpdateWait>,
 }
 
 impl CodexRun {
@@ -531,6 +557,13 @@ impl CodexRun {
         }
     }
 
+    /// Whether the restart on a newer Codex waits no longer.
+    fn update_is_due(&self) -> bool {
+        self.update
+            .as_ref()
+            .is_some_and(|update| update.is_due(self.chats.are_busy()))
+    }
+
     fn retry_mfa(&mut self, codex_remote: &CodexRemote) {
         self.mfa_retry_at = None;
         if codex_remote.status.read(|status| status.problem) == Some(CodexProblem::MfaRequired) {
@@ -615,7 +648,8 @@ impl Asking {
         });
     }
 
-    /// Lists the chats the server has loaded, from at most ten pages.
+    /// Lists the chats the server has loaded, from at most ten pages, unless the connection
+    /// closes first.
     fn threads(&mut self, client: Arc<ControlClient>) {
         self.0.spawn(async move {
             let mut listed = Vec::new();
@@ -626,6 +660,7 @@ impl Asking {
                         listed.extend(page.data);
                         cursor = page.next_cursor;
                     }
+                    Err(ControlError::Closed) => return Answer::Nothing,
                     Err(error) => {
                         tracing::warn!("could not list Codex's chats: {error}");
                         break;
@@ -910,6 +945,7 @@ mod tests {
     use axum::http::StatusCode;
     use nix::sys::signal::{Signal, kill};
     use serde_json::{Value, json};
+    use time::OffsetDateTime;
     use tokio::time::{sleep, timeout};
 
     use super::*;
@@ -932,7 +968,9 @@ mod tests {
     };
     use crate::manager::events::Topic;
     use crate::manager::remote_control::RemoteControlOverview;
-    use crate::manager::supervision::{FIRST_RETRY_DELAY, ServerLog};
+    use crate::manager::supervision::{
+        FIRST_RETRY_DELAY, PendingUpdate, ServerLog, UPDATE_RESTART_DEADLINE,
+    };
 
     const WAIT: Duration = Duration::from_secs(10);
     const BUDGET: ServerBudget = ServerBudget {
@@ -943,6 +981,7 @@ mod tests {
         request: Duration::from_secs(5),
         mfa_retry: Duration::from_secs(10 * 60),
         usage: Duration::from_secs(15),
+        update_deadline: UPDATE_RESTART_DEADLINE,
     };
     const SHORT_READINESS: ServerBudget = ServerBudget {
         readiness: Duration::from_secs(1),
@@ -2725,21 +2764,294 @@ mod tests {
         first.wait_until_gone().await;
     }
 
+    fn connected_on(version: &str) -> impl Fn(&CodexRemoteStatus) -> bool {
+        move |status| connected(status) && status.server_version.as_deref() == Some(version)
+    }
+
+    fn waiting_for(version: &str) -> impl Fn(&CodexRemoteStatus) -> bool {
+        move |status| {
+            status
+                .update
+                .as_ref()
+                .is_some_and(|update| update.version == version)
+        }
+    }
+
     #[tokio::test]
-    async fn a_new_codex_version_restarts_the_server_on_it() {
+    async fn an_idle_codex_restarts_on_a_new_version_at_once_and_the_old_version_is_removed() {
         let manager = manager(BUDGET);
         let cookie = manager.logged_in().await;
-        let (supervisor, _fake, first) = running(&manager, "0.157.1").await;
+        install_codex(
+            &manager,
+            "0.157.1",
+            TAKES_EVERY_FLAG,
+            "cp /bin/sleep \"${0%/*}/sleep\" && exec \"${0%/*}/sleep\" 60",
+        );
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        let _fake = serve_control(&manager, "connected").await;
+        status_until(&manager, connected).await;
+        let first = *servers(&manager).first().expect("a server started");
+        let versions = manager.state.install_paths.versions_directory(Agent::Codex);
 
         install_codex(&manager, "0.157.2", TAKES_EVERY_FLAG, SERVE);
         save(&manager, &cookie, CodexRemoteSettings::default()).await;
         servers_started(&manager, 2).await;
         first.wait_until_gone().await;
-        let running = status_until(&manager, |status| {
-            connected(status) && status.server_version.as_deref() == Some("0.157.2")
-        })
-        .await;
-        assert_eq!(running.restarts, 0);
+        let running = status_until(&manager, connected_on("0.157.2")).await;
+        assert_eq!((running.update, running.restarts), (None, 0));
+        assert!(!versions.join("0.157.1").exists());
+        assert!(versions.join("0.157.2").exists());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    /// Starts a supervisor whose Codex 0.157.1 runs one chat, and waits until the chat counts.
+    async fn with_a_running_chat(
+        manager: &TestManager,
+    ) -> (JoinHandle<()>, FakeControlServer, Pid) {
+        let reads = vec![Reply::Result(json!({"thread": FakeControlServer::thread(
+            "thread-1",
+            json!({"type": "active", "activeFlags": []}),
+        )}))];
+        let (supervisor, fake) =
+            with_chats(manager, &["thread-1"], reads, &["notSubscribed"]).await;
+        status_until(manager, |status| chats(status) == Some((1, 1))).await;
+        let server = *servers(manager).first().expect("a server started");
+        (supervisor, fake, server)
+    }
+
+    /// Installs Codex 0.157.2, and waits until the server on 0.157.1 waits to restart on it.
+    async fn an_update_waits(manager: &TestManager, cookie: &str) -> PendingUpdate {
+        install_codex(manager, "0.157.2", TAKES_EVERY_FLAG, SERVE);
+        save(manager, cookie, CodexRemoteSettings::default()).await;
+        let waiting = status_until(manager, |status| status.update.is_some()).await;
+        assert_eq!(
+            (waiting.state, waiting.server_version.as_deref()),
+            (ServerState::Running, Some("0.157.1"))
+        );
+        let update = waiting.update.expect("an update waits");
+        assert_eq!(update.version, "0.157.2");
+        update
+    }
+
+    #[tokio::test]
+    async fn a_codex_with_a_running_chat_restarts_on_a_new_version_once_no_chat_runs() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, fake, first) = with_a_running_chat(&manager).await;
+        let versions = manager.state.install_paths.versions_directory(Agent::Codex);
+        fake.push(FakeControlServer::thread_status_changed(
+            "thread-1", "active",
+        ));
+        fake.until_requested(UNSUBSCRIBE, 1).await;
+        wait_until(WAIT, || fake.answered(UNSUBSCRIBE), |answered| *answered).await;
+
+        let update = an_update_waits(&manager, &cookie).await;
+        let now = OffsetDateTime::now_utc();
+        assert!(
+            (now.saturating_add(time::Duration::hours(5))
+                ..=now.saturating_add(time::Duration::hours(6)))
+                .contains(&update.restart_by),
+            "{}",
+            update.restart_by
+        );
+        save(&manager, &cookie, CodexRemoteSettings::default()).await;
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(servers(&manager), [first]);
+        assert_eq!(manager.state.codex_remote.status().update, Some(update));
+        assert!(versions.join("0.157.1").exists());
+
+        fake.push(FakeControlServer::thread_status_changed("thread-1", "idle"));
+        servers_started(&manager, 2).await;
+        assert_eq!(fake.requests_of(UNSUBSCRIBE).len(), 1);
+        first.wait_until_gone().await;
+        let running = status_until(&manager, connected_on("0.157.2")).await;
+        assert_eq!((running.update, running.restarts), (None, 0));
+        assert!(!versions.join("0.157.1").exists());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_newer_codex_takes_the_place_of_a_waiting_update_and_keeps_its_deadline() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, fake, first) = with_a_running_chat(&manager).await;
+        let versions = manager.state.install_paths.versions_directory(Agent::Codex);
+        let update = an_update_waits(&manager, &cookie).await;
+
+        install_codex(&manager, "0.157.3", TAKES_EVERY_FLAG, SERVE);
+        save(&manager, &cookie, CodexRemoteSettings::default()).await;
+        let waiting = status_until(&manager, waiting_for("0.157.3")).await;
+        assert_eq!(
+            waiting.update.map(|waiting| waiting.restart_by),
+            Some(update.restart_by)
+        );
+        assert_eq!(servers(&manager), [first]);
+
+        fake.push(FakeControlServer::thread_status_changed("thread-1", "idle"));
+        servers_started(&manager, 2).await;
+        first.wait_until_gone().await;
+        status_until(&manager, connected_on("0.157.3")).await;
+        assert!(!versions.join("0.157.1").exists());
+        assert!(!versions.join("0.157.2").exists());
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_codex_with_a_running_chat_restarts_on_a_new_version_at_the_deadline() {
+        let deadline = Duration::from_secs(1);
+        let manager = manager(ServerBudget {
+            update_deadline: deadline,
+            ..BUDGET
+        });
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake, first) = with_a_running_chat(&manager).await;
+
+        let asked = Instant::now();
+        let update = an_update_waits(&manager, &cookie).await;
+        assert!(
+            update.restart_by <= OffsetDateTime::now_utc().saturating_add(time::Duration::SECOND)
+        );
+        servers_started(&manager, 2).await;
+        assert!(asked.elapsed() >= deadline, "{:?}", asked.elapsed());
+        first.wait_until_gone().await;
+        let running = status_until(&manager, connected_on("0.157.2")).await;
+        assert_eq!((running.update, running.restarts), (None, 0));
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn turning_codex_off_stops_it_at_once_even_with_a_running_chat() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake, first) = with_a_running_chat(&manager).await;
+        an_update_waits(&manager, &cookie).await;
+
+        let off = CodexRemoteSettings {
+            enabled: false,
+            ..CodexRemoteSettings::default()
+        };
+        save(&manager, &cookie, off).await;
+        let stopped = status_until(&manager, |status| status.state == ServerState::Off).await;
+        assert_eq!(
+            (stopped.update, stopped.usage, stopped.restarts),
+            (None, None, 0)
+        );
+        first.wait_until_gone().await;
+        assert_eq!(servers(&manager), [first]);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_restart_on_a_new_version_waits_until_codex_lists_its_chats() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = control(&manager, "connected");
+        fake.reply(
+            "thread/loaded/list",
+            [Reply::Late(
+                Duration::from_secs(3),
+                json!({"data": [], "nextCursor": null}),
+            )],
+        );
+        status_until(&manager, connected).await;
+
+        an_update_waits(&manager, &cookie).await;
+        assert_eq!(servers(&manager).len(), 1);
+        assert!(!fake.answered("thread/loaded/list"));
+
+        servers_started(&manager, 2).await;
+        assert!(fake.answered("thread/loaded/list"));
+        status_until(&manager, connected_on("0.157.2")).await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codex_turning_the_relay_off_by_itself_restarts_it_while_an_update_waits() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, fake, first) = with_a_running_chat(&manager).await;
+        an_update_waits(&manager, &cookie).await;
+
+        fake.push(FakeControlServer::status_changed("disabled"));
+        let retrying = status_until(&manager, |status| status.state == ServerState::Retrying).await;
+        assert_eq!(
+            (
+                retrying.update,
+                retrying.restarts,
+                retrying.last_error.as_deref()
+            ),
+            (None, 1, Some(TURNED_OFF))
+        );
+        first.wait_until_gone().await;
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_list_of_chats_cut_off_by_a_lost_connection_keeps_an_update_waiting() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, fake, first) = with_a_running_chat(&manager).await;
+        an_update_waits(&manager, &cookie).await;
+
+        fake.reply("thread/loaded/list", [Reply::Never]);
+        fake.disconnect();
+        fake.until_requested("thread/loaded/list", 2).await;
+        fake.disconnect();
+        fake.until_requested("thread/loaded/list", 3).await;
+        let waiting = status_until(&manager, connected).await;
+        assert!(waiting_for("0.157.2")(&waiting));
+        assert_eq!(servers(&manager), [first]);
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn a_version_without_remote_control_drops_a_waiting_update_and_a_later_one_waits_anew() {
+        let manager = manager(BUDGET);
+        let cookie = manager.logged_in().await;
+        let (supervisor, _fake, first) = with_a_running_chat(&manager).await;
+        let dropped = an_update_waits(&manager, &cookie).await;
+
+        install_codex(
+            &manager,
+            "0.100.0",
+            "'app-server --remote-control --help') exit 2 ;;",
+            SERVE,
+        );
+        save(&manager, &cookie, CodexRemoteSettings::default()).await;
+        let kept = status_until(&manager, |status| status.update.is_none()).await;
+        assert_eq!(
+            (kept.state, kept.problem, kept.server_version.as_deref()),
+            (
+                ServerState::Running,
+                Some(CodexProblem::UnsupportedVersion),
+                Some("0.157.1")
+            )
+        );
+        assert_eq!(servers(&manager), [first]);
+
+        install_codex(&manager, "0.157.3", TAKES_EVERY_FLAG, SERVE);
+        save(&manager, &cookie, CodexRemoteSettings::default()).await;
+        let waiting = status_until(&manager, waiting_for("0.157.3")).await;
+        assert_eq!(waiting.problem, None);
+        assert!(
+            waiting
+                .update
+                .is_some_and(|update| update.restart_by > dropped.restart_by)
+        );
+        assert_eq!(servers(&manager), [first]);
 
         shut_down(&manager, supervisor).await;
     }
@@ -2766,10 +3078,7 @@ mod tests {
         save(&manager, &cookie, CodexRemoteSettings::default()).await;
         servers_started(&manager, 2).await;
         first.wait_until_gone().await;
-        status_until(&manager, |status| {
-            connected(status) && status.server_version.as_deref() == Some("0.157.2")
-        })
-        .await;
+        status_until(&manager, connected_on("0.157.2")).await;
 
         shut_down(&manager, supervisor).await;
     }

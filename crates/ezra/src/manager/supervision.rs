@@ -29,7 +29,7 @@ pub const USAGE_INTERVAL: Duration = Duration::from_secs(15);
 pub const FIRST_RETRY_DELAY: Duration = Duration::from_secs(5);
 const LONGEST_RETRY_DELAY: Duration = Duration::from_secs(300);
 const HEALTHY_RUN: Duration = Duration::from_secs(600);
-const UPDATE_RESTART_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
+pub const UPDATE_RESTART_DEADLINE: Duration = Duration::from_secs(6 * 60 * 60);
 pub const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const OUTPUT_LINES_KEPT: usize = 20;
 const OUTPUT_LINES_REPORTED: usize = 5;
@@ -181,12 +181,12 @@ pub enum Verdict {
     Update(String),
 }
 
-/// A newer Claude Code a running server waits to restart on.
+/// A newer version of the agent a running server waits to restart on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PendingUpdate {
     /// The installed version the server restarts on.
     pub version: String,
-    /// When it restarts even with sessions running.
+    /// When it restarts even while it is busy.
     #[serde(with = "time::serde::rfc3339")]
     pub restart_by: OffsetDateTime,
 }
@@ -199,16 +199,21 @@ pub struct UpdateWait {
 }
 
 impl UpdateWait {
-    pub fn starting_now(version: String) -> Self {
+    /// Waits at most `longest` from now.
+    pub fn starting_now(version: String, longest: Duration) -> Self {
         Self {
             version,
-            restart_by: OffsetDateTime::now_utc().saturating_add(
-                time::Duration::try_from(UPDATE_RESTART_DEADLINE).unwrap_or(time::Duration::MAX),
-            ),
+            restart_by: OffsetDateTime::now_utc()
+                .saturating_add(time::Duration::try_from(longest).unwrap_or(time::Duration::MAX)),
             deadline: Instant::now()
-                .checked_add(UPDATE_RESTART_DEADLINE)
+                .checked_add(longest)
                 .unwrap_or_else(Instant::now),
         }
+    }
+
+    /// The deadline while it is still ahead.
+    pub fn wakes_at(&self) -> Option<Instant> {
+        (self.deadline > Instant::now()).then_some(self.deadline)
     }
 
     pub fn pending(&self) -> PendingUpdate {
@@ -663,15 +668,17 @@ mod tests {
 
     #[test]
     fn an_update_waits_while_busy_until_the_deadline() {
-        let waiting = UpdateWait::starting_now("2.1.290".to_owned());
+        let waiting = UpdateWait::starting_now("2.1.290".to_owned(), UPDATE_RESTART_DEADLINE);
         assert!(!waiting.is_due(true));
         assert!(waiting.is_due(false));
+        assert_eq!(waiting.wakes_at(), Some(waiting.deadline));
         let overdue = UpdateWait {
             deadline: Instant::now(),
             ..waiting
         };
         assert!(overdue.is_due(true));
         assert!(overdue.is_due(false));
+        assert_eq!(overdue.wakes_at(), None);
         assert_eq!(overdue.pending().version, "2.1.290");
         assert!(overdue.pending().restart_by > OffsetDateTime::now_utc());
     }
