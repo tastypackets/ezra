@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-import { inContainer, installFakeCodex, removeFakeCodex } from "./manager.ts";
+import {
+  CODEX_SIGNED_OUT,
+  inContainer,
+  installFakeCodex,
+  removeFakeCodex,
+  writeInContainer,
+} from "./manager.ts";
 
 const SIGNED_IN = "/tmp/e2e-codex-signed-in";
 
@@ -41,4 +47,39 @@ test("a Codex sign-in and sign-out show up without a refresh", async ({ page }) 
   await row.getByRole("button", { name: "More Codex actions" }).click();
   await page.getByRole("menuitem", { name: "Sign out" }).click();
   await expect(row).toContainText("Signed out");
+});
+
+test("uninstalling Codex keeps its saved data unless asked to delete it", async ({ page }) => {
+  const saved = "/config/codex/e2e-saved";
+  const row = page.getByRole("row", { name: /Codex/ });
+  const dialog = page.getByRole("alertdialog", { name: "Uninstall Codex?" });
+  const deleteData = dialog.getByRole("switch", {
+    name: "Also delete its sign-in, settings and chats",
+  });
+  try {
+    for (const deleting of [true, false]) {
+      writeInContainer(saved, "kept");
+      installFakeCodex("9.9.9", CODEX_SIGNED_OUT);
+      await page.goto("./");
+      await expect(row).toContainText("9.9.9");
+      await row.getByRole("button", { name: "More Codex actions" }).click();
+      await page.getByRole("menuitem", { name: "Uninstall" }).click();
+      await expect(dialog).toContainText("Stops its servers and removes the program.");
+      await expect(deleteData).not.toBeChecked();
+      if (deleting) {
+        await deleteData.click();
+      }
+      await dialog.getByRole("button", { name: "Uninstall" }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText("Codex uninstalled.")).toBeVisible();
+      await expect(row.getByRole("button", { name: "Install" })).toBeFocused();
+      inContainer("test", "!", "-e", "/home/dev/.local/bin/codex");
+      expect(inContainer("sh", "-c", 'cat "$1" 2>/dev/null || true', "sh", saved)).toBe(
+        deleting ? "" : "kept",
+      );
+    }
+    inContainer("test", "-d", "/config/codex");
+  } finally {
+    inContainer("rm", "-f", saved);
+  }
 });

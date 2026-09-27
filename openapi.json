@@ -197,6 +197,61 @@
         }
       }
     },
+    "/api/v1/agents/{agent}": {
+      "delete": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Uninstall an agent",
+        "description": "Stops the agent's servers, removes its program and, when asked, its saved data.",
+        "operationId": "uninstallAgent",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "description": "The agent",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          },
+          {
+            "name": "saved_data",
+            "in": "query",
+            "description": "Also delete the agent's sign-in, settings and chats.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Uninstalled"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The files could not be removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents/{agent}/install": {
       "post": {
         "tags": [
@@ -434,6 +489,42 @@
           },
           "502": {
             "description": "The CLI could not sign out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent}/restart-servers": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Restart an agent's servers",
+        "description": "Stops the agent's remote control servers with their running sessions, then starts them again.",
+        "operationId": "restartAgentServers",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "description": "The agent",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Restarting"
+          },
+          "401": {
+            "description": "Not signed in to the manager",
             "content": {
               "application/json": {
                 "schema": {

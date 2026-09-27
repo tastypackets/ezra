@@ -1,13 +1,20 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use serde::Deserialize;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::{Instant, sleep};
+use utoipa::IntoParams;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
-use std::sync::Arc;
 
 use crate::manager::agents::{Agent, InstallProgress};
 use crate::manager::events::Topic;
+use crate::manager::processes::Process;
 use crate::manager::status::AgentStatus;
 use crate::manager::updates::LatestRelease;
+use crate::path_ext::PathExt;
 
 #[utoipa::path(
     get,
@@ -51,6 +58,72 @@ pub async fn install(
     Ok(Json(AgentStatus::gather(agent, &state).await))
 }
 
+/// How long an uninstall waits for the agent's servers and sessions to stop.
+const UNINSTALL_STOP_TIMEOUT: Duration = Duration::from_secs(45);
+const UNINSTALL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct UninstallQuery {
+    /// Also delete the agent's sign-in, settings and chats.
+    #[serde(default)]
+    saved_data: bool,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/agents/{agent}",
+    operation_id = "uninstallAgent",
+    tag = "agents",
+    summary = "Uninstall an agent",
+    description = "Stops the agent's servers, removes its program and, when asked, its saved data.",
+    params(("agent" = Agent, Path, description = "The agent"), UninstallQuery),
+    responses(
+        (status = 204, description = "Uninstalled"),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 500, description = "The files could not be removed", body = ErrorBody)
+    )
+)]
+pub async fn uninstall(
+    _: Session,
+    State(state): State<AppState>,
+    Path(agent): Path<Agent>,
+    Query(query): Query<UninstallQuery>,
+) -> Result<StatusCode, ApiError> {
+    let uninstalling = state.clone();
+    tokio::spawn(async move {
+        uninstalling
+            .uninstall_and_record(agent, query.saved_data)
+            .await
+    })
+    .await
+    .map_err(internal)??;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{agent}/restart-servers",
+    operation_id = "restartAgentServers",
+    tag = "agents",
+    summary = "Restart an agent's servers",
+    description = "Stops the agent's remote control servers with their running sessions, then starts them again.",
+    params(("agent" = Agent, Path, description = "The agent")),
+    responses(
+        (status = 204, description = "Restarting"),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody)
+    )
+)]
+pub async fn restart_servers(
+    _: Session,
+    State(state): State<AppState>,
+    Path(agent): Path<Agent>,
+) -> StatusCode {
+    tracing::info!("restarting the {agent} servers");
+    state.restart_remote(agent);
+    StatusCode::NO_CONTENT
+}
+
 impl AppState {
     /// Runs at manager start: a configured agent is missing after the container was recreated.
     pub async fn reinstall_configured_agents(self) {
@@ -81,6 +154,61 @@ impl AppState {
                 }
                 Err(error) => tracing::warn!("could not link the kept {agent}: {error}"),
             }
+        }
+    }
+
+    async fn uninstall_and_record(&self, agent: Agent, saved_data: bool) -> Result<(), ApiError> {
+        let _one_install_at_a_time = self.install_lock.lock().await;
+        self.update_settings(|settings| {
+            settings.agent_mut(agent).configured = false;
+            Ok::<(), ApiError>(())
+        })
+        .await?;
+        let command = self.install_paths.command(agent);
+        tokio::task::spawn_blocking(move || command.remove_if_present())
+            .await
+            .map_err(internal)?
+            .map_err(|error| ApiError::Internal(format!("could not uninstall {agent}: {error}")))?;
+        self.latest_releases.lock().await.remove(&agent);
+        self.agent_checks.refresh(agent).await;
+        self.reconsider_remote(agent);
+        self.events.publish(Topic::Agents);
+        if !self.wait_until_nothing_runs(agent).await {
+            tracing::warn!("{agent} was still running when its files were removed");
+        }
+        let paths = Arc::clone(&self.install_paths);
+        tokio::task::spawn_blocking(move || {
+            paths.uninstall(agent)?;
+            if saved_data {
+                paths.remove_saved_data(agent)?;
+            }
+            Ok::<(), std::io::Error>(())
+        })
+        .await
+        .map_err(internal)?
+        .map_err(|error| ApiError::Internal(format!("could not uninstall {agent}: {error}")))?;
+        tracing::info!("{agent} is uninstalled");
+        self.agent_checks.refresh(agent).await;
+        self.events.publish(Topic::Agents);
+        Ok(())
+    }
+
+    /// Waits until no process runs from the agent's kept versions. False when it timed out.
+    async fn wait_until_nothing_runs(&self, agent: Agent) -> bool {
+        let versions = self.install_paths.versions_directory(agent);
+        let deadline = Instant::now().checked_add(UNINSTALL_STOP_TIMEOUT);
+        loop {
+            let directory = versions.clone();
+            let running = tokio::task::spawn_blocking(move || Process::running_from(&directory))
+                .await
+                .unwrap_or_default();
+            if running.is_empty() {
+                return true;
+            }
+            if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
+                return false;
+            }
+            sleep(UNINSTALL_POLL_INTERVAL).await;
         }
     }
 
@@ -164,6 +292,60 @@ mod tests {
                 available_update: None,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn uninstalling_removes_the_program_and_only_on_request_the_saved_data() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        assert_eq!(
+            manager.delete("/api/v1/agents/claude", None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        for agent in Agent::ALL {
+            manager.install_fake_version(agent, "1.0.0", "true");
+            let saved = manager
+                .state
+                .install_paths
+                .config_directory(agent)
+                .expect("the test manager has config directories")
+                .join("saved.json");
+            std::fs::create_dir_all(saved.parent().expect("a directory")).expect("is created");
+            std::fs::write(&saved, "{}").expect("is written");
+        }
+        manager
+            .state
+            .update_settings(|settings| {
+                for agent in Agent::ALL {
+                    settings.agent_mut(agent).configured = true;
+                }
+                Ok::<(), ApiError>(())
+            })
+            .await
+            .expect("settings are saved");
+
+        for (agent, path) in [
+            (Agent::Claude, "/api/v1/agents/claude"),
+            (Agent::Codex, "/api/v1/agents/codex?saved_data=true"),
+        ] {
+            let response = manager.delete(path, Some(&cookie)).await;
+            assert_eq!(response.status(), StatusCode::NO_CONTENT, "{agent}");
+            let paths = &manager.state.install_paths;
+            assert!(!paths.command(agent).exists(), "{agent}");
+            assert!(!paths.versions_directory(agent).exists(), "{agent}");
+            assert!(!manager.state.settings.lock().await.agent(agent).configured);
+        }
+        let config = |agent| {
+            manager
+                .state
+                .install_paths
+                .config_directory(agent)
+                .expect("the test manager has config directories")
+                .to_path_buf()
+        };
+        assert!(config(Agent::Claude).join("saved.json").exists());
+        assert!(config(Agent::Codex).is_dir());
+        assert!(!config(Agent::Codex).join("saved.json").exists());
     }
 
     #[tokio::test]

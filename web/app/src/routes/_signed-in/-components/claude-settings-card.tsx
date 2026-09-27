@@ -5,12 +5,10 @@ import {
 } from "@ezra/client/react-query.gen";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { cn } from "cn";
 import { useId } from "react";
 
 import { Autocomplete } from "@/components/ui/autocomplete";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Field,
   FieldContent,
@@ -33,12 +31,14 @@ import {
   RELEASE_CHANNELS,
   SETTINGS_DESCRIPTIONS,
 } from "@/content/settings";
+import { SETTINGS_FILE_DESCRIPTIONS } from "@/content/settings-file";
 import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { foldersQueryOptions } from "@/queries/folder-queries";
 
 import { RadioChoice } from "./radio-choice";
-import { SettingsFileSection } from "./settings-file-section";
+import { SettingsCardFooter } from "./settings-card-footer";
+import { SettingsFileSection, useSettingsFileDraft } from "./settings-file-section";
 
 const CHANNEL_ORDER: readonly ReleaseChannel[] = ["latest", "stable"];
 
@@ -75,21 +75,34 @@ export function ClaudeSettingsCard() {
       queryClient.setQueryData(getClaudeSettingsOptions().queryKey, saved);
       void queryClient.invalidateQueries({ queryKey: agentsQueryOptions.queryKey });
       void queryClient.invalidateQueries({ queryKey: foldersQueryOptions.queryKey });
-      toast.add({ title: SETTINGS_DESCRIPTIONS.saved });
     },
   });
+  const file = useSettingsFileDraft("claude", installed);
   const form = useForm({
     defaultValues: settings,
     onSubmit: async ({ value, formApi }) => {
+      const fileChanged = file.dirty;
+      const settingsChanged = !formApi.state.isDefaultValue || !fileChanged;
       try {
-        formApi.reset(await save.mutateAsync({ body: value }));
+        if (settingsChanged) {
+          formApi.reset(await save.mutateAsync({ body: value }));
+        }
+        if (fileChanged) {
+          await file.save();
+        }
       } catch {
         return;
       }
+      toast.add({
+        title:
+          settingsChanged || !file.file
+            ? SETTINGS_DESCRIPTIONS.saved
+            : SETTINGS_FILE_DESCRIPTIONS.saved(file.file.path),
+      });
     },
   });
   return (
-    <Card aria-labelledby={ids.title}>
+    <Card id="claude" aria-labelledby={ids.title}>
       <CardHeader>
         <CardTitle id={ids.title}>{AGENT_NAMES.claude}</CardTitle>
       </CardHeader>
@@ -293,20 +306,23 @@ export function ClaudeSettingsCard() {
             </form.Field>
           </FieldGroup>
         </CardContent>
-        <CardFooter className={cn("justify-between gap-4", installed && "rounded-none border-b")}>
-          <p role="alert" className="text-destructive">
-            {save.isError ? errorMessage(save.error) : null}
-          </p>
-          <form.Subscribe selector={(state) => state.isSubmitting}>
-            {(isSubmitting) => (
-              <Button type="submit" loading={isSubmitting}>
-                {SETTINGS_DESCRIPTIONS.save}
-              </Button>
-            )}
-          </form.Subscribe>
-        </CardFooter>
+        {installed ? <SettingsFileSection draft={file} /> : null}
+        <form.Subscribe selector={(state) => [state.isSubmitting, !state.isDefaultValue] as const}>
+          {([isSubmitting, settingsChanged]) => (
+            <SettingsCardFooter
+              error={save.isError ? errorMessage(save.error) : undefined}
+              file={file}
+              submitting={isSubmitting}
+              settingsChanged={settingsChanged}
+              onRevert={() => {
+                form.reset();
+                save.reset();
+                file.revert();
+              }}
+            />
+          )}
+        </form.Subscribe>
       </form>
-      {installed ? <SettingsFileSection agent="claude" /> : null}
     </Card>
   );
 }

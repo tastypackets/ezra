@@ -571,16 +571,21 @@ impl AppState {
         let mut watcher = FolderWatcher::start(&self.projects.0);
         let mut rescan = interval(watcher.rescan_interval());
         rescan.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut github_account = self.github_account.subscribe();
+        let mut github_sign_in = self.github_sign_in.subscribe();
         let mut known: Vec<Folder> = Vec::new();
         loop {
             tokio::select! {
                 _ = rescan.tick() => {}
-                _ = github_account.changed() => {}
+                _ = github_sign_in.changed() => {}
                 () = watcher.settled_change() => {}
             }
             let projects = self.projects.clone();
-            let account = github_account.borrow_and_update().clone();
+            let account = {
+                let sign_in = github_sign_in.borrow_and_update();
+                sign_in
+                    .signed_in
+                    .then(|| sign_in.account.clone().unwrap_or_default())
+            };
             let described = tokio::task::spawn_blocking(move || {
                 let folders = projects.folders()?;
                 if let Err(error) =

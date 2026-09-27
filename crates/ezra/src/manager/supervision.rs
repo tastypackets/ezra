@@ -564,6 +564,14 @@ impl AppState {
         }
     }
 
+    /// Starts the agent's remote control servers again, so they read its settings file anew.
+    pub fn restart_remote(&self, agent: Agent) {
+        match agent {
+            Agent::Claude => self.remote_control.supervision.restart(),
+            Agent::Codex => self.codex_remote.supervision.restart(),
+        }
+    }
+
     /// Skipped while an install runs, which removes them itself.
     pub async fn remove_unused_versions(&self, agent: Agent) {
         let Ok(_one_install_at_a_time) = self.install_lock.try_lock() else {

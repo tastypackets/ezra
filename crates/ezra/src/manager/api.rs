@@ -2,7 +2,7 @@ mod agents;
 mod clones;
 mod events;
 mod folders;
-mod git;
+pub mod git;
 mod login;
 mod manager;
 mod remote_control;
@@ -35,7 +35,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/login", post(session::log_in))
         .route("/api/v1/logout", post(session::log_out))
         .route("/api/v1/agents", get(agents::list))
+        .route("/api/v1/agents/{agent}", delete(agents::uninstall))
         .route("/api/v1/agents/{agent}/install", post(agents::install))
+        .route(
+            "/api/v1/agents/{agent}/restart-servers",
+            post(agents::restart_servers),
+        )
         .route("/api/v1/agents/{agent}/login", post(login::start))
         .route(
             "/api/v1/agents/{agent}/login/code",
@@ -216,6 +221,8 @@ pub struct ErrorBody {
         session::log_out,
         agents::list,
         agents::install,
+        agents::uninstall,
+        agents::restart_servers,
         login::start,
         login::submit_code,
         login::log_out,

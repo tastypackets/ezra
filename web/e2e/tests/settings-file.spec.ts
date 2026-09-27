@@ -6,6 +6,7 @@ import {
   inContainer,
   installFakeClaude,
   installFakeCodex,
+  nudgeRemoteControl,
   removeFakeClaude,
   removeFakeCodex,
   writeInContainer,
@@ -17,8 +18,8 @@ const CODEX_FILE = `${CODEX_DIRECTORY}/config.toml`;
 const CLAUDE_API = "**/api/v1/agents/claude/settings-file";
 const CLAUDE_TITLE = "Claude Code settings.json";
 const CODEX_TITLE = "Codex config.toml";
-const CLAUDE_HINT =
-  "Running Claude Code sessions apply most changes within seconds, Remote Control servers only when they start.";
+const CLAUDE_STILL_RUNNING =
+  "Remote Control servers keep the old settings. Restarting them ends their running sessions.";
 const CHANGED = (path: string) =>
   `${path} changed on disk. Revert loads it, Overwrite replaces it with your text.`;
 
@@ -60,6 +61,8 @@ function card(page: Page, title: string) {
   return page.getByRole("region", { name: title, exact: true });
 }
 
+const AGENT_OF: Record<string, string> = { [CLAUDE_TITLE]: "Claude Code", [CODEX_TITLE]: "Codex" };
+
 /** Pastes `text` at the cursor, as the clipboard would. */
 async function paste(editor: Locator, text: string): Promise<void> {
   await editor.evaluate((element, pasted) => {
@@ -73,7 +76,7 @@ async function paste(editor: Locator, text: string): Promise<void> {
 
 async function openSettings(page: Page, title: string) {
   await page.goto("./settings");
-  const box = card(page, title);
+  const box = page.getByRole("region", { name: AGENT_OF[title], exact: true });
   return {
     box,
     editor: box.getByRole("textbox", { name: title }),
@@ -172,6 +175,46 @@ test("a file over 2 MiB is refused", async ({ request }) => {
   expect(await refused.json()).toEqual({ error: "the text is larger than 2 MiB" });
 });
 
+test("a save while Remote Control runs offers to restart its servers", async ({
+  page,
+  request,
+}) => {
+  installFakeClaude(
+    "2.1.0-e2e",
+    "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600",
+  );
+  await nudgeRemoteControl(request);
+  writeInContainer(CLAUDE_FILE, "{}");
+  const serverPid = () => inContainer("sh", "-c", "pgrep -xf 'sleep 600' || true").trim();
+  try {
+    const { box, editor, save } = await openSettings(page, CLAUDE_TITLE);
+    const stillRunning = box.getByText(CLAUDE_STILL_RUNNING);
+    const restart = box.getByRole("button", { name: "Restart servers" });
+    await expect.poll(serverPid).not.toBe("");
+    const before = serverPid();
+    await editor.click();
+    await page.keyboard.press("Control+A");
+    await page.keyboard.type('{"model": "opus"}');
+    await expect(stillRunning).toHaveCount(0);
+    await save.click();
+    await expect(page.getByText(`${CLAUDE_FILE} saved.`).last()).toBeVisible();
+    await expect(stillRunning).toBeVisible();
+
+    await editor.click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" ");
+    await expect(stillRunning).toBeHidden();
+    await save.click();
+    await restart.click();
+    await expect(page.getByText("Restarting the Claude Code servers.")).toBeVisible();
+    await expect(stillRunning).toBeHidden();
+    await expect.poll(serverPid, { timeout: 15_000 }).not.toMatch(new RegExp(`^(${before}|)$`));
+  } finally {
+    inContainer("rm", "-f", CLAUDE_FILE);
+    await removeFakeClaude(request);
+  }
+});
+
 test.describe("with Claude Code installed", () => {
   test.beforeEach(() => installFakeClaude("2.1.0-e2e"));
   test.afterEach(async ({ request }) => {
@@ -184,10 +227,9 @@ test.describe("with Claude Code installed", () => {
       '\uFEFF{\r\n\t"model" :  "opus",\r\n\t"unknownKey": {\r\n\t\t"allow": []\r\n\t}\r\n}\r\n\r\n';
     writeInContainer(CLAUDE_FILE, opened, "640");
     const { box, editor, save, revert } = await openSettings(page, CLAUDE_TITLE);
-    await expect(box).toContainText(CLAUDE_HINT);
     await expect(editor).toContainText('"model" :  "opus"');
-    await expect(save).toBeDisabled();
     await expect(revert).toBeDisabled();
+    await expect(save).toBeEnabled();
 
     await editor.click();
     await page.keyboard.press("Control+Home");
@@ -209,8 +251,9 @@ test.describe("with Claude Code installed", () => {
     await save.click();
     expect((await saved).status()).toBe(200);
     await expect(page.getByText(`${CLAUDE_FILE} saved.`).last()).toBeVisible();
-    await expect(save).toBeDisabled();
-    await expect(editor).toBeFocused();
+    await expect(revert).toBeDisabled();
+    await expect(save).toBeFocused();
+    await expect(box.getByText(CLAUDE_STILL_RUNNING)).toHaveCount(0);
     expect(bytesOf(CLAUDE_FILE)).toEqual(
       Buffer.from(
         '\uFEFF\r\n{\r\n\t"model" :  "opus",\r\n\t"effort": "high",\r\n\t"unknownKey": {\r\n\t\t"allow": [],\r\n\t\t"deny": []\r\n\t}\r\n}\r\n\r\n',
@@ -236,9 +279,9 @@ test.describe("with Claude Code installed", () => {
 
   test("a missing settings.json reads as empty and Save creates it", async ({ page }) => {
     inContainer("rm", "-f", CLAUDE_FILE);
-    const { box, editor, save } = await openSettings(page, CLAUDE_TITLE);
+    const { revert, box, editor, save } = await openSettings(page, CLAUDE_TITLE);
     await expect(editor).toHaveText("");
-    await expect(save).toBeDisabled();
+    await expect(revert).toBeDisabled();
 
     await editor.click();
     await page.keyboard.type("{,");
@@ -252,6 +295,7 @@ test.describe("with Claude Code installed", () => {
     expect(bytesOf(CLAUDE_FILE).toString()).toBe("  ");
     expect(modeOf(CLAUDE_FILE)).toBe("600");
 
+    await editor.click();
     await page.keyboard.press("Control+A");
     await page.keyboard.type('{"model": "opus"}');
     const saved = savedFile(page);
@@ -271,9 +315,7 @@ test.describe("with Claude Code installed", () => {
     await expect(problem).toBeVisible();
     await expect(problem).toHaveAttribute("role", "alert");
     await expect(editor).toHaveAttribute("aria-invalid", "true");
-    await expect(editor).toHaveAccessibleDescription(
-      `${CLAUDE_HINT} Line 1, column 8: Trailing comma`,
-    );
+    await expect(editor).toHaveAccessibleDescription("Line 1, column 8: Trailing comma");
     await expect(save).toBeDisabled();
 
     await page.keyboard.press("Control+Shift+M");
@@ -333,15 +375,15 @@ test.describe("with Claude Code installed", () => {
     await expect(editor).not.toContainText("mine");
     await expect(editor).toBeFocused();
     await expect(box.getByText(CHANGED(CLAUDE_FILE))).toHaveCount(0);
-    await expect(save).toBeDisabled();
+    await expect(revert).toBeDisabled();
 
     await page.keyboard.press("Control+Z");
     await expect(editor).toHaveText('{"mine": 1}');
-    await expect(save).toBeEnabled();
+    await expect(revert).toBeEnabled();
     await expect(box.getByText(CHANGED(CLAUDE_FILE))).toHaveCount(0);
     await page.keyboard.press("Control+Y");
     await expect(editor).toContainText('"model": "haiku"');
-    await expect(save).toBeDisabled();
+    await expect(revert).toBeDisabled();
 
     await page.keyboard.press("Control+A");
     await page.keyboard.type('{"mine": true}');
@@ -435,12 +477,10 @@ test.describe("with Claude Code installed", () => {
     const { box, editor } = await openSettings(page, CLAUDE_TITLE);
     await expect(box.getByText(`${CLAUDE_FILE} is not UTF-8 text`)).toBeVisible();
     await expect(editor).toHaveCount(0);
-    await expect(box).toHaveCSS("padding-bottom", "16px");
 
     writeInContainer(CLAUDE_FILE, "{}");
     await box.getByRole("button", { name: "Try again" }).click();
     await expect(editor).toHaveText("{}");
-    await expect(box).toHaveCSS("padding-bottom", "0px");
     await editor.click();
     await page.keyboard.press("Control+A");
     await page.keyboard.type('{"model": "opus"}');
@@ -494,7 +534,7 @@ test.describe("with Claude Code installed", () => {
   test("text typed while a save is on its way stays unsaved, with no notice", async ({ page }) => {
     const send = await holdEvents(page);
     writeInContainer(CLAUDE_FILE, "{}");
-    const { box, editor, save, overwrite } = await openSettings(page, CLAUDE_TITLE);
+    const { revert, box, editor, save, overwrite } = await openSettings(page, CLAUDE_TITLE);
     await expect(editor).toHaveText("{}");
     const put = new Promise<Route>((resolve) => {
       void page.route(CLAUDE_API, (route) =>
@@ -524,7 +564,7 @@ test.describe("with Claude Code installed", () => {
     await expect(page.getByText(`${CLAUDE_FILE} saved.`).last()).toBeVisible();
     expect(bytesOf(CLAUDE_FILE).toString()).toBe('{"a": 1}');
     await expect(editor).toHaveText('{"a": 12}');
-    await expect(save).toBeEnabled();
+    await expect(revert).toBeEnabled();
 
     const echo = claudeFileRead(page);
     await send("settings_file");
@@ -541,7 +581,7 @@ test.describe("with Claude Code installed", () => {
   test("a read that started before a save does not undo it", async ({ page }) => {
     const send = await holdEvents(page);
     writeInContainer(CLAUDE_FILE, '{"model": "opus"}');
-    const { box, editor, save } = await openSettings(page, CLAUDE_TITLE);
+    const { revert, box, editor, save } = await openSettings(page, CLAUDE_TITLE);
     await expect(editor).toHaveText('{"model": "opus"}');
     const stale = new Promise<{ route: Route; response: APIResponse }>((resolve) => {
       void page.route(
@@ -563,7 +603,7 @@ test.describe("with Claude Code installed", () => {
     await settled;
     await drawn(page);
     await expect(editor).toHaveText('{"model": "haiku"}');
-    await expect(save).toBeDisabled();
+    await expect(revert).toBeDisabled();
     await expect(box.getByText(CHANGED(CLAUDE_FILE))).toHaveCount(0);
     expect(bytesOf(CLAUDE_FILE).toString()).toBe('{"model": "haiku"}');
   });
@@ -635,14 +675,14 @@ test.describe("with Claude Code installed", () => {
 
   test("Tab moves focus out of the editor instead of typing", async ({ page }) => {
     writeInContainer(CLAUDE_FILE, "{}");
-    const { editor, save } = await openSettings(page, CLAUDE_TITLE);
+    const { revert, editor } = await openSettings(page, CLAUDE_TITLE);
     await editor.click();
     await expect(editor).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(editor).not.toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(editor).toBeFocused();
-    await expect(save).toBeDisabled();
+    await expect(revert).toBeDisabled();
     expect(bytesOf(CLAUDE_FILE).toString()).toBe("{}");
   });
 });
@@ -659,9 +699,6 @@ test.describe("with Codex installed", () => {
 
   test("a missing config.toml and its folder are created on save", async ({ page }) => {
     const { box, editor, save } = await openSettings(page, CODEX_TITLE);
-    await expect(box).toContainText(
-      "New Codex sessions use the saved file, running ones keep the settings they started with.",
-    );
     await expect(editor).toHaveText("");
     await editor.click();
     await page.keyboard.type("a =");
@@ -762,23 +799,23 @@ test.describe("with Codex installed", () => {
   }) => {
     const opened = "max = 9223372036854775807\nat = 07:32:60\n";
     writeInContainer(CODEX_FILE, opened);
-    const { box, editor, save } = await openSettings(page, CODEX_TITLE);
+    const { revert, box, editor, save } = await openSettings(page, CODEX_TITLE);
     const hint = box.getByText("Line 2, column 6: Invalid date");
     await expect(hint).toBeVisible();
     await expect(editor).toHaveAttribute("aria-invalid", "true");
-    await expect(save).toBeDisabled();
+    await expect(revert).toBeDisabled();
 
     await editor.click();
     await page.keyboard.press("Control+End");
     await page.keyboard.type("# mine");
-    await expect(save).toBeEnabled();
+    await expect(revert).toBeEnabled();
     const saved = savedFile(page);
     await save.click();
     expect((await saved).status()).toBe(200);
     expect(bytesOf(CODEX_FILE).toString()).toBe(`${opened}# mine`);
     await expect(hint).toBeHidden();
     await expect(editor).not.toHaveAttribute("aria-invalid");
-    await expect(save).toBeDisabled();
+    await expect(revert).toBeDisabled();
   });
 
   test("the server's column leaves out the BOM the editor hides", async ({ page }) => {

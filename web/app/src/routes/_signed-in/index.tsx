@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { isInstallMutation } from "@/hooks/use-agent-actions";
 import { INSTALL_POLL_MS, agentsQueryOptions } from "@/queries/agent-queries";
+import { gitStatusQueryOptions } from "@/queries/git-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { AgentsCard } from "./-components/agents-card";
@@ -14,6 +15,7 @@ export const Route = createFileRoute("/_signed-in/")({
     await Promise.all([
       context.queryClient.ensureQueryData(agentsQueryOptions),
       context.queryClient.ensureQueryData(remoteControlQueryOptions),
+      context.queryClient.ensureQueryData(gitStatusQueryOptions),
     ]);
   },
   component: DashboardPage,

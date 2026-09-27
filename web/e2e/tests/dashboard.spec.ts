@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { Route } from "@playwright/test";
 
 import {
   inContainer,
@@ -311,4 +312,39 @@ test.describe("on a phone", () => {
       await removeFakeClaude(request);
     }
   });
+});
+
+test("an install in progress does not move the agents table's columns", async ({ page }) => {
+  const events: Route[] = [];
+  await page.route("**/api/v1/events", (route) => {
+    events.push(route);
+  });
+  await page.route("**/api/v1/agents", async (route) => {
+    const response = await route.fetch();
+    const agents = (await response.json()) as { agent: string }[];
+    await route.fulfill({
+      response,
+      json: agents.map((agent) =>
+        agent.agent === "claude"
+          ? { ...agent, install_progress: { received_bytes: 45, total_bytes: 100 } }
+          : agent,
+      ),
+    });
+  });
+  await page.goto("./");
+  const headers = page.getByRole("columnheader");
+  const edges = () =>
+    headers.evaluateAll((cells) => cells.map((cell) => cell.getBoundingClientRect().left));
+  await expect(headers).toHaveCount(7);
+  const before = await edges();
+  await expect.poll(() => events.length).toBeGreaterThan(0);
+  await events[0]?.fulfill({
+    contentType: "text/event-stream",
+    body: `data: ${JSON.stringify({ event: "changed", topic: "agents", revision: 1 })}\n\n`,
+  });
+  await expect(page.getByRole("row", { name: /Claude Code/ })).toContainText("Installing 45%");
+  const after = await edges();
+  const moved = after.map((edge, column) => Math.abs(edge - (before[column] ?? 0)));
+  expect(Math.max(...moved)).toBeLessThan(3);
+  expect(after.at(-1)).toBe(before.at(-1));
 });

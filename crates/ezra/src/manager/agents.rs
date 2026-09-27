@@ -323,6 +323,24 @@ impl InstallPaths {
         Self::remove_versions_except(&versions_directory, &kept)
     }
 
+    /// Removes the command and every kept version. Blocks.
+    pub fn uninstall(&self, agent: Agent) -> io::Result<()> {
+        self.command(agent).remove_if_present()?;
+        self.versions_directory(agent).remove_if_present()
+    }
+
+    /// Removes everything the agent saved, keeping its directory so a bind mount stays usable.
+    /// Blocks.
+    pub fn remove_saved_data(&self, agent: Agent) -> io::Result<()> {
+        let Some(directory) = self.config_directory(agent) else {
+            return Ok(());
+        };
+        for entry in directory.entries_or_empty()? {
+            entry.remove_if_present()?;
+        }
+        Ok(())
+    }
+
     pub fn versions_directory(&self, agent: Agent) -> PathBuf {
         self.versions_root.join(agent.command_name())
     }

@@ -1,7 +1,7 @@
 import type { RemoteControlOverview, RemoteControlStatus } from "@ezra/client";
 import { describe, expect, it } from "vitest";
 
-import { remoteControlSummary } from "./remote-control";
+import { remoteControlSummary, serversRun } from "./remote-control";
 
 const running: RemoteControlStatus = {
   state: "running",
@@ -40,5 +40,21 @@ describe("remoteControlSummary", () => {
     expect(
       remoteControlSummary(overview(running, { app: { state: "waiting", restarts: 0 } })),
     ).toBe("1 server, 1 session");
+  });
+});
+
+describe("serversRun", () => {
+  const waiting: RemoteControlStatus = { state: "waiting", restarts: 0 };
+
+  it("counts only the agent's own running servers", () => {
+    expect(serversRun("claude", overview(waiting))).toBe(false);
+    expect(serversRun("claude", overview(waiting, { app: running }))).toBe(true);
+    expect(serversRun("codex", overview(running))).toBe(false);
+    expect(
+      serversRun("codex", { ...overview(waiting), codex: { state: "running", restarts: 0 } }),
+    ).toBe(true);
+    expect(
+      serversRun("claude", { ...overview(waiting), codex: { state: "running", restarts: 0 } }),
+    ).toBe(false);
   });
 });

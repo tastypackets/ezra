@@ -2,8 +2,10 @@ import type { Agent, LoginPrompt } from "@ezra/client";
 import {
   installAgentMutation,
   logOutAgentMutation,
+  restartAgentServersMutation,
   startAgentLoginMutation,
   submitAgentLoginCodeMutation,
+  uninstallAgentMutation,
 } from "@ezra/client/react-query.gen";
 import {
   useIsMutating,
@@ -17,6 +19,7 @@ import { toast } from "@/components/ui/toast";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
 import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions } from "@/queries/agent-queries";
+import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { AGENT_ACTION } from "@/queries/query-keys";
 
 export type AgentAction =
@@ -24,6 +27,8 @@ export type AgentAction =
   | "start_sign_in"
   | "submit_code"
   | "sign_out"
+  | "uninstall"
+  | "restart_servers"
   | "retry_remote_control";
 
 /** Every action on one agent. Each refreshes the agent list when it settles. */
@@ -69,7 +74,24 @@ export function useAgentActions(agent: Agent) {
     mutationKey: mutationKey("sign_out"),
     onSettled: refreshAgents,
   });
-  return { install, startSignIn, submitCode, signOut };
+  const uninstall = useMutation({
+    ...uninstallAgentMutation(),
+    mutationKey: mutationKey("uninstall"),
+    onSuccess: () => {
+      toast.add({ title: AGENTS_DESCRIPTIONS.uninstalled(AGENT_NAMES[agent]) });
+    },
+    onSettled: refreshAgents,
+  });
+  const restartServers = useMutation({
+    ...restartAgentServersMutation(),
+    mutationKey: mutationKey("restart_servers"),
+    onSuccess: () => {
+      toast.add({ title: AGENTS_DESCRIPTIONS.restarting[agent] });
+    },
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: remoteControlQueryOptions.queryKey }),
+  });
+  return { install, startSignIn, submitCode, signOut, uninstall, restartServers };
 }
 
 /** Whether the action is running for the agent, from any component. */

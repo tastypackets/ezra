@@ -13,6 +13,7 @@ describe("isInitialData", () => {
         folders: null,
         clones: null,
         remote_control: null,
+        git: null,
       }),
     ).toBe(true);
     const remoteControl = { projects: { state: "waiting", restarts: 0 }, folders: {} };
@@ -24,11 +25,19 @@ describe("isInitialData", () => {
         folders: [],
         clones: [],
         remote_control: remoteControl,
+        git: { github: { signed_in: false, from_environment: false }, identity: null },
       }),
     ).toBe(true);
-    expect(isInitialData({ session, agents: [], folders: [], remote_control: remoteControl })).toBe(
-      false,
-    );
+    expect(
+      isInitialData({
+        revision: 1,
+        session,
+        agents: [],
+        folders: [],
+        clones: [],
+        remote_control: remoteControl,
+      }),
+    ).toBe(false);
   });
 
   it("rejects anything else", () => {

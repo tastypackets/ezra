@@ -12,7 +12,7 @@ use super::codex_remote::{CodexRemote, ExpectedPeer, ServerBudget};
 use super::environment::EnvironmentSettings;
 use super::events::Events;
 use super::folders::{PROJECTS_DIRECTORY, ProjectsDirectory};
-use super::git::GitTools;
+use super::git::{GitHubSignIn, GitTools};
 use super::login::LoginProcess;
 use super::remote_control::RemoteControl;
 use super::settings::{Settings, SettingsError};
@@ -42,8 +42,8 @@ pub struct AppState {
     /// Absent in tests, which serve plain HTTP.
     pub certificate: Option<ServedCertificate>,
     pub environment: EnvironmentSettings,
-    /// The GitHub account gh is signed in as, from the last check. None when signed out.
-    pub github_account: Arc<watch::Sender<Option<String>>>,
+    /// What gh reported about the GitHub sign-in at the last check.
+    pub github_sign_in: Arc<watch::Sender<GitHubSignIn>>,
     pub projects: ProjectsDirectory,
 }
 
@@ -85,7 +85,7 @@ impl AppState {
             events,
             certificate: None,
             environment: EnvironmentSettings::default(),
-            github_account: Arc::new(watch::Sender::new(None)),
+            github_sign_in: Arc::new(watch::Sender::new(GitHubSignIn::default())),
             projects: ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY)),
         }
     }

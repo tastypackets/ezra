@@ -12,6 +12,7 @@ use serde::Serialize;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
+use super::api::git::GitStatus;
 use super::api::session::SessionStatus;
 use super::clones::CloneStatus;
 use super::folders::FolderStatus;
@@ -36,6 +37,8 @@ struct InitialData {
     clones: Option<Vec<CloneStatus>>,
     /// Present only when the request is signed in.
     remote_control: Option<RemoteControlOverview>,
+    /// Present only when the request is signed in.
+    git: Option<GitStatus>,
 }
 
 impl InitialData {
@@ -50,15 +53,22 @@ impl InitialData {
                 folders: None,
                 clones: None,
                 remote_control: None,
+                git: None,
             };
         }
+        let (agents, folders, git) = tokio::join!(
+            AgentStatus::gather_all(app),
+            app.folder_statuses(),
+            app.known_git_status()
+        );
         Self {
             revision,
             session,
-            agents: Some(AgentStatus::gather_all(app).await),
-            folders: app.folder_statuses().await.ok(),
+            agents: Some(agents),
+            folders: folders.ok(),
             clones: Some(app.clones.statuses()),
             remote_control: Some(app.remote_control_overview()),
+            git: Some(git),
         }
     }
 
@@ -171,6 +181,7 @@ mod tests {
     use crate::manager::agents::Agent;
     use crate::manager::api::test_support::{ResponseExt, TestManager};
     use crate::manager::auth::SESSION_COOKIE;
+    use crate::manager::git::GitHubSignIn;
     use crate::manager::remote_control::ServerState;
 
     fn cache_control(headers: &HeaderMap) -> Option<&str> {
@@ -201,7 +212,13 @@ mod tests {
         assert!(!made_up.session.authenticated);
         assert!(made_up.agents.is_none());
         assert!(made_up.folders.is_none());
+        assert!(made_up.git.is_none());
 
+        manager.state.github_sign_in.send_replace(GitHubSignIn {
+            signed_in: true,
+            account: Some("octocat".to_owned()),
+            ..GitHubSignIn::default()
+        });
         let (_, token) = cookie.split_once('=').expect("cookie is name=value");
         let signed_in = InitialData::gather(&manager.state, &session_cookie(token)).await;
         assert!(signed_in.session.authenticated);
@@ -212,6 +229,10 @@ mod tests {
                 .remote_control
                 .map(|overview| overview.codex.state),
             Some(ServerState::Waiting)
+        );
+        assert_eq!(
+            signed_in.git.and_then(|git| git.github.account).as_deref(),
+            Some("octocat")
         );
     }
 
@@ -237,6 +258,7 @@ mod tests {
                 available_update: None,
             }]),
             folders: None,
+            git: None,
             clones: None,
             remote_control: None,
         };

@@ -1,11 +1,9 @@
-import type { CodexPairing } from "@ezra/client";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDownIcon, ExternalLinkIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { ExternalLinkIcon } from "lucide-react";
+import { useCallback } from "react";
 
 import { CodeToEnter, Waiting } from "@/components/sign-in-steps";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -86,13 +84,26 @@ function PairingCode({ flow: { start, pairing } }: { flow: CodexPairingFlow }) {
     <div className="flex min-w-0 flex-col gap-4">
       {usable ? (
         <>
-          <PairingQr pairing={usable} />
+          <img
+            src={codexPairingQrUrl(usable.expires_at)}
+            alt={PAIRING_DESCRIPTIONS.qr_alt}
+            className="size-48 rounded-md"
+          />
           {usable.manual_code ? (
             <div className="flex flex-col gap-2">
               <p className="font-medium">{PAIRING_DESCRIPTIONS.enter_code}</p>
               <CodeToEnter code={usable.manual_code} />
             </div>
           ) : null}
+          <a
+            href={usable.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonVariants({ variant: "outline", size: "sm", className: "self-start" })}
+          >
+            {PAIRING_DESCRIPTIONS.open_in_app}
+            <ExternalLinkIcon data-icon="inline-end" />
+          </a>
           <Countdown expiresAt={usable.expires_at} />
           <Waiting label={PAIRING_DESCRIPTIONS.waiting_for_phone} />
         </>
@@ -121,7 +132,6 @@ function PairingCode({ flow: { start, pairing } }: { flow: CodexPairingFlow }) {
       {usable ? (
         <>
           {codex?.server_name ? <p>{PAIRING_DESCRIPTIONS.listed_as(codex.server_name)}</p> : null}
-          <p className="text-muted-foreground">{PAIRING_DESCRIPTIONS.clock_hint}</p>
           {codex?.folder_picker === "blocked" ? (
             <p className="text-muted-foreground">{PAIRING_DESCRIPTIONS.picker_blocked}</p>
           ) : null}
@@ -137,54 +147,5 @@ function Countdown({ expiresAt }: { expiresAt: string }) {
     <p className="text-muted-foreground tabular-nums">
       {PAIRING_DESCRIPTIONS.expires_in(countdown(expiresAt, now))}
     </p>
-  );
-}
-
-/** The QR code, with a toggle that hides it when there is a manual code to type instead. */
-function PairingQr({ pairing }: { pairing: CodexPairing }) {
-  const [open, setOpen] = useState(true);
-  if (!pairing.manual_code) {
-    return (
-      <div className="flex flex-col items-start gap-3">
-        <QrCode pairing={pairing} />
-      </div>
-    );
-  }
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col items-start gap-3">
-      <CollapsibleTrigger render={<Button variant="outline" size="sm" />}>
-        {open ? PAIRING_DESCRIPTIONS.hide_qr : PAIRING_DESCRIPTIONS.show_qr}
-        <ChevronDownIcon
-          data-icon="inline-end"
-          className="transition-transform group-data-panel-open/button:rotate-180"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col items-start gap-3">
-        <QrCode pairing={pairing} />
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-/** The link as a QR code for the phone's camera, and as a link for a phone showing this page. */
-function QrCode({ pairing }: { pairing: CodexPairing }) {
-  return (
-    <>
-      <img
-        src={codexPairingQrUrl(pairing.expires_at)}
-        alt={PAIRING_DESCRIPTIONS.qr_alt}
-        className="size-48 rounded-md"
-      />
-      <p className="text-muted-foreground">{PAIRING_DESCRIPTIONS.qr_hint}</p>
-      <a
-        href={pairing.link}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={buttonVariants({ variant: "outline", size: "sm" })}
-      >
-        {PAIRING_DESCRIPTIONS.open_in_app}
-        <ExternalLinkIcon data-icon="inline-end" />
-      </a>
-    </>
   );
 }

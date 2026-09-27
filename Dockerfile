@@ -120,6 +120,7 @@ RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked <<'EOF'
 set -euo pipefail
 apt-get update
 apt-get install --yes --no-install-recommends \
+    bubblewrap \
     fd-find \
     git \
     nano \
@@ -207,7 +208,7 @@ RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
     <<'EOF'
 set -euo pipefail
-npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install-deps chromium
+npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install-deps chromium firefox
 EOF
 
 RUN <<'EOF'

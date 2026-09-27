@@ -10,6 +10,7 @@ import {
 } from "@ezra/client/react-query.gen";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { cn } from "cn";
 import { EllipsisIcon, ExternalLinkIcon } from "lucide-react";
 import prettyBytes from "pretty-bytes";
 import { useId, useState } from "react";
@@ -43,6 +44,7 @@ import { SERVER_BADGES } from "@/lib/remote-control";
 import { errorMessage } from "@/lib/utils";
 import { agentsQueryOptions, isInstalled } from "@/queries/agent-queries";
 import { clonesQueryOptions, foldersQueryOptions } from "@/queries/folder-queries";
+import { gitStatusQueryOptions } from "@/queries/git-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 
 import { ClaudeOptionsDialog } from "./claude-options-dialog";
@@ -60,6 +62,10 @@ export function FoldersCard() {
     ...agentsQueryOptions,
     select: isInstalled("claude"),
   });
+  const { data: gitSetUp } = useSuspenseQuery({
+    ...gitStatusQueryOptions,
+    select: ({ github }) => github.signed_in || github.from_environment,
+  });
   const listed = folders.data ?? [];
   const cloning = clones.data ?? [];
   const taken = {
@@ -75,7 +81,17 @@ export function FoldersCard() {
           {claudeInstalled ? <p>{FOLDERS_DESCRIPTIONS.claude_switches}</p> : null}
         </CardDescription>
         <CardAction>
-          <CloneDialog taken={taken} claudeInstalled={claudeInstalled} />
+          {gitSetUp ? (
+            <CloneDialog taken={taken} claudeInstalled={claudeInstalled} />
+          ) : (
+            <Link
+              to="/settings"
+              hash="git"
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+            >
+              {FOLDERS_DESCRIPTIONS.set_up_git}
+            </Link>
+          )}
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -117,37 +133,36 @@ function ProjectsRow({ overview }: { overview: RemoteControlOverview }) {
   const [logOpen, setLogOpen] = useState(false);
   const name = FOLDERS_DESCRIPTIONS.projects_path;
   return (
-    <li className="flex items-start gap-2 py-3 first:pt-0 last:pb-0 sm:items-center">
-      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
-          <span className="font-medium">{FOLDERS_DESCRIPTIONS.projects}</span>
-          <span className="text-muted-foreground">{name}</span>
-          {status.state === "off" ? (
-            <Link
-              to="/settings"
-              className="w-fit text-muted-foreground underline underline-offset-4 hover:text-foreground"
-            >
-              {REMOTE_CONTROL_DESCRIPTIONS.off_hint}
-            </Link>
-          ) : status.state === "waiting" ? (
-            <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.waiting_hint}</p>
-          ) : status.state === "running" ? (
-            <p className="text-muted-foreground">
-              {overview.device
-                ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(overview.device)
-                : REMOTE_CONTROL_DESCRIPTIONS.running_hint_without_device}
-            </p>
-          ) : null}
-          <ServerNotes status={status} detailed />
-        </div>
-        <ClaudeCodeGroup name={name} server={status} />
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 gap-y-1 py-3 first:pt-0 last:pb-0 sm:flex sm:items-center">
+      <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
+        <span className="font-medium">{FOLDERS_DESCRIPTIONS.projects}</span>
+        <span className="text-muted-foreground">{name}</span>
+        {status.state === "off" ? (
+          <Link
+            to="/settings"
+            className="w-fit text-muted-foreground underline underline-offset-4 hover:text-foreground"
+          >
+            {REMOTE_CONTROL_DESCRIPTIONS.off_hint}
+          </Link>
+        ) : status.state === "waiting" ? (
+          <p className="text-muted-foreground">{REMOTE_CONTROL_DESCRIPTIONS.waiting_hint}</p>
+        ) : status.state === "running" ? (
+          <p className="text-muted-foreground">
+            {overview.device
+              ? REMOTE_CONTROL_DESCRIPTIONS.running_hint(overview.device)
+              : REMOTE_CONTROL_DESCRIPTIONS.running_hint_without_device}
+          </p>
+        ) : null}
+        <ServerNotes status={status} detailed />
       </div>
+      <ClaudeCodeGroup name={name} server={status} />
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
             <Button
               variant="ghost"
               size="icon-sm"
+              className="col-start-2 row-start-1"
               aria-label={FOLDERS_DESCRIPTIONS.more_actions(name)}
             />
           }
@@ -233,49 +248,46 @@ function FolderRow({ folder, server, claudeInstalled }: FolderRowProps) {
   const switchLabelId = useId();
   return (
     <li className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0">
-      <div className="flex items-start gap-2 sm:items-center">
-        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
-            <div className="flex flex-wrap items-baseline gap-x-3">
-              <span className="min-w-0 font-medium break-all">{folder.name}</span>
-              {folder.git?.branch ? (
-                <span className="min-w-0 font-mono text-xs break-all text-muted-foreground">
-                  {folder.git.branch}
-                </span>
-              ) : null}
-              {folder.git?.worktrees ? (
-                <span className="text-xs text-muted-foreground">
-                  {FOLDERS_DESCRIPTIONS.worktrees(folder.git.worktrees)}
-                </span>
-              ) : null}
-            </div>
-            {detail ? <span className="truncate text-muted-foreground">{detail}</span> : null}
-          </div>
-          {claudeInstalled ? (
-            <ClaudeCodeGroup name={folder.name} server={server}>
-              <Switch
-                checked={
-                  chooseToServe.isPending ? chooseToServe.variables.body.serve : folder.serve
-                }
-                disabled={chooseToServe.isPending}
-                onCheckedChange={(serve) =>
-                  chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
-                }
-                aria-labelledby={switchLabelId}
-                className="ml-auto sm:ml-0"
-              />
-              <span id={switchLabelId} className="sr-only">
-                {FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-x-2 gap-y-1 sm:flex sm:items-center">
+        <div className="flex min-w-0 flex-col gap-0.5 sm:flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-3">
+            <span className="min-w-0 font-medium break-all">{folder.name}</span>
+            {folder.git?.branch ? (
+              <span className="min-w-0 font-mono text-xs break-all text-muted-foreground">
+                {folder.git.branch}
               </span>
-            </ClaudeCodeGroup>
-          ) : null}
+            ) : null}
+            {folder.git?.worktrees ? (
+              <span className="text-xs text-muted-foreground">
+                {FOLDERS_DESCRIPTIONS.worktrees(folder.git.worktrees)}
+              </span>
+            ) : null}
+          </div>
+          {detail ? <span className="truncate text-muted-foreground">{detail}</span> : null}
         </div>
+        {claudeInstalled ? (
+          <ClaudeCodeGroup name={folder.name} server={server}>
+            <Switch
+              checked={chooseToServe.isPending ? chooseToServe.variables.body.serve : folder.serve}
+              disabled={chooseToServe.isPending}
+              onCheckedChange={(serve) =>
+                chooseToServe.mutate({ path: { name: folder.name }, body: { serve } })
+              }
+              aria-labelledby={switchLabelId}
+              className="col-start-2 row-start-1 mt-0.5 sm:mt-0"
+            />
+            <span id={switchLabelId} className="sr-only">
+              {FOLDERS_DESCRIPTIONS.serve_label(folder.name)}
+            </span>
+          </ClaudeCodeGroup>
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
               <Button
                 variant="ghost"
                 size="icon-sm"
+                className="col-start-3 row-start-1"
                 aria-label={FOLDERS_DESCRIPTIONS.more_actions(folder.name)}
               />
             }
@@ -336,40 +348,50 @@ interface ClaudeCodeGroupProps {
   children?: React.ReactNode;
 }
 
-/** A row's Claude Code side: its Remote Control server's sessions, memory, state and link. */
+/**
+ * A row's Claude Code side: its Remote Control server's sessions, memory, state and link. On phones
+ * it is unboxed, with the switch on the folder's first line.
+ */
 function ClaudeCodeGroup({ name, server, children }: ClaudeCodeGroupProps) {
   const labelId = useId();
   return (
     <div
       role="group"
       aria-labelledby={labelId}
-      className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1 sm:flex-none sm:flex-nowrap"
+      className="contents sm:flex sm:min-h-8 sm:flex-none sm:items-center sm:gap-x-3 sm:rounded-lg sm:border sm:px-2.5 sm:py-1"
     >
-      <span id={labelId} className="text-xs font-medium text-muted-foreground">
-        {AGENT_NAMES.claude}
-      </span>
-      {server?.usage ? (
-        <span className="flex gap-3 text-xs text-muted-foreground tabular-nums">
-          {REMOTE_CONTROL_DESCRIPTIONS.sessions(server.usage.sessions, server.usage.capacity)}
-          <Hint content={REMOTE_CONTROL_DESCRIPTIONS.memory_hint}>
-            {prettyBytes(server.usage.memory_bytes)}
-          </Hint>
+      <div
+        className={cn(
+          "col-span-full row-start-2 flex flex-wrap items-center gap-x-3 gap-y-1 sm:flex-nowrap",
+          !server && "max-sm:hidden",
+        )}
+      >
+        <span id={labelId} className="text-xs font-medium text-muted-foreground">
+          {AGENT_NAMES.claude}
         </span>
-      ) : null}
-      {server ? (
-        <Badge variant={SERVER_BADGES[server.state]}>{SERVER_STATES[server.state]}</Badge>
-      ) : null}
-      {server?.url ? (
-        <a
-          href={server.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={FOLDERS_DESCRIPTIONS.open(name)}
-          className={buttonVariants({ variant: "ghost", size: "icon-xs" })}
-        >
-          <ExternalLinkIcon />
-        </a>
-      ) : null}
+        {server?.usage ? (
+          <span className="flex gap-3 text-xs text-muted-foreground tabular-nums">
+            {REMOTE_CONTROL_DESCRIPTIONS.sessions(server.usage.sessions, server.usage.capacity)}
+            <Hint content={REMOTE_CONTROL_DESCRIPTIONS.memory_hint}>
+              {prettyBytes(server.usage.memory_bytes)}
+            </Hint>
+          </span>
+        ) : null}
+        {server ? (
+          <Badge variant={SERVER_BADGES[server.state]}>{SERVER_STATES[server.state]}</Badge>
+        ) : null}
+        {server?.url ? (
+          <a
+            href={server.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={FOLDERS_DESCRIPTIONS.open(name)}
+            className={buttonVariants({ variant: "ghost", size: "icon-xs" })}
+          >
+            <ExternalLinkIcon />
+          </a>
+        ) : null}
+      </div>
       {children}
     </div>
   );
