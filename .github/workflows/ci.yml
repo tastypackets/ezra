@@ -39,37 +39,53 @@ jobs:
       - run: mise run web:test
       - run: mise run web:build
 
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.diff.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        name: Changes that can reach the image
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -z ${BASE} ]] || git diff --name-only "${BASE}...HEAD" | grep --quiet --invert-match '\.md$'; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=false" >> "$GITHUB_OUTPUT"
+          fi
+
   image:
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       EZRA_TEST_IMAGE: ezra:ci
     steps:
       - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Build a debug ezra binary
+        run: |
+          sudo apt-get install --yes --no-install-recommends musl-tools
+          cargo build --locked --target x86_64-unknown-linux-musl --package ezra
+          install -D target/x86_64-unknown-linux-musl/debug/ezra "${RUNNER_TEMP}/ezra-build/out/ezra"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
           context: .
+          build-contexts: ezra-build=${{ runner.temp }}/ezra-build
           load: true
           tags: ezra:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: jdx/mise-action@v4
-      - uses: Swatinem/rust-cache@v2
       - name: Container tests
-        # They mount host folders that the container's dev user (uid 1000) writes.
-        run: |
-          getent passwd 1000 || sudo useradd --uid 1000 --create-home ezra-test
-          tester="$(getent passwd 1000 | cut -d: -f1)"
-          sudo usermod --append --groups docker "$tester"
-          binaries="$(mktemp --directory)"
-          cargo test --locked --test '*' --no-run --message-format=json \
-            | jq -r 'select(.executable != null and .profile.test) | .executable' \
-            | xargs install --mode=755 --target-directory="$binaries"
-          chmod 755 "$binaries"
-          for tests in "$binaries"/*; do
-            sudo --user="$tester" --preserve-env=EZRA_TEST_IMAGE "$tests" --ignored
-          done
+        run: .github/scripts/container-tests.sh
       - run: mise run web:install
       - run: pnpm --filter @ezra/e2e exec playwright install --with-deps chromium
         working-directory: web

@@ -2,11 +2,11 @@
 //! Build the image first, then run: `cargo test -- --ignored`
 //! (set `EZRA_TEST_IMAGE` to test an image other than `ezra:dev`).
 
-mod common;
-
 use std::time::{Duration, Instant};
 
-use common::{DockerResource, docker, process_status_field, run_in_image, stderr_of, stdout_of};
+use ezra_container_tests::{
+    DockerResource, docker, process_status_field, run_in_image, stderr_of, stdout_of,
+};
 
 const AGENT_DIRECTORIES: [(&str, &str); 3] = [
     ("config", "/config"),

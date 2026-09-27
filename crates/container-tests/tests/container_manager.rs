@@ -1,10 +1,8 @@
 //! Black-box tests of `ezra manager`. Build the image first, then run: `cargo test -- --ignored`
 
-mod common;
-
 use std::time::{Duration, Instant};
 
-use common::{DockerResource, docker, run_in_image, stderr_of, stdout_of};
+use ezra_container_tests::{DockerResource, docker, run_in_image, stderr_of, stdout_of};
 
 const UNCLAIMED: &str = r#"{"claimed":false,"authenticated":false}"#;
 

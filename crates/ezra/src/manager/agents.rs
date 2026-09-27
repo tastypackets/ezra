@@ -18,9 +18,15 @@ use crate::bytes_ext::BytesExt;
 use crate::path_ext::PathExt;
 
 const CLAUDE_RELEASES: &str = "https://downloads.claude.ai/claude-code-releases";
+#[cfg(target_arch = "x86_64")]
 const CLAUDE_PLATFORM: &str = "linux-x64";
+#[cfg(target_arch = "aarch64")]
+const CLAUDE_PLATFORM: &str = "linux-arm64";
 const CODEX_RELEASES: &str = "https://releases.openai.com/codex";
+#[cfg(target_arch = "x86_64")]
 const CODEX_PACKAGE: &str = "codex-package-x86_64-unknown-linux-musl.tar.gz";
+#[cfg(target_arch = "aarch64")]
+const CODEX_PACKAGE: &str = "codex-package-aarch64-unknown-linux-musl.tar.gz";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -587,14 +593,16 @@ mod tests {
 
     #[test]
     fn claude_release_comes_from_the_manifest() {
-        let manifest = r#"{"version":"2.1.283","platforms":{
-            "linux-x64":{"binary":"claude","checksum":"ABC123","size":1},
-            "darwin-arm64":{"binary":"claude","checksum":"def456","size":1}}}"#;
+        let manifest = format!(
+            r#"{{"version":"2.1.283","platforms":{{
+            "{CLAUDE_PLATFORM}":{{"binary":"claude","checksum":"ABC123","size":1}},
+            "win32-x64":{{"binary":"claude","checksum":"def456","size":1}}}}}}"#
+        );
         assert_eq!(
-            Release::from_claude_manifest("2.1.283", manifest).expect("manifest parses"),
+            Release::from_claude_manifest("2.1.283", &manifest).expect("manifest parses"),
             Release {
                 version: "2.1.283".to_owned(),
-                url: format!("{CLAUDE_RELEASES}/2.1.283/linux-x64/claude"),
+                url: format!("{CLAUDE_RELEASES}/2.1.283/{CLAUDE_PLATFORM}/claude"),
                 sha256: "abc123".to_owned(),
             }
         );

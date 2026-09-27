@@ -1,17 +1,19 @@
 //! Black-box tests of installing the agent CLIs through the manager. They download the real releases.
 //! Build the image first, then run: `cargo test -- --ignored`
 
-mod common;
-
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{DockerResource, Manager, docker, stdout_of};
+use ezra_container_tests::{DockerResource, Manager, docker, stdout_of};
 use serde_json::{Value, json};
 
 const REINSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 
-impl Manager {
+trait ManagerExt {
+    fn agents(&self) -> Vec<Value>;
+}
+
+impl ManagerExt for Manager {
     /// Every agent's install and sign-in state.
     fn agents(&self) -> Vec<Value> {
         let (status, agents) = self.request("GET", "/api/v1/agents", None);

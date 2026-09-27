@@ -25,7 +25,6 @@ RUN pnpm build
 
 FROM rust:${RUST_VERSION}-slim-trixie AS ezra-build
 
-ARG TARGETARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 WORKDIR /src
 
@@ -33,7 +32,7 @@ RUN --mount=type=cache,target=/var/lib/apt/lists,sharing=locked <<'EOF'
 set -euo pipefail
 apt-get update
 apt-get install --yes --no-install-recommends musl-tools
-rustup target add x86_64-unknown-linux-musl
+rustup target add "$(uname -m)-unknown-linux-musl"
 EOF
 
 RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
@@ -43,12 +42,9 @@ RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     --mount=type=cache,target=/src/target \
     <<'EOF'
 set -euo pipefail
-if [[ ${TARGETARCH} != amd64 ]]; then
-    echo "ezra is only built for amd64 so far, not ${TARGETARCH}" >&2
-    exit 1
-fi
-cargo build --locked --release --target x86_64-unknown-linux-musl --package ezra
-install -D target/x86_64-unknown-linux-musl/release/ezra /out/ezra
+rust_target="$(uname -m)-unknown-linux-musl"
+cargo build --locked --release --target "${rust_target}" --package ezra
+install -D "target/${rust_target}/release/ezra" /out/ezra
 EOF
 
 FROM ubuntu:26.04

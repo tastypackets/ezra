@@ -1,13 +1,11 @@
 //! Black-box test of Codex remote control against the real Codex release, which it downloads.
 //! Build the image first, then run: `cargo test --test container_codex -- --ignored`
 
-mod common;
-
 use std::process::Output;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{DockerResource, Manager, docker, stderr_of, stdout_of};
+use ezra_container_tests::{DockerResource, Manager, docker, stderr_of, stdout_of};
 use serde_json::Value;
 
 const CODEX_HOME: &str = "/config/codex";
@@ -21,7 +19,11 @@ const SERVER_PID: &str = "/tmp/codex-server.pid";
 const SERVER_STDERR: &str = "/tmp/codex-server.stderr";
 const SERVER_EXIT: &str = "/tmp/codex-server.exit";
 
-impl Manager {
+trait ManagerExt {
+    fn codex_off(&self) -> Value;
+}
+
+impl ManagerExt for Manager {
     /// Checks that Codex waits with no server running and returns the overview's Codex part.
     fn codex_off(&self) -> Value {
         let (status, overview) = self.request("GET", "/api/v1/remote-control", None);
@@ -33,7 +35,13 @@ impl Manager {
     }
 }
 
-impl DockerResource {
+trait DockerResourceExt {
+    fn remote_control_servers(&self) -> String;
+    fn run_codex(&self, docker_options: &[&str], command: &[&str]) -> Output;
+    fn read_until<T>(&self, file: &str, within: Duration, parse: impl Fn(&str) -> Option<T>) -> T;
+}
+
+impl DockerResourceExt for DockerResource {
     fn remote_control_servers(&self) -> String {
         let found = docker(&[
             "exec",

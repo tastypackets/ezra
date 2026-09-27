@@ -1,10 +1,8 @@
 //! Black-box tests of `EZRA_APT_PACKAGES`. Build the image first, then run: `cargo test -- --ignored`
 
-mod common;
-
 use std::process::Output;
 
-use common::{DockerResource, docker, run_in_image, stderr_of, stdout_of};
+use ezra_container_tests::{DockerResource, docker, run_in_image, stderr_of, stdout_of};
 
 fn last_line_of_stdout(output: &Output) -> String {
     stdout_of(output)

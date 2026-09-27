@@ -1,14 +1,12 @@
 //! Black-box tests of saving the agents' settings files through the manager.
 //! Build the image first, then run: `cargo test -- --ignored`
 
-mod common;
-
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::time::Duration;
 
-use common::{
+use ezra_container_tests::{
     DockerResource, Manager, PathExt, agent_directory, docker, run_in_image, stderr_of, stdout_of,
 };
 use serde_json::{Value, json};
@@ -19,7 +17,13 @@ const SETTINGS_FILE_CHANGED: &str = r#""topic":"settings_file""#;
 const CLAUDE_TEXT: &str = "{\r\n  \"model\": \"opus\"\r\n}\r\n";
 const CODEX_TEXT: &str = "\u{feff}# ezra\r\n[projects]\r\n\"/home/dev/projects/a\" = {\r\n  trust_level = \"trusted\",\r\n}\r\n";
 
-impl Manager {
+trait ManagerExt {
+    fn open(&self, agent: &str) -> Value;
+    fn save(&self, agent: &str, text: &str, version: &Value) -> (String, Value);
+    fn codex_feature(&self, feature: &str) -> Option<String>;
+}
+
+impl ManagerExt for Manager {
     /// The agent's settings file as the manager reads it now.
     fn open(&self, agent: &str) -> Value {
         let (status, file) = self.request(
