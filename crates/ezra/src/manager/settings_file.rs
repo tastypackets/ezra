@@ -582,6 +582,43 @@ mod tests {
             problem(Json, &format!("{}1,{}", "[".repeat(200), "]".repeat(200))),
             at(1, 203, "expected value")
         );
+        for (text, line, column, error) in [
+            ("{\"a\": ture}", 1, 8, "expected ident"),
+            ("{\"a\": True}", 1, 7, "expected value"),
+            ("{\"a\": nul}", 1, 10, "expected ident"),
+            ("{\"a\":tru}", 1, 9, "expected ident"),
+            ("{\"a\": faase}", 1, 9, "expected ident"),
+            ("{\"a\": nan}", 1, 8, "expected ident"),
+            ("{\"a\": [tru]}", 1, 11, "expected ident"),
+            (
+                "{\n  \"a\": true,\n  \"b\": fasle\n}\n",
+                3,
+                10,
+                "expected ident",
+            ),
+            ("{\"a\": undefined}", 1, 7, "expected value"),
+            ("{\"a\": 'x'}", 1, 7, "expected value"),
+            ("{\"a\": .5}", 1, 7, "expected value"),
+            ("{\"a\": +1}", 1, 7, "expected value"),
+            ("{\"a\": 1 nul}", 1, 9, "expected `,` or `}`"),
+            ("{\"a\": 1, nul}", 1, 10, "key must be a string"),
+            ("{", 1, 1, "EOF while parsing an object"),
+            ("[", 1, 1, "EOF while parsing a list"),
+            ("{\"a\":1\n\n", 2, 1, "EOF while parsing an object"),
+            ("{\"a\":1,", 1, 7, "EOF while parsing a value"),
+            ("{\"a\":\"b\"", 1, 8, "EOF while parsing an object"),
+            ("{\"a\": tr", 1, 8, "EOF while parsing a value"),
+            ("tru", 1, 3, "EOF while parsing a value"),
+            ("[1,]", 1, 4, "trailing comma"),
+            ("{\"a\":[1,\r\n],\"b\":2}", 2, 1, "trailing comma"),
+            ("{\"a\":1 , }", 1, 10, "trailing comma"),
+            ("{\"a\":1,,\"b\":2}", 1, 8, "key must be a string"),
+            ("\u{feff}{} x", 1, 5, "trailing characters"),
+            ("{}}", 1, 3, "trailing characters"),
+            ("{\"a\":1}\n{\"b\":2}\n", 2, 1, "trailing characters"),
+        ] {
+            assert_eq!(problem(Json, text), at(line, column, error), "{text:?}");
+        }
     }
 
     #[test]
@@ -593,6 +630,8 @@ mod tests {
             "\u{feff}model = \"gpt\"\r\n[features]\r\n\tx = true\r\n",
             "a = {\n  b = 1,\n  c = 2,\n}\ns = \"\\e\\x41\"\nt = 07:32\nd = 1979-05-27T07:32Z\n",
             "[projects.\"/projects/a\"]\ntrust_level = \"trusted\"",
+            "t = 07:32:60\n",
+            "d = 1979-05-27T23:59:60Z\n",
         ] {
             assert_eq!(problem(Toml, valid), None, "{valid:?}");
         }
@@ -606,6 +645,42 @@ mod tests {
             problem(Toml, "a = \"\u{e9}\u{1f600}\" b = 1\n"),
             at(1, 10, "unexpected key or value, expected newline, `#`")
         );
+        for (text, line, column, error) in [
+            ("a = {b = 1, b = 2}\n", 1, 13, "duplicate key"),
+            (
+                "d = 1979-02-30\n",
+                1,
+                5,
+                "invalid date, expected day between 01 and 28",
+            ),
+            (
+                "d = 1900-02-29\n",
+                1,
+                5,
+                "invalid date, expected day between 01 and 28",
+            ),
+            (
+                "d = 1979-04-31\n",
+                1,
+                5,
+                "invalid date, expected day between 01 and 30",
+            ),
+            (
+                "a = 1\rb = 2\n",
+                1,
+                7,
+                "carriage return must be followed by newline, expected newline",
+            ),
+            ("[a]\nb.c = 1\n[a.b]\nd = 2\n", 3, 4, "duplicate key"),
+            (
+                "[projects.\"/p\"]\ntrust_level = \"a\"\n[projects.\"/p\"]\ntrust_level = \"b\"\n",
+                3,
+                11,
+                "duplicate key",
+            ),
+        ] {
+            assert_eq!(problem(Toml, text), at(line, column, error), "{text:?}");
+        }
     }
 
     #[test]
