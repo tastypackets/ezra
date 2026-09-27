@@ -99,7 +99,7 @@ Add the host's socket, its group and the Docker CLI to the Compose service:
 services:
   ezra:
     group_add:
-      - "960" # the socket's group, from `stat -c %g /var/run/docker.sock` on the host
+      - "<docker-group-id>" # the number from `stat -c %g /var/run/docker.sock` on the host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
