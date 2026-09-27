@@ -14,6 +14,11 @@ services:
       - projects:/home/dev/projects
       - cache:/cache
     stop_grace_period: 60s
+    # Codex's sandbox needs user namespaces, which Docker's default profiles block. Without these
+    # the ChatGPT app's folder picker fails. Remove them if only running Claude Code.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
 
 volumes:
   config:
