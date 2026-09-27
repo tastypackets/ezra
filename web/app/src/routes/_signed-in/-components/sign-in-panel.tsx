@@ -2,7 +2,7 @@ import type { Agent, LoginPrompt } from "@ezra/client";
 import { useForm } from "@tanstack/react-form";
 import { useCallback, useEffect, useRef } from "react";
 
-import { SignInSteps, WaitingForWebsite } from "@/components/sign-in-steps";
+import { SignInSteps, Waiting } from "@/components/sign-in-steps";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { AGENTS_DESCRIPTIONS, AGENT_NAMES } from "@/content/agents";
+import { SIGN_IN_DESCRIPTIONS } from "@/content/sign-in";
 import {
   useAgentActionPending,
   useAgentActions,
@@ -71,7 +72,7 @@ export function SignInPanel({ agent, prompt }: SignInPanelProps) {
       </CardContent>
       {prompt.code ? (
         <CardFooter>
-          <WaitingForWebsite />
+          <Waiting label={SIGN_IN_DESCRIPTIONS.waiting_for_website} />
         </CardFooter>
       ) : null}
     </Card>

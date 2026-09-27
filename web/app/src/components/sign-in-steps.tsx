@@ -29,16 +29,7 @@ export function SignInSteps({ prompt, codeForm }: SignInStepsProps) {
       </Step>
       {prompt.code ? (
         <Step number={2} title={SIGN_IN_DESCRIPTIONS.step_enter_code}>
-          <div className="flex items-center gap-3">
-            <span className="rounded-md border border-dashed px-3 py-1 font-mono text-xl font-semibold tracking-widest">
-              {prompt.code}
-            </span>
-            <CopyButton
-              text={prompt.code}
-              label={SIGN_IN_DESCRIPTIONS.copy}
-              copiedLabel={SIGN_IN_DESCRIPTIONS.copied}
-            />
-          </div>
+          <CodeToEnter code={prompt.code} />
         </Step>
       ) : (
         <Step number={2} title={SIGN_IN_DESCRIPTIONS.step_paste_code}>
@@ -49,11 +40,28 @@ export function SignInSteps({ prompt, codeForm }: SignInStepsProps) {
   );
 }
 
-export function WaitingForWebsite() {
+/** A code to type on another device, large and monospace, with a button that copies it. */
+export function CodeToEnter({ code }: { code: string }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <span className="rounded-md border border-dashed px-3 py-1 font-mono text-xl font-semibold tracking-widest break-all">
+        {code}
+      </span>
+      <CopyButton
+        text={code}
+        label={SIGN_IN_DESCRIPTIONS.copy}
+        copiedLabel={SIGN_IN_DESCRIPTIONS.copied}
+      />
+    </div>
+  );
+}
+
+/** A spinner and what it waits for. */
+export function Waiting({ label }: { label: string }) {
   return (
     <p className="flex items-center gap-2 text-muted-foreground">
       <Spinner />
-      {SIGN_IN_DESCRIPTIONS.waiting_for_website}
+      {label}
     </p>
   );
 }
