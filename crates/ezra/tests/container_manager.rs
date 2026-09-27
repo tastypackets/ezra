@@ -37,6 +37,27 @@ fn default_command_serves_the_manager_over_https() {
 
 #[test]
 #[ignore = "needs Docker and a built ezra image"]
+fn the_manager_raises_its_open_file_limit_to_the_hard_limit() {
+    let container = DockerResource::start_container(
+        "manager-open-files",
+        &["--ulimit", "nofile=1024:524288"],
+        &[],
+    );
+    wait_for_manager(&container, 8443);
+    let limits = stdout_of(&docker(&[
+        "exec",
+        "-u",
+        "dev",
+        &container.name,
+        "sh",
+        "-c",
+        r#"prlimit --pid "$(pgrep -x ezra)" --nofile --noheadings --output SOFT,HARD --raw"#,
+    ]));
+    assert_eq!(limits, "524288 524288");
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
 fn port_can_be_changed() {
     let container =
         DockerResource::start_container("manager-port", &["--env", "EZRA_PORT=9443"], &[]);

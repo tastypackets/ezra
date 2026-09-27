@@ -32,6 +32,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::environment_config::FromEnvironment;
 use agents::TlsVerification;
+use processes::OpenFileLimit;
 use state::AppState;
 
 const STATE_DIRECTORY: &str = "/config/ezra";
@@ -65,6 +66,10 @@ pub async fn run() -> ExitCode {
 }
 
 async fn serve() -> Result<(), ManagerError> {
+    match OpenFileLimit::current().and_then(OpenFileLimit::raise) {
+        Ok(limit) => tracing::info!("agent servers can open {} files", limit.soft),
+        Err(error) => tracing::warn!("could not raise the open file limit: {error}"),
+    }
     let ManagerOptions {
         port,
         tls_verification,

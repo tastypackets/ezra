@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use nix::sys::resource::{Resource, getrlimit, rlim_t, setrlimit};
 use nix::unistd::Pid;
 
 const DELETED_SUFFIX: &str = " (deleted)";
@@ -121,10 +122,47 @@ impl Process {
     }
 }
 
+/// How many files a process can have open, which the processes it starts inherit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenFileLimit {
+    pub soft: rlim_t,
+    pub hard: rlim_t,
+}
+
+impl OpenFileLimit {
+    const HIGHEST_TARGET: rlim_t = 1_048_576;
+
+    /// This process's limit.
+    pub fn current() -> nix::Result<Self> {
+        let (soft, hard) = getrlimit(Resource::RLIMIT_NOFILE)?;
+        Ok(Self { soft, hard })
+    }
+
+    /// The soft limit to raise to under `hard`.
+    pub fn target(hard: rlim_t) -> rlim_t {
+        hard.min(Self::HIGHEST_TARGET)
+    }
+
+    /// Raises this process's soft limit to the target unless it is higher already.
+    pub fn raise(self) -> nix::Result<Self> {
+        let raised = Self {
+            soft: self.soft.max(Self::target(self.hard)),
+            ..self
+        };
+        if raised != self {
+            setrlimit(Resource::RLIMIT_NOFILE, raised.soft, raised.hard)?;
+        }
+        Ok(raised)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
+
+    use nix::errno::Errno;
+    use nix::sys::resource::RLIM_INFINITY;
 
     use super::*;
 
@@ -147,5 +185,50 @@ mod tests {
         running.kill().expect("the copy stops");
         running.wait().expect("the copy is reaped");
         assert!(Process::running_from(directory.path()).is_empty());
+    }
+
+    #[test]
+    fn the_open_file_target_is_the_hard_limit_up_to_a_million() {
+        assert_eq!(OpenFileLimit::target(524_288), 524_288);
+        assert_eq!(OpenFileLimit::target(1_073_741_816), 1_048_576);
+        assert_eq!(OpenFileLimit::target(RLIM_INFINITY), 1_048_576);
+    }
+
+    #[test]
+    fn raising_the_open_file_limit_sets_the_soft_limit_to_the_target() {
+        let OpenFileLimit { soft, hard } = OpenFileLimit::current().expect("the limit is readable");
+        setrlimit(Resource::RLIMIT_NOFILE, soft.min(1024), hard)
+            .expect("the soft limit is lowered");
+
+        let raised = OpenFileLimit::current()
+            .and_then(OpenFileLimit::raise)
+            .expect("the soft limit is raised");
+
+        assert_eq!(
+            raised,
+            OpenFileLimit {
+                soft: OpenFileLimit::target(hard),
+                hard
+            }
+        );
+        assert_eq!(OpenFileLimit::current(), Ok(raised));
+    }
+
+    #[test]
+    fn a_soft_limit_above_the_target_is_kept() {
+        let limit = OpenFileLimit {
+            soft: 2_097_152,
+            hard: RLIM_INFINITY,
+        };
+        assert_eq!(limit.raise(), Ok(limit));
+    }
+
+    #[test]
+    fn a_limit_the_kernel_refuses_is_an_error() {
+        let limit = OpenFileLimit {
+            soft: 0,
+            hard: RLIM_INFINITY,
+        };
+        assert_eq!(limit.raise(), Err(Errno::EPERM));
     }
 }
