@@ -1,2 +1,14 @@
 tmp/
 /target
+**/*.rs.bk
+node_modules/
+*.tsbuildinfo
+coverage/
+*.log
+.env
+.env.*
+.claude/worktrees/
+.claude/settings.local.json
+.idea/
+.vscode/
+.DS_Store
