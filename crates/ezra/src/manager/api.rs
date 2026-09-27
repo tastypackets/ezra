@@ -43,6 +43,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/agents/claude/settings",
             get(settings::claude).put(settings::update_claude),
         )
+        .route(
+            "/api/v1/agents/codex/settings",
+            get(settings::codex).put(settings::update_codex),
+        )
         .route("/api/v1/events", get(events::stream))
         .route("/api/v1/remote-control", get(remote_control::overview))
         .route(
@@ -174,6 +178,8 @@ pub struct ErrorBody {
         login::log_out,
         settings::claude,
         settings::update_claude,
+        settings::codex,
+        settings::update_codex,
         git::status,
         git::start_github_login,
         git::log_out_of_github,

@@ -5,6 +5,7 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session};
 use crate::manager::agents::{Agent, ReleaseChannel};
+use crate::manager::codex_remote::CodexRemoteSettings;
 use crate::manager::events::Topic;
 use crate::manager::remote_control::RemoteControlSettings;
 
@@ -56,6 +57,56 @@ pub async fn update_claude(
     Ok(Json(state.apply_claude_settings(body).await?))
 }
 
+/// How the manager runs Codex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CodexSettingsBody {
+    pub remote_control: CodexRemoteSettings,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/agents/codex/settings",
+    operation_id = "getCodexSettings",
+    tag = "agents",
+    summary = "Get Codex settings",
+    responses(
+        (status = 200, description = "Settings", body = CodexSettingsBody),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody)
+    )
+)]
+pub async fn codex(_: Session, State(state): State<AppState>) -> Json<CodexSettingsBody> {
+    Json(CodexSettingsBody {
+        remote_control: state.settings.lock().await.agents.codex.remote_control,
+    })
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/agents/codex/settings",
+    operation_id = "updateCodexSettings",
+    tag = "agents",
+    summary = "Change Codex settings",
+    request_body = CodexSettingsBody,
+    responses(
+        (status = 200, description = "Saved", body = CodexSettingsBody),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody)
+    )
+)]
+pub async fn update_codex(
+    _: Session,
+    State(state): State<AppState>,
+    Json(body): Json<CodexSettingsBody>,
+) -> Result<Json<CodexSettingsBody>, ApiError> {
+    state
+        .update_settings(|settings| {
+            settings.agents.codex.remote_control = body.remote_control;
+            Ok::<(), ApiError>(())
+        })
+        .await?;
+    state.events.publish(Topic::CodexSettings);
+    Ok(Json(body))
+}
+
 impl AppState {
     async fn apply_claude_settings(
         &self,
@@ -95,13 +146,18 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use futures_util::StreamExt;
 
-    use super::super::test_support::{ResponseExt, TestManager};
+    use super::super::test_support::{EventStreamExt, ResponseExt, TestManager};
     use super::*;
+    use crate::manager::codex_remote::{CodexApprovals, CodexSandbox};
     use crate::manager::remote_control::SpawnMode;
     use crate::manager::settings::Settings;
 
     const PATH: &str = "/api/v1/agents/claude/settings";
+    const CODEX_PATH: &str = "/api/v1/agents/codex/settings";
+    const CODEX_BODY: &str =
+        r#"{"remote_control":{"enabled":false,"sandbox":"read-only","approvals":"never"}}"#;
 
     #[tokio::test]
     async fn claude_settings_need_a_login() {
@@ -187,5 +243,94 @@ mod tests {
             .put(PATH, r#"{"release_channel":"nightly","remote_control":{"enabled":true,"permission_mode":"auto","capacity":4}}"#, Some(&cookie))
             .await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn codex_settings_need_a_login() {
+        let manager = TestManager::new();
+        manager.logged_in().await;
+        assert_eq!(
+            manager.get(CODEX_PATH, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            manager.put(CODEX_PATH, CODEX_BODY, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_settings_are_saved_and_published() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let defaults: CodexSettingsBody = manager.get(CODEX_PATH, Some(&cookie)).await.json().await;
+        assert_eq!(
+            defaults.remote_control,
+            CodexRemoteSettings {
+                enabled: true,
+                sandbox: CodexSandbox::DangerFullAccess,
+                approvals: CodexApprovals::OnRequest,
+            }
+        );
+
+        manager
+            .state
+            .update_settings(|settings| {
+                settings.agent_mut(Agent::Codex).configured = true;
+                Ok::<(), ApiError>(())
+            })
+            .await
+            .expect("configured saves");
+        let mut events = Box::pin(manager.state.events.stream());
+        events.next().await;
+        let response = manager.put(CODEX_PATH, CODEX_BODY, Some(&cookie)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved: CodexSettingsBody = response.json().await;
+        let chosen = CodexRemoteSettings {
+            enabled: false,
+            sandbox: CodexSandbox::ReadOnly,
+            approvals: CodexApprovals::Never,
+        };
+        assert_eq!(saved.remote_control, chosen);
+        assert_eq!(events.published().await, [Topic::CodexSettings]);
+        let stored = Settings::load(&manager.settings_path).expect("settings load");
+        assert_eq!(stored.agents.codex.remote_control, chosen);
+        assert!(stored.agent(Agent::Codex).configured);
+        let read: CodexSettingsBody = manager.get(CODEX_PATH, Some(&cookie)).await.json().await;
+        assert_eq!(read, saved);
+    }
+
+    #[tokio::test]
+    async fn codex_settings_it_does_not_offer_are_rejected() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        for remote_control in [
+            r#"{"enabled":true,"sandbox":"danger-full-access","approvals":"untrusted"}"#,
+            r#"{"enabled":true,"sandbox":"danger-full-access","approvals":"on-failure"}"#,
+            r#"{"enabled":true,"sandbox":"danger-full-access","approvals":"Never"}"#,
+            r#"{"enabled":true,"sandbox":"danger-full-access","approvals":{"granular":{"mcp_elicitations":true,"rules":true,"sandbox_approval":true}}}"#,
+            r#"{"enabled":true,"sandbox":"ReadOnly","approvals":"never"}"#,
+        ] {
+            let response = manager
+                .put(
+                    CODEX_PATH,
+                    &format!(r#"{{"remote_control":{remote_control}}}"#),
+                    Some(&cookie),
+                )
+                .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{remote_control}"
+            );
+        }
+        assert_eq!(
+            Settings::load(&manager.settings_path)
+                .expect("settings load")
+                .agents
+                .codex
+                .remote_control,
+            CodexRemoteSettings::default()
+        );
     }
 }

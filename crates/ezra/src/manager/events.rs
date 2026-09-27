@@ -16,6 +16,7 @@ const QUEUED_CHANGES: usize = 64;
 pub enum Topic {
     Agents,
     ClaudeSettings,
+    CodexSettings,
     Folders,
     Clones,
     RemoteControl,
@@ -24,9 +25,10 @@ pub enum Topic {
 }
 
 impl Topic {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Agents,
         Self::ClaudeSettings,
+        Self::CodexSettings,
         Self::Folders,
         Self::Clones,
         Self::RemoteControl,

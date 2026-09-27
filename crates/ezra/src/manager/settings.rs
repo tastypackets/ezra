@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::agents::{Agent, ReleaseChannel};
 use super::auth::HashedPassword;
+use super::codex_remote::CodexRemoteSettings;
 use super::folders::Folder;
 use super::remote_control::{ClaudeOptions, RemoteControlSettings};
 
@@ -22,14 +23,14 @@ impl Settings {
     pub fn agent(&self, agent: Agent) -> &AgentSettings {
         match agent {
             Agent::Claude => &self.agents.claude.agent,
-            Agent::Codex => &self.agents.codex,
+            Agent::Codex => &self.agents.codex.agent,
         }
     }
 
     pub fn agent_mut(&mut self, agent: Agent) -> &mut AgentSettings {
         match agent {
             Agent::Claude => &mut self.agents.claude.agent,
-            Agent::Codex => &mut self.agents.codex,
+            Agent::Codex => &mut self.agents.codex.agent,
         }
     }
 
@@ -52,7 +53,7 @@ pub struct AgentsSettings {
     #[serde(default)]
     pub claude: ClaudeSettings,
     #[serde(default)]
-    pub codex: AgentSettings,
+    pub codex: CodexSettings,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +80,14 @@ impl ClaudeSettings {
                 ..FolderChoice::default()
             })
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexSettings {
+    #[serde(flatten)]
+    pub agent: AgentSettings,
+    #[serde(default)]
+    pub remote_control: CodexRemoteSettings,
 }
 
 /// One folder's Remote Control choices.
@@ -170,6 +179,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manager::codex_remote::{CodexApprovals, CodexSandbox};
     use crate::manager::folders::GitDetails;
     use crate::manager::remote_control::SpawnMode;
 
@@ -213,6 +223,48 @@ mod tests {
         assert_eq!(
             settings.release_channel(Agent::Codex),
             ReleaseChannel::Latest
+        );
+    }
+
+    #[test]
+    fn codex_saved_before_remote_control_loads_with_its_defaults() {
+        let settings: Settings =
+            toml::from_str("[agents.codex]\nconfigured = true\n").expect("settings parse");
+        assert!(settings.agent(Agent::Codex).configured);
+        assert_eq!(
+            settings.agents.codex.remote_control,
+            CodexRemoteSettings {
+                enabled: true,
+                sandbox: CodexSandbox::DangerFullAccess,
+                approvals: CodexApprovals::OnRequest,
+            }
+        );
+    }
+
+    #[test]
+    fn codex_settings_sit_under_its_table() {
+        let mut settings = Settings::default();
+        settings.agent_mut(Agent::Codex).configured = true;
+        settings.agents.codex.remote_control = CodexRemoteSettings {
+            enabled: false,
+            sandbox: CodexSandbox::WorkspaceWrite,
+            approvals: CodexApprovals::Never,
+        };
+        let saved = toml::to_string_pretty(&settings).expect("settings serialize");
+        assert!(
+            saved.contains(
+                "[agents.codex]\n\
+                 configured = true\n\n\
+                 [agents.codex.remote_control]\n\
+                 enabled = false\n\
+                 sandbox = \"workspace-write\"\n\
+                 approvals = \"never\"\n"
+            ),
+            "{saved}"
+        );
+        assert_eq!(
+            toml::from_str::<Settings>(&saved).expect("saved settings parse"),
+            settings
         );
     }
 

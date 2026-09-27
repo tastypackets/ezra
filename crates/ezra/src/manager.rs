@@ -3,6 +3,7 @@ mod api;
 mod auth;
 mod checks;
 mod clones;
+mod codex_remote;
 mod environment;
 mod events;
 mod folders;

@@ -126,6 +126,76 @@
         }
       }
     },
+    "/api/v1/agents/codex/settings": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get Codex settings",
+        "operationId": "getCodexSettings",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexSettingsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Change Codex settings",
+        "operationId": "updateCodexSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodexSettingsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexSettingsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents/{agent}/install": {
       "post": {
         "tags": [
@@ -1650,6 +1720,61 @@
           }
         }
       },
+      "CodexApprovals": {
+        "type": "string",
+        "description": "When Codex asks for approval.",
+        "enum": [
+          "on-request",
+          "never"
+        ]
+      },
+      "CodexRemoteSettings": {
+        "type": "object",
+        "description": "How Codex serves this box to the ChatGPT app.",
+        "required": [
+          "enabled",
+          "sandbox",
+          "approvals"
+        ],
+        "properties": {
+          "approvals": {
+            "$ref": "#/components/schemas/CodexApprovals",
+            "description": "When Codex asks for approval.",
+            "default": "on-request"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Serve this box to the ChatGPT app while Codex is signed in with ChatGPT.",
+            "default": true
+          },
+          "sandbox": {
+            "$ref": "#/components/schemas/CodexSandbox",
+            "description": "The sandbox Codex runs commands in.",
+            "default": "danger-full-access"
+          }
+        }
+      },
+      "CodexSandbox": {
+        "type": "string",
+        "description": "What Codex's commands can change.",
+        "enum": [
+          "read-only",
+          "workspace-write",
+          "danger-full-access"
+        ]
+      },
+      "CodexSettingsBody": {
+        "type": "object",
+        "description": "How the manager runs Codex.",
+        "required": [
+          "remote_control"
+        ],
+        "properties": {
+          "remote_control": {
+            "$ref": "#/components/schemas/CodexRemoteSettings"
+          }
+        }
+      },
       "CommitIdentity": {
         "type": "object",
         "description": "The name and email git writes into commits.",
@@ -2316,6 +2441,7 @@
         "enum": [
           "agents",
           "claude_settings",
+          "codex_settings",
           "folders",
           "clones",
           "remote_control",
