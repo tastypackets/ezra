@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   rust:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -27,6 +29,8 @@ jobs:
           git diff --exit-code openapi.json
 
   web:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -41,16 +45,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      code: ${{ steps.diff.outputs.code }}
       image: ${{ steps.diff.outputs.image }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: diff
-        name: Changes that can reach the image
+        name: Changes beyond Markdown, and changes that can reach the image
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
+          if [[ -n ${BASE} ]] && git diff --quiet "${BASE}...HEAD" -- . ':!*.md'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
           if [[ -n ${BASE} ]] && git diff --quiet "${BASE}...HEAD" -- \
             crates Cargo.toml Cargo.lock web openapi.json Dockerfile .dockerignore image mise.toml \
             .github/workflows/ci.yml .github/scripts; then
