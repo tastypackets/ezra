@@ -2,13 +2,16 @@
 
 use ezra_container_tests::{DockerResource, SetupDirectory, run_in_image, stdout_of};
 
+/// Passes CI's token on, since unauthenticated GitHub API calls from shared runners hit the rate limit.
+const MISE_GITHUB_TOKEN: [&str; 2] = ["--env", "MISE_GITHUB_TOKEN"];
+
 #[test]
 #[ignore = "needs Docker, network access and a built ezra image"]
 fn project_pin_overrides_the_image_version() {
     let pin_jq_then_run_it = "mkdir /home/dev/projects/app && cd /home/dev/projects/app \
         && printf '[tools]\\njq = \"1.7.1\"\\n' > mise.toml \
         && jq --version";
-    let output = run_in_image(&[], &["bash", "-c", pin_jq_then_run_it]);
+    let output = run_in_image(&MISE_GITHUB_TOKEN, &["bash", "-c", pin_jq_then_run_it]);
     assert_eq!(stdout_of(&output).lines().last(), Some("jq-1.7.1"));
 }
 
@@ -26,7 +29,7 @@ fn global_tools_persist_on_the_config_volume() {
     let config_mount = format!("{}:/config", volume.name);
 
     stdout_of(&run_in_image(
-        &["--volume", &config_mount],
+        &["--env", "MISE_GITHUB_TOKEN", "--volume", &config_mount],
         &["mise", "use", "--global", "yq@4.44.1"],
     ));
     let output = run_in_image(&["--volume", &config_mount], &["yq", "--version"]);
