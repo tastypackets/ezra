@@ -90,6 +90,7 @@ jobs:
         with:
           context: .
           build-contexts: ezra-build=${{ runner.temp }}/ezra-build
+          secrets: github_token=${{ github.token }}
           load: true
           tags: ezra:ci
           cache-from: |

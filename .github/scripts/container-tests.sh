@@ -13,5 +13,5 @@ cargo test --locked --package ezra-container-tests --no-run --message-format=jso
     | xargs install --mode=755 --target-directory="${binaries}"
 chmod 755 "${binaries}"
 for tests in "${binaries}"/*; do
-    sudo --user="${tester}" --preserve-env=EZRA_TEST_IMAGE "${tests}" --ignored
+    sudo --user="${tester}" --preserve-env=EZRA_TEST_IMAGE,MISE_GITHUB_TOKEN "${tests}" --ignored
 done

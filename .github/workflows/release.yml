@@ -69,6 +69,7 @@ jobs:
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
+          secrets: github_token=${{ github.token }}
           load: true
           tags: ezra:release
           cache-from: type=gha,scope=release-${{ matrix.arch }}
@@ -93,6 +94,7 @@ jobs:
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
+          secrets: github_token=${{ github.token }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=release-${{ matrix.arch }}
       - name: Record the digest
