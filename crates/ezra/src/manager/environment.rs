@@ -25,8 +25,12 @@ pub struct EnvironmentSettings {
     pub apt_packages: Vec<String>,
     /// Scripts in /etc/ezra/setup.d, run as root at every start.
     pub setup_scripts: Vec<String>,
-    /// `GH_TOKEN` or `GITHUB_TOKEN` is set.
+    /// `GH_HOST`, the GitHub host gh signs in to.
+    pub github_host: String,
+    /// A variable in `github_token_variables` is set.
     pub github_token: bool,
+    /// The variables gh takes a token from for `github_host`.
+    pub github_token_variables: Vec<String>,
 }
 
 impl EnvironmentSettings {
@@ -53,7 +57,13 @@ impl EnvironmentSettings {
             sudo: init.sudo_policy == SudoPolicy::Full,
             apt_packages: init.apt_packages.names().to_vec(),
             setup_scripts,
+            github_host: git_tools.host().to_string(),
             github_token: git_tools.token_from_environment(),
+            github_token_variables: git_tools
+                .host()
+                .token_variables()
+                .map(str::to_owned)
+                .to_vec(),
         }
     }
 }

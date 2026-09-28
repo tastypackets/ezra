@@ -7,7 +7,7 @@ export const GIT_DESCRIPTIONS = {
   signed_out: "Signed out",
   signing_in: "Signing in",
   not_confirmed: "Not confirmed",
-  from_environment: "Set by the GH_TOKEN or GITHUB_TOKEN variable.",
+  from_environment: (variables: string[]) => `Set by the ${variables.join(" or ")} variable.`,
   sign_in: "Sign in to GitHub",
   sign_out: "Sign out",
   start_over: "Start over",

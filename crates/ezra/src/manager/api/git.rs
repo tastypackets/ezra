@@ -28,13 +28,17 @@ pub struct GitStatus {
 /// The GitHub sign-in git pushes with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct GitHubStatus {
+    /// The GitHub host, from `GH_HOST`, github.com by default.
+    pub host: String,
     pub signed_in: bool,
     /// The GitHub account, absent when unknown.
     pub account: Option<String>,
     /// An account is set up, but GitHub did not confirm it.
     pub failing: bool,
-    /// Comes from `GH_TOKEN` or `GITHUB_TOKEN`, so sign-in and sign-out return 409.
+    /// Comes from one of `token_variables`, so sign-in and sign-out return 409.
     pub from_environment: bool,
+    /// The variables gh takes a token from for this host, over any sign-in.
+    pub token_variables: Vec<String>,
     /// Present while a sign-in waits for the person signing in.
     pub login_prompt: Option<LoginPrompt>,
 }
@@ -187,10 +191,17 @@ impl AppState {
         };
         GitStatus {
             github: GitHubStatus {
+                host: self.git_tools.host().to_string(),
                 signed_in: sign_in.signed_in,
                 account: sign_in.account,
                 failing: sign_in.failing,
                 from_environment: self.git_tools.token_from_environment(),
+                token_variables: self
+                    .git_tools
+                    .host()
+                    .token_variables()
+                    .map(str::to_owned)
+                    .to_vec(),
                 login_prompt,
             },
             identity,
@@ -247,9 +258,10 @@ impl AppState {
 
     fn refuse_environment_sign_in(&self) -> Result<(), ApiError> {
         if self.git_tools.token_from_environment() {
-            Err(ApiError::Conflict(
-                "the GitHub sign-in comes from the GH_TOKEN or GITHUB_TOKEN variable".to_owned(),
-            ))
+            let [first, second] = self.git_tools.host().token_variables();
+            Err(ApiError::Conflict(format!(
+                "the GitHub sign-in comes from the {first} or {second} variable"
+            )))
         } else {
             Ok(())
         }

@@ -8,15 +8,14 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use utoipa::ToSchema;
 
+use super::github_host::GitHubHost;
 use super::login::{LoginError, LoginProcess, LoginPrompt, PromptShape};
 use crate::process_ext::OutputExt;
 
-const GITHUB_HOST: &str = "github.com";
 const GITHUB_REPOSITORIES: &str =
     "/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100";
 const GIT_CONFIG_VARIABLE: &str = "GIT_CONFIG_GLOBAL";
 const GH_CONFIG_VARIABLE: &str = "GH_CONFIG_DIR";
-const TOKEN_VARIABLES: [&str; 2] = ["GH_TOKEN", "GITHUB_TOKEN"];
 const EXCLUDES_FILE_KEY: &str = "core.excludesFile";
 const CLAUDE_WORKTREES_PATTERN: &str = ".claude/worktrees/";
 
@@ -43,15 +42,17 @@ pub struct GitTools {
     /// The excludes file to set when git has none.
     excludes_file: PathBuf,
     gh_config_directory: PathBuf,
+    host: GitHubHost,
     token_from_environment: bool,
 }
 
 impl GitTools {
-    /// `GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR`, or the manager's fallbacks under `home`.
+    /// `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR` and `GH_HOST`, or the manager's fallbacks under `home`.
     pub fn from_environment(home: &Path) -> Self {
         let path_from =
             |variable: &str, default: PathBuf| env::var_os(variable).map_or(default, PathBuf::from);
         let git_config = env::var_os(GIT_CONFIG_VARIABLE).map(PathBuf::from);
+        let host = GitHubHost::from_environment();
         Self {
             excludes_file: git_config.as_deref().map_or_else(
                 || home.join(".config/git/ignore"),
@@ -59,13 +60,19 @@ impl GitTools {
             ),
             git_config: git_config.unwrap_or_else(|| home.join(".gitconfig")),
             gh_config_directory: path_from(GH_CONFIG_VARIABLE, home.join(".config/gh")),
-            token_from_environment: TOKEN_VARIABLES
+            token_from_environment: host
+                .token_variables()
                 .iter()
                 .any(|variable| env::var_os(variable).is_some_and(|token| !token.is_empty())),
+            host,
         }
     }
 
-    /// gh uses `GH_TOKEN` or `GITHUB_TOKEN` over any sign-in, and refuses to sign in or out.
+    pub fn host(&self) -> &GitHubHost {
+        &self.host
+    }
+
+    /// gh uses a token from the host's variables over any sign-in, and refuses to sign in or out.
     pub fn token_from_environment(&self) -> bool {
         self.token_from_environment
     }
@@ -76,6 +83,7 @@ impl GitTools {
             git_config: directory.join("git/config"),
             excludes_file: directory.join("git/ignore"),
             gh_config_directory: directory.join("gh"),
+            host: GitHubHost::default(),
             token_from_environment: false,
         }
     }
@@ -87,8 +95,7 @@ impl GitTools {
             "auth",
             "login",
             "--web",
-            "--hostname",
-            GITHUB_HOST,
+            &self.hostname_argument(),
             "--git-protocol",
             "https",
             "--scopes",
@@ -107,8 +114,7 @@ impl GitTools {
                 "status",
                 "--json",
                 "hosts",
-                "--hostname",
-                GITHUB_HOST,
+                &self.hostname_argument(),
             ])
             .stdin(Stdio::null())
             .output()
@@ -116,10 +122,10 @@ impl GitTools {
         else {
             return GitHubSignIn::default();
         };
-        GitHubSignIn::from_status_json(&output.stdout)
+        GitHubSignIn::from_status_json(&output.stdout, &self.host)
     }
 
-    /// Signs out every github.com account, so no other one takes over.
+    /// Signs out every account on the host, so no other one takes over.
     pub async fn log_out_of_github(&self) -> Result<(), GitError> {
         for account in self.github_sign_in().await.accounts {
             let output = self
@@ -127,8 +133,7 @@ impl GitTools {
                 .args([
                     "auth",
                     "logout",
-                    "--hostname",
-                    GITHUB_HOST,
+                    &self.hostname_argument(),
                     "--user",
                     &account,
                 ])
@@ -148,7 +153,7 @@ impl GitTools {
     /// Makes git ask gh for GitHub credentials, unless it already does.
     pub async fn lend_github_sign_in_to_git(&self) -> Result<(), GitError> {
         let helpers = self
-            .config_values("credential.https://github.com.helper")
+            .config_values(&format!("credential.{}.helper", self.host.https_url()))
             .await?;
         if helpers
             .iter()
@@ -159,7 +164,7 @@ impl GitTools {
         self.create_config_directory().await?;
         let output = self
             .gh()
-            .args(["auth", "setup-git", "--hostname", GITHUB_HOST])
+            .args(["auth", "setup-git", &self.hostname_argument()])
             .stdin(Stdio::null())
             .output()
             .await?;
@@ -254,7 +259,7 @@ impl GitTools {
     pub async fn github_repositories(&self) -> Result<Vec<GitHubRepository>, GitError> {
         let output = self
             .gh()
-            .args(["api", GITHUB_REPOSITORIES])
+            .args(["api", &self.hostname_argument(), GITHUB_REPOSITORIES])
             .stdin(Stdio::null())
             .output()
             .await?;
@@ -379,6 +384,10 @@ impl GitTools {
         command
     }
 
+    fn hostname_argument(&self) -> String {
+        format!("--hostname={}", self.host)
+    }
+
     fn gh(&self) -> Command {
         let mut command = Command::new("gh");
         command
@@ -432,7 +441,7 @@ impl ExcludesFile {
     }
 }
 
-/// What gh reports about the github.com sign-in.
+/// What gh reports about the sign-in on the GitHub host.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GitHubSignIn {
     /// The active account works.
@@ -447,7 +456,7 @@ pub struct GitHubSignIn {
 
 impl GitHubSignIn {
     /// Parses `gh auth status --json hosts`.
-    fn from_status_json(status_json: &[u8]) -> Self {
+    fn from_status_json(status_json: &[u8], host: &GitHubHost) -> Self {
         #[derive(Deserialize)]
         struct Status {
             hosts: HashMap<String, Vec<Account>>,
@@ -462,7 +471,7 @@ impl GitHubSignIn {
         let Ok(mut status) = serde_json::from_slice::<Status>(status_json) else {
             return Self::default();
         };
-        let accounts = status.hosts.remove(GITHUB_HOST).unwrap_or_default();
+        let accounts = status.hosts.remove(host.as_str()).unwrap_or_default();
         let Some(active) = accounts.iter().find(|account| account.active) else {
             return Self::default();
         };
@@ -533,7 +542,7 @@ mod tests {
             {"state":"success","active":false,"host":"github.com","login":"old","tokenSource":"/config/gh/hosts.yml","gitProtocol":"https"},
             {"state":"success","active":true,"host":"github.com","login":"zeke","tokenSource":"/config/gh/hosts.yml","gitProtocol":"https"}]}}"#;
         assert_eq!(
-            GitHubSignIn::from_status_json(status),
+            GitHubSignIn::from_status_json(status, &GitHubHost::default()),
             GitHubSignIn {
                 signed_in: true,
                 account: Some("zeke".to_owned()),
@@ -544,10 +553,23 @@ mod tests {
     }
 
     #[test]
+    fn only_the_configured_host_counts() {
+        let status = br#"{"hosts":{
+            "github.com":[{"state":"success","active":true,"host":"github.com","login":"zeke","tokenSource":"/config/gh/hosts.yml","gitProtocol":"https"}],
+            "ghe.example.com":[{"state":"success","active":true,"host":"ghe.example.com","login":"z.keator","tokenSource":"GH_ENTERPRISE_TOKEN","gitProtocol":"https"}]}}"#;
+        let enterprise =
+            GitHubSignIn::from_status_json(status, &GitHubHost::from_value("ghe.example.com"));
+        assert_eq!(enterprise.account.as_deref(), Some("z.keator"));
+        let elsewhere =
+            GitHubSignIn::from_status_json(status, &GitHubHost::from_value("acme.ghe.com"));
+        assert_eq!(elsewhere, GitHubSignIn::default());
+    }
+
+    #[test]
     fn rejected_token_is_failing() {
         let status = br#"{"hosts":{"github.com":[{"state":"error","error":"401 Bad credentials","active":true,"host":"github.com","login":"","tokenSource":"GH_TOKEN","gitProtocol":"https"}]}}"#;
         assert_eq!(
-            GitHubSignIn::from_status_json(status),
+            GitHubSignIn::from_status_json(status, &GitHubHost::default()),
             GitHubSignIn {
                 signed_in: false,
                 account: None,
@@ -560,11 +582,11 @@ mod tests {
     #[test]
     fn no_hosts_or_unexpected_output_is_signed_out() {
         assert_eq!(
-            GitHubSignIn::from_status_json(br#"{"hosts":{}}"#),
+            GitHubSignIn::from_status_json(br#"{"hosts":{}}"#, &GitHubHost::default()),
             GitHubSignIn::default()
         );
         assert_eq!(
-            GitHubSignIn::from_status_json(b"not json"),
+            GitHubSignIn::from_status_json(b"not json", &GitHubHost::default()),
             GitHubSignIn::default()
         );
     }

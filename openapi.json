@@ -2583,7 +2583,9 @@
           "sudo",
           "apt_packages",
           "setup_scripts",
-          "github_token"
+          "github_host",
+          "github_token",
+          "github_token_variables"
         ],
         "properties": {
           "apt_packages": {
@@ -2593,9 +2595,20 @@
             },
             "description": "`EZRA_APT_PACKAGES`, installed at every start."
           },
+          "github_host": {
+            "type": "string",
+            "description": "`GH_HOST`, the GitHub host gh signs in to."
+          },
           "github_token": {
             "type": "boolean",
-            "description": "`GH_TOKEN` or `GITHUB_TOKEN` is set."
+            "description": "A variable in `github_token_variables` is set."
+          },
+          "github_token_variables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The variables gh takes a token from for `github_host`."
           },
           "hostname": {
             "type": "string",
@@ -2749,9 +2762,11 @@
         "type": "object",
         "description": "The GitHub sign-in git pushes with.",
         "required": [
+          "host",
           "signed_in",
           "failing",
-          "from_environment"
+          "from_environment",
+          "token_variables"
         ],
         "properties": {
           "account": {
@@ -2767,7 +2782,11 @@
           },
           "from_environment": {
             "type": "boolean",
-            "description": "Comes from `GH_TOKEN` or `GITHUB_TOKEN`, so sign-in and sign-out return 409."
+            "description": "Comes from one of `token_variables`, so sign-in and sign-out return 409."
+          },
+          "host": {
+            "type": "string",
+            "description": "The GitHub host, from `GH_HOST`, github.com by default."
           },
           "login_prompt": {
             "oneOf": [
@@ -2782,6 +2801,13 @@
           },
           "signed_in": {
             "type": "boolean"
+          },
+          "token_variables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The variables gh takes a token from for this host, over any sign-in."
           }
         }
       },

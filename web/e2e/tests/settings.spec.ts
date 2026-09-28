@@ -330,8 +330,8 @@ test("GitHub sign-in steps take focus and hand it back when they close", async (
   const prompt = { url: "https://github.com/login/device", code: "ABCD-1234" };
   let github: object = { failing: false, from_environment: false, signed_in: false };
   await page.route("**/api/v1/git", async (route) => {
-    const status: object = await (await route.fetch()).json();
-    await route.fulfill({ json: { ...status, github } });
+    const status: { github: object } = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...status, github: { ...status.github, ...github } } });
   });
   await page.route("**/api/v1/git/github/login", (route) => {
     github = { ...github, login_prompt: prompt };

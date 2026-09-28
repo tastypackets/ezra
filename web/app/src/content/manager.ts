@@ -26,6 +26,7 @@ export const ENVIRONMENT_DESCRIPTIONS = {
   sudo: "Sudo for agents",
   apt_packages: "Extra apt packages",
   setup_scripts: "Setup scripts",
+  github_host: "GitHub host",
   github_token: "GitHub token",
   on: "On",
   off: "Off",

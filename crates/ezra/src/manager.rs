@@ -8,6 +8,7 @@ mod environment;
 mod events;
 mod folders;
 mod git;
+mod github_host;
 mod https_redirect;
 mod login;
 mod processes;
