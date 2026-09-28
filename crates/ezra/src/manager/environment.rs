@@ -25,7 +25,7 @@ pub struct EnvironmentSettings {
     pub apt_packages: Vec<String>,
     /// Scripts in /etc/ezra/setup.d, run as root at every start.
     pub setup_scripts: Vec<String>,
-    /// `GH_HOST`, the GitHub host gh signs in to.
+    /// `GH_HOST`, the GitHub host gh signs in to, github.com when unset.
     pub github_host: String,
     /// A variable in `github_token_variables` is set.
     pub github_token: bool,
@@ -59,11 +59,9 @@ impl EnvironmentSettings {
             setup_scripts,
             github_host: git_tools.host().to_string(),
             github_token: git_tools.token_from_environment(),
-            github_token_variables: git_tools
-                .host()
-                .token_variables()
-                .map(str::to_owned)
-                .to_vec(),
+            github_token_variables: Vec::from(
+                git_tools.host().token_variables().map(str::to_owned),
+            ),
         }
     }
 }

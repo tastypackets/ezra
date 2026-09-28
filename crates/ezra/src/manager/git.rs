@@ -14,6 +14,8 @@ use crate::process_ext::OutputExt;
 
 const GITHUB_REPOSITORIES: &str =
     "/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100";
+/// gh lists `GH_HOST` with this source when nothing is signed in there.
+const GH_PLACEHOLDER_TOKEN_SOURCE: &str = "default";
 const GIT_CONFIG_VARIABLE: &str = "GIT_CONFIG_GLOBAL";
 const GH_CONFIG_VARIABLE: &str = "GH_CONFIG_DIR";
 const EXCLUDES_FILE_KEY: &str = "core.excludesFile";
@@ -462,16 +464,24 @@ impl GitHubSignIn {
             hosts: HashMap<String, Vec<Account>>,
         }
         #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
         struct Account {
             state: String,
             active: bool,
             login: String,
             error: Option<String>,
+            token_source: String,
         }
         let Ok(mut status) = serde_json::from_slice::<Status>(status_json) else {
             return Self::default();
         };
-        let accounts = status.hosts.remove(host.as_str()).unwrap_or_default();
+        let accounts: Vec<Account> = status
+            .hosts
+            .remove(host.as_str())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|account| account.token_source != GH_PLACEHOLDER_TOKEN_SOURCE)
+            .collect();
         let Some(active) = accounts.iter().find(|account| account.active) else {
             return Self::default();
         };
@@ -563,6 +573,15 @@ mod tests {
         let elsewhere =
             GitHubSignIn::from_status_json(status, &GitHubHost::from_value("acme.ghe.com"));
         assert_eq!(elsewhere, GitHubSignIn::default());
+    }
+
+    #[test]
+    fn the_placeholder_gh_lists_for_gh_host_is_signed_out() {
+        let status = br#"{"hosts":{"ghe.example.com":[{"state":"error","error":"no token","active":true,"host":"ghe.example.com","login":"","tokenSource":"default","gitProtocol":"https"}]}}"#;
+        assert_eq!(
+            GitHubSignIn::from_status_json(status, &GitHubHost::from_value("ghe.example.com")),
+            GitHubSignIn::default()
+        );
     }
 
     #[test]

@@ -2230,7 +2230,7 @@
           },
           "repository": {
             "type": "string",
-            "description": "A git URL or path, or `owner/repo` for GitHub."
+            "description": "A git URL or path, or `owner/repo` on the GitHub host."
           },
           "serve": {
             "type": [
@@ -2597,7 +2597,7 @@
           },
           "github_host": {
             "type": "string",
-            "description": "`GH_HOST`, the GitHub host gh signs in to."
+            "description": "`GH_HOST`, the GitHub host gh signs in to, github.com when unset."
           },
           "github_token": {
             "type": "boolean",
@@ -2786,7 +2786,7 @@
           },
           "host": {
             "type": "string",
-            "description": "The GitHub host, from `GH_HOST`, github.com by default."
+            "description": "`GH_HOST`, the GitHub host gh signs in to, github.com when unset."
           },
           "login_prompt": {
             "oneOf": [

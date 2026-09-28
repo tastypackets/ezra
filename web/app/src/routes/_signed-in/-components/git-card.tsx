@@ -26,8 +26,6 @@ import { handOffFocus } from "@/lib/focus";
 import { errorMessage } from "@/lib/utils";
 import { gitStatusQueryOptions } from "@/queries/git-queries";
 
-const GITHUB_DOTCOM = "github.com";
-
 /** The GitHub sign-in and commit identity every agent's git uses. */
 export function GitCard() {
   const { data: git } = useSuspenseQuery({ ...gitStatusQueryOptions, refetchOnMount: "always" });
@@ -61,9 +59,7 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="font-medium">
-            {github.host === GITHUB_DOTCOM ? GIT_DESCRIPTIONS.github : github.host}
-          </h3>
+          <h3 className="font-medium">{GIT_DESCRIPTIONS.github(github.host)}</h3>
           <Badge variant={state.variant}>{state.label}</Badge>
         </div>
         {canSignOut || canSignIn ? (

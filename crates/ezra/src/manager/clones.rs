@@ -38,7 +38,7 @@ pub enum CloneError {
 /// A repository to clone into a new folder in /home/dev/projects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CloneRequest {
-    /// A git URL or path, or `owner/repo` for GitHub.
+    /// A git URL or path, or `owner/repo` on the GitHub host.
     pub repository: String,
     /// The new folder's name.
     pub name: String,

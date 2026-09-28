@@ -1,9 +1,8 @@
 use std::env;
 use std::fmt;
 
-pub const GITHUB_HOST_VARIABLE: &str = "GH_HOST";
+const GH_HOST_VARIABLE: &str = "GH_HOST";
 const DOTCOM: &str = "github.com";
-const DOTCOM_SUBDOMAIN_SUFFIX: &str = ".github.com";
 const TENANCY_SUFFIX: &str = ".ghe.com";
 const DOTCOM_TOKEN_VARIABLES: [&str; 2] = ["GH_TOKEN", "GITHUB_TOKEN"];
 const ENTERPRISE_TOKEN_VARIABLES: [&str; 2] = ["GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
@@ -14,17 +13,34 @@ pub struct GitHubHost(String);
 
 impl GitHubHost {
     pub fn from_environment() -> Self {
-        Self::from_value(&env::var(GITHUB_HOST_VARIABLE).unwrap_or_default())
+        let host = Self::from_value(&env::var(GH_HOST_VARIABLE).unwrap_or_default());
+        if !host.is_plain_hostname() {
+            tracing::warn!(
+                "{GH_HOST_VARIABLE}={:?} is not a lowercase hostname such as ghe.example.com, so gh may not find its sign-in",
+                host.0
+            );
+        }
+        host
     }
 
-    /// Lowercased, and a github.com subdomain means github.com, as gh reads it.
+    /// Kept exactly as given, since gh matches hosts by their exact text.
     pub fn from_value(value: &str) -> Self {
-        let host = value.trim().to_ascii_lowercase();
-        if host.is_empty() || host.ends_with(DOTCOM_SUBDOMAIN_SUFFIX) {
+        if value.is_empty() {
             Self::default()
         } else {
-            Self(host)
+            Self(value.to_owned())
         }
+    }
+
+    fn is_plain_hostname(&self) -> bool {
+        !self.0.starts_with(['-', '.'])
+            && !self.0.ends_with('.')
+            && !self.0.contains("..")
+            && self.0.chars().all(|character| {
+                character.is_ascii_lowercase()
+                    || character.is_ascii_digit()
+                    || ".-".contains(character)
+            })
     }
 
     pub fn as_str(&self) -> &str {
@@ -73,19 +89,39 @@ mod tests {
     #[test]
     fn unset_or_empty_means_github_com() {
         assert_eq!(GitHubHost::from_value(""), GitHubHost::default());
-        assert_eq!(GitHubHost::from_value("  "), GitHubHost::default());
         assert!(GitHubHost::default().is_dotcom());
     }
 
     #[test]
-    fn hosts_are_read_as_gh_reads_them() {
-        for (value, host) in [
-            ("GHE.Example.com", "ghe.example.com"),
-            (" ghe.example.com\n", "ghe.example.com"),
-            ("api.github.com", "github.com"),
-            ("acme.ghe.com", "acme.ghe.com"),
+    fn hosts_are_kept_as_given() {
+        for value in [
+            "ghe.example.com",
+            "GHE.Example.com",
+            "api.github.com",
+            " ghe.example.com",
         ] {
-            assert_eq!(GitHubHost::from_value(value).as_str(), host, "{value}");
+            assert_eq!(GitHubHost::from_value(value).as_str(), value, "{value}");
+        }
+    }
+
+    #[test]
+    fn only_lowercase_hostnames_are_plain() {
+        for (value, plain) in [
+            ("ghe.example.com", true),
+            ("ghe-1.example.com", true),
+            ("GHE.example.com", false),
+            (" ghe.example.com", false),
+            ("https://ghe.example.com", false),
+            ("ghe.example.com:8443", false),
+            ("-ghe.example.com", false),
+            ("ghe..example.com", false),
+            ("ghe.example.com.", false),
+        ] {
+            assert_eq!(
+                GitHubHost::from_value(value).is_plain_hostname(),
+                plain,
+                "{value}"
+            );
         }
     }
 

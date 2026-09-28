@@ -2,6 +2,7 @@ import type { EnvironmentSettings } from "@ezra/client";
 import { useSuspenseQuery } from "@tanstack/react-query";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { eitherVariable } from "@/content/git";
 import { ENVIRONMENT_DESCRIPTIONS } from "@/content/manager";
 import { managerQueryOptions } from "@/queries/manager-queries";
 
@@ -66,7 +67,7 @@ function environmentRows(environment: EnvironmentSettings) {
     },
     {
       label: ENVIRONMENT_DESCRIPTIONS.github_token,
-      source: environment.github_token_variables.join(" or "),
+      source: eitherVariable(environment.github_token_variables),
       value: environment.github_token
         ? ENVIRONMENT_DESCRIPTIONS.set
         : ENVIRONMENT_DESCRIPTIONS.not_set,

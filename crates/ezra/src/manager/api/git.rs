@@ -28,7 +28,7 @@ pub struct GitStatus {
 /// The GitHub sign-in git pushes with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct GitHubStatus {
-    /// The GitHub host, from `GH_HOST`, github.com by default.
+    /// `GH_HOST`, the GitHub host gh signs in to, github.com when unset.
     pub host: String,
     pub signed_in: bool,
     /// The GitHub account, absent when unknown.
@@ -196,12 +196,9 @@ impl AppState {
                 account: sign_in.account,
                 failing: sign_in.failing,
                 from_environment: self.git_tools.token_from_environment(),
-                token_variables: self
-                    .git_tools
-                    .host()
-                    .token_variables()
-                    .map(str::to_owned)
-                    .to_vec(),
+                token_variables: Vec::from(
+                    self.git_tools.host().token_variables().map(str::to_owned),
+                ),
                 login_prompt,
             },
             identity,
@@ -258,9 +255,9 @@ impl AppState {
 
     fn refuse_environment_sign_in(&self) -> Result<(), ApiError> {
         if self.git_tools.token_from_environment() {
-            let [first, second] = self.git_tools.host().token_variables();
             Err(ApiError::Conflict(format!(
-                "the GitHub sign-in comes from the {first} or {second} variable"
+                "the GitHub sign-in comes from the {} variable",
+                self.git_tools.host().token_variables().join(" or ")
             )))
         } else {
             Ok(())
