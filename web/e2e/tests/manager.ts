@@ -7,7 +7,7 @@ export const PASSWORD = "correct horse";
 
 const CLAUDE_VERSIONS = "/home/dev/.local/share/claude/versions";
 const CLAUDE_COMMAND = "/home/dev/.local/bin/claude";
-export const CLAUDE_CREDENTIALS = "/config/claude/.credentials.json";
+export const CLAUDE_CREDENTIALS = "/home/dev/.claude/.credentials.json";
 export const PROJECTS_DIRECTORY = "/home/dev/projects";
 const CODEX_VERSIONS = "/home/dev/.local/share/codex";
 const CODEX_COMMAND = "/home/dev/.local/bin/codex";

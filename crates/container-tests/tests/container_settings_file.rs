@@ -59,9 +59,11 @@ impl ManagerExt for Manager {
 fn files_mounted_on_their_own_are_saved_in_place() {
     let volume = DockerResource::volume("settings-file-own");
     let config = format!("{}:/config", volume.name);
+    let home = DockerResource::volume("settings-file-home");
+    let home_mount = format!("{}:/home/dev", home.name);
     stdout_of(&run_in_image(
-        &["--volume", &config],
-        &["mkdir", "/config/claude", "/config/codex"],
+        &["--volume", &config, "--volume", &home_mount],
+        &["mkdir", "/home/dev/.claude", "/home/dev/.codex"],
     ));
     let host = agent_directory();
     let settings = host.path().join("settings.json");
@@ -69,13 +71,15 @@ fn files_mounted_on_their_own_are_saved_in_place() {
     settings.write_with_mode(CLAUDE_TEXT.as_bytes(), 0o640);
     codex_config.write_with_mode(CODEX_TEXT.as_bytes(), 0o644);
     let (settings_inode, codex_inode) = (settings.inode(), codex_config.inode());
-    let settings_mount = format!("{}:/config/claude/settings.json", settings.display());
-    let codex_mount = format!("{}:/config/codex/config.toml", codex_config.display());
+    let settings_mount = format!("{}:/home/dev/.claude/settings.json", settings.display());
+    let codex_mount = format!("{}:/home/dev/.codex/config.toml", codex_config.display());
     let manager = Manager::start(
         "settings-file-own",
         &[
             "--volume",
             &config,
+            "--volume",
+            &home_mount,
             "--volume",
             &settings_mount,
             "--volume",
@@ -84,18 +88,18 @@ fn files_mounted_on_their_own_are_saved_in_place() {
     );
 
     let claude = manager.open("claude");
-    assert_eq!(claude["path"], "/config/claude/settings.json");
+    assert_eq!(claude["path"], "/home/dev/.claude/settings.json");
     assert_eq!(claude["format"], "json");
     assert_eq!(claude["text"], CLAUDE_TEXT);
     let codex = manager.open("codex");
-    assert_eq!(codex["path"], "/config/codex/config.toml");
+    assert_eq!(codex["path"], "/home/dev/.codex/config.toml");
     assert_eq!(codex["format"], "toml");
     assert_eq!(codex["text"], CODEX_TEXT);
 
     let renamed = manager.container.run_as_agent(&[
         "sh",
         "-c",
-        "printf 'a = 1\\n' > /config/codex/.tmpAbC123 && mv /config/codex/.tmpAbC123 /config/codex/config.toml",
+        "printf 'a = 1\\n' > /home/dev/.codex/.tmpAbC123 && mv /home/dev/.codex/.tmpAbC123 /home/dev/.codex/config.toml",
     ]);
     assert!(!renamed.status.success());
     let refused = stderr_of(&renamed);
@@ -103,7 +107,7 @@ fn files_mounted_on_their_own_are_saved_in_place() {
     stdout_of(
         &manager
             .container
-            .run_as_agent(&["rm", "/config/codex/.tmpAbC123"]),
+            .run_as_agent(&["rm", "/home/dev/.codex/.tmpAbC123"]),
     );
 
     let events = manager.events();
@@ -154,7 +158,7 @@ fn files_mounted_on_their_own_are_saved_in_place() {
     let (status, conflict) = manager.save("codex", "", &codex["version"]);
     assert_eq!(status, "409", "{conflict}");
 
-    for directory in ["/config/claude", "/config/codex"] {
+    for directory in ["/home/dev/.claude", "/home/dev/.codex"] {
         let names = stdout_of(&docker(&[
             "exec",
             &manager.container.name,
@@ -178,8 +182,8 @@ fn files_in_mounted_directories_are_replaced_and_keep_their_mode() {
     target.write_with_mode(CLAUDE_TEXT.as_bytes(), 0o660);
     symlink("dotfiles/settings.json", &settings).expect("the link is created");
     fs::create_dir(&codex_directory).expect("the directory is created");
-    let claude_mount = format!("{}:/config/claude", claude_directory.display());
-    let codex_mount = format!("{}:/config/codex", codex_directory.display());
+    let claude_mount = format!("{}:/home/dev/.claude", claude_directory.display());
+    let codex_mount = format!("{}:/home/dev/.codex", codex_directory.display());
     let manager = Manager::start(
         "settings-file-directories",
         &["--volume", &claude_mount, "--volume", &codex_mount],
@@ -278,7 +282,7 @@ fn codex_reads_what_ezra_saves_and_its_own_saves_are_noticed() {
     let host = agent_directory();
     let codex_config = host.path().join("config.toml");
     let target = host.path().join("dotfiles/config.toml");
-    let codex_mount = format!("{}:/config/codex", host.path().display());
+    let codex_mount = format!("{}:/home/dev/.codex", host.path().display());
     let manager = Manager::start("settings-file-codex", &["--volume", &codex_mount]);
     let (status, installed) = manager.request("POST", "/api/v1/agents/codex/install", None);
     assert_eq!(status, "200", "{installed}");
@@ -385,8 +389,8 @@ fn codex_reads_what_ezra_saves_and_its_own_saves_are_noticed() {
 fn missing_files_and_their_folders_are_created_for_the_agent_user() {
     let manager = Manager::start("settings-file-missing", &[]);
     for (agent, directory, text) in [
-        ("claude", "/config/claude", "{}"),
-        ("codex", "/config/codex", "a = 1\n"),
+        ("claude", "/home/dev/.claude", "{}"),
+        ("codex", "/home/dev/.codex", "a = 1\n"),
     ] {
         assert!(
             !docker(&["exec", &manager.container.name, "test", "-e", directory])

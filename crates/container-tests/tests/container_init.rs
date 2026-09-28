@@ -8,8 +8,9 @@ use ezra_container_tests::{
     DockerResource, docker, process_status_field, run_in_image, stderr_of, stdout_of,
 };
 
-const AGENT_DIRECTORIES: [(&str, &str); 3] = [
+const AGENT_DIRECTORIES: [(&str, &str); 4] = [
     ("config", "/config"),
+    ("home", "/home/dev"),
     ("projects", "/home/dev/projects"),
     ("cache", "/cache"),
 ];
@@ -321,4 +322,60 @@ fn global_git_settings_live_on_the_config_volume() {
         ],
     );
     assert_eq!(stdout_of(&output), "Tester", "{}", stderr_of(&output));
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn empty_home_mount_creates_projects_as_dev() {
+    let output = run_in_image(
+        &["--tmpfs", "/home/dev:mode=0755"],
+        &[
+            "sh",
+            "-c",
+            "test -w /home/dev/projects && stat --format=%u:%g /home/dev/projects",
+        ],
+    );
+    assert_eq!(stdout_of(&output), "1000:1000");
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn home_keeps_projects_and_agent_data_across_recreation() {
+    let volume = DockerResource::volume("persistent-home");
+    let mount = format!(
+        "type=volume,source={},target=/home/dev,volume-nocopy",
+        volume.name
+    );
+    let first = run_in_image(
+        &["--mount", &mount],
+        &[
+            "sh",
+            "-ec",
+            "mkdir -p /home/dev/projects/app \
+          /home/dev/.codex /home/dev/.claude /home/dev/.local/bin; \
+          echo repository > /home/dev/projects/app/file; \
+          echo '# persistent settings' > /home/dev/.codex/config.toml; \
+          echo '{}' > /home/dev/.claude/settings.json; \
+          echo '{}' > /home/dev/.claude/.claude.json; \
+          echo custom > /home/dev/.bashrc; \
+          ln -s /cache/missing-codex /home/dev/.local/bin/codex",
+        ],
+    );
+    stdout_of(&first);
+    let second = run_in_image(
+        &["--mount", &mount],
+        &[
+            "sh",
+            "-ec",
+            "test \"$CODEX_HOME\" = /home/dev/.codex; \
+          test \"$CLAUDE_CONFIG_DIR\" = /home/dev/.claude; \
+          test -w /home/dev/projects; \
+          test -L /home/dev/.local/bin/codex; \
+          cat /home/dev/projects/app/file /home/dev/.codex/config.toml /home/dev/.claude/settings.json /home/dev/.claude/.claude.json /home/dev/.bashrc",
+        ],
+    );
+    assert_eq!(
+        stdout_of(&second),
+        "repository\n# persistent settings\n{}\n{}\ncustom"
+    );
 }

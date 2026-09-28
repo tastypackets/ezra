@@ -55,8 +55,8 @@ fn installed_agents_run_and_offer_sign_in() {
         "exec",
         &container.name,
         "find",
-        "/config/claude",
-        "/config/codex",
+        "/home/dev/.claude",
+        "/home/dev/.codex",
         "-size",
         "+1M",
     ]));
@@ -129,13 +129,15 @@ fn configured_agent_is_reinstalled_after_a_recreate() {
     let volume = DockerResource::volume("agents-config");
     let config_mount = format!("{}:/config", volume.name);
 
-    let first = Manager::start("agents-first", &["--volume", &config_mount]);
+    let home = DockerResource::volume("agents-home");
+    let home_mount = format!("{}:/home/dev", home.name);
+    let mounts = ["--volume", &config_mount, "--volume", &home_mount];
+    let first = Manager::start("agents-first", &mounts);
     let (status, body) = first.request("POST", "/api/v1/agents/codex/install", None);
     assert_eq!(status, "200", "{body}");
     drop(first);
 
-    let second =
-        DockerResource::start_container("agents-second", &["--volume", &config_mount], &[]);
+    let second = DockerResource::start_container("agents-second", &mounts, &[]);
     let started = Instant::now();
     while !second
         .run_as_agent(&["codex", "--version"])

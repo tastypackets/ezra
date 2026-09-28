@@ -16,7 +16,7 @@ services:
       - "8443:8443"
     volumes:
       - config:/config
-      - projects:/home/dev/projects
+      - home:/home/dev
       - cache:/cache
     stop_grace_period: 60s
     # Codex's sandbox needs these for the ChatGPT app's folder picker.
@@ -27,14 +27,14 @@ services:
 
 volumes:
   config:
-  projects:
+  home:
   cache:
 ```
 
 | Volume | Holds |
 |---|---|
-| `/config` | The manager password, agent sign-ins, settings and chats |
-| `/home/dev/projects` | Your repositories |
+| `/config` | The manager password, GitHub settings and mise |
+| `/home/dev` | Repositories in `projects`, agent data in `.claude` and `.codex`, and other user files |
 | `/cache` | Installed agent versions and tools |
 
 At start, an empty folder mounted at one of these paths and owned by root is given to uid 1000.
@@ -69,7 +69,7 @@ Clone repositories from the Folders card, or ask an agent started in `~/projects
 | `EZRA_PORT` | `8443` | The port the manager listens on inside the container |
 | `EZRA_SUDO` | `off` | `full` lets agents use sudo |
 | `EZRA_APT_PACKAGES` | | Packages to install at every start, separated by spaces or commas |
-| `EZRA_CHOWN_EMPTY_MOUNTS` | `on` | `off` leaves empty root-owned mounts of `/config`, `/home/dev/projects` and `/cache` owned by root |
+| `EZRA_CHOWN_EMPTY_MOUNTS` | `on` | `off` leaves empty root-owned mounts of `/config`, `/home/dev`, `/home/dev/projects` and `/cache` owned by root |
 | `EZRA_TLS_VERIFY` | `on` | `off` skips certificate checks on agent downloads, for networks that intercept TLS |
 | `GH_HOST` | `github.com` | The GitHub host to sign in to, such as a GitHub Enterprise Server host |
 | `GH_TOKEN` or `GITHUB_TOKEN` | | A token for github.com or a `ghe.com` subdomain to use in place of signing in |

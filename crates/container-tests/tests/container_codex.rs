@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use ezra_container_tests::{DockerResource, Manager, docker, stderr_of, stdout_of};
 use serde_json::Value;
 
-const CODEX_HOME: &str = "/config/codex";
+const CODEX_HOME: &str = "/home/dev/.codex";
 const SERVER_LOG_FILTER: &str = "error,codex_app_server_transport::transport::remote_control=warn";
 const SIGNED_OUT: &str = "remote control requires ChatGPT authentication";
 const SIGN_IN_NOTICED: Duration = Duration::from_secs(90);
@@ -106,6 +106,38 @@ fn real_codex_stays_off_until_chatgpt_and_takes_ezras_launch() {
     assert_eq!(status, "200", "{body}");
 
     manager.codex_off();
+
+    let initialized = stdout_of(&container.run_codex(
+        &[],
+        &[
+            "python3",
+            "-c",
+            r#"
+import json, signal, subprocess
+signal.alarm(15)
+server = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+try:
+    request = {"id": 1, "method": "initialize", "params": {
+        "clientInfo": {"name": "ezra_home_test", "version": "1.0.0"}}}
+    server.stdin.write(json.dumps(request) + "\n")
+    server.stdin.flush()
+    for line in server.stdout:
+        response = json.loads(line)
+        if response.get("id") == 1:
+            print(json.dumps(response))
+            break
+finally:
+    server.terminate()
+    server.wait(timeout=5)
+"#,
+        ],
+    ));
+    let initialized: Value = serde_json::from_str(&initialized).expect("Codex returns JSON");
+    assert_eq!(
+        initialized["result"]["codexHome"], CODEX_HOME,
+        "{initialized}"
+    );
 
     let features = stdout_of(&container.run_codex(&[], &["codex", "features", "list"]));
     let daemon_auto_start = features

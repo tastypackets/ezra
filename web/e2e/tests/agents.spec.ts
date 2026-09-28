@@ -50,7 +50,7 @@ test("a Codex sign-in and sign-out show up without a refresh", async ({ page }) 
 });
 
 test("uninstalling Codex keeps its saved data unless asked to delete it", async ({ page }) => {
-  const saved = "/config/codex/e2e-saved";
+  const saved = "/home/dev/.codex/e2e-saved";
   const row = page.getByRole("row", { name: /Codex/ });
   const dialog = page.getByRole("alertdialog", { name: "Uninstall Codex?" });
   const deleteData = dialog.getByRole("switch", {
@@ -78,7 +78,7 @@ test("uninstalling Codex keeps its saved data unless asked to delete it", async 
         deleting ? "" : "kept",
       );
     }
-    inContainer("test", "-d", "/config/codex");
+    inContainer("test", "-d", "/home/dev/.codex");
   } finally {
     inContainer("rm", "-f", saved);
   }
