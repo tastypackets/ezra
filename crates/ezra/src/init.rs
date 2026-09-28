@@ -1,4 +1,6 @@
 pub mod apt_packages;
+#[path = "init/browser-cache.rs"]
+mod browser_cache;
 pub mod config;
 mod empty_mounts;
 mod environment;
@@ -11,10 +13,10 @@ pub mod setup_scripts;
 mod stdio;
 pub mod sudo;
 
-use std::env;
 use std::ffi::{NulError, OsStr, OsString};
 use std::path::Path;
 use std::process::ExitCode;
+use std::{env, fs};
 
 use nix::errno::Errno;
 use nix::unistd::{AccessFlags, Uid, User, access};
@@ -22,6 +24,7 @@ use nix::unistd::{AccessFlags, Uid, User, access};
 use crate::environment_config::FromEnvironment;
 use crate::manager::PROJECTS_DIRECTORY;
 use apt_packages::{APT_PACKAGES_VARIABLE, RequestedPackages};
+use browser_cache::BrowserCache;
 use config::InitConfig;
 use environment::{AccountDetails, EnvironmentOverride, TemporaryHome};
 use exec::Program;
@@ -34,7 +37,8 @@ use stdio::StandardStreams;
 use sudo::{SUDO_POLICY_VARIABLE, SudoPolicy};
 
 const AGENT_USER_NAME: &str = "dev";
-const DIRECTORIES_AGENT_MUST_WRITE: [&str; 3] = ["/config", PROJECTS_DIRECTORY, "/cache"];
+const DIRECTORIES_AGENT_MUST_WRITE: [&str; 4] =
+    ["/config", "/home/dev", PROJECTS_DIRECTORY, "/cache"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {
@@ -97,6 +101,14 @@ fn prepare() -> Result<Vec<EnvironmentOverride>, InitError> {
         adopt_invoking_user(sudo_policy, &requested_packages)?
     };
     sudo_policy.restrict_process_tree()?;
+    if let Err(error) = fs::create_dir_all(PROJECTS_DIRECTORY) {
+        tracing::warn!("could not create {PROJECTS_DIRECTORY}: {error}");
+    }
+    if let Some(cache) = BrowserCache::from_environment(&environment_overrides)
+        && let Err(error) = cache.link_bundled(Path::new("/opt/ms-playwright"))
+    {
+        tracing::warn!("could not prepare the Playwright cache: {error}");
+    }
     warn_about_unwritable_directories();
     if let Some(git_config) = GlobalGitConfig::from_environment() {
         git_config.create_directory();

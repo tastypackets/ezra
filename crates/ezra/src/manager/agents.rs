@@ -130,7 +130,7 @@ pub enum InstallError {
 
 /// `~/.local/bin` holds the commands. The versions directory holds one directory or file per
 /// version of each agent, /cache/agents in the image. The config directories hold each CLI's
-/// sign-in, settings and sessions on the /config volume.
+/// sign-in, settings and sessions.
 #[derive(Debug, Clone)]
 pub struct InstallPaths {
     bin_directory: PathBuf,

@@ -1,14 +1,16 @@
 //! Black-box test of Codex remote control against the real Codex release, which it downloads.
 //! Build the image first, then run: `cargo test --test container_codex -- --ignored`
 
-use std::process::Output;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use ezra_container_tests::{DockerResource, Manager, docker, stderr_of, stdout_of};
-use serde_json::Value;
+use serde_json::{Value, json};
 
-const CODEX_HOME: &str = "/config/codex";
+const CODEX_HOME: &str = "/home/dev/.codex";
 const SERVER_LOG_FILTER: &str = "error,codex_app_server_transport::transport::remote_control=warn";
 const SIGNED_OUT: &str = "remote control requires ChatGPT authentication";
 const SIGN_IN_NOTICED: Duration = Duration::from_secs(90);
@@ -106,6 +108,55 @@ fn real_codex_stays_off_until_chatgpt_and_takes_ezras_launch() {
     assert_eq!(status, "200", "{body}");
 
     manager.codex_off();
+
+    let mut server = Command::new("docker")
+        .args([
+            "exec",
+            "--interactive",
+            "--user",
+            "dev",
+            "--workdir",
+            "/home/dev/projects",
+            &container.name,
+            "codex",
+            "app-server",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Codex app-server starts");
+    let mut stdin = server.stdin.take().expect("server stdin");
+    let stdout = server.stdout.take().expect("server stdout");
+    let request = json!({
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {"name": "ezra_home_test", "version": "1.0.0"}
+        }
+    });
+    writeln!(stdin, "{request}").expect("initialize request is written");
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let line = line.expect("server output is readable");
+            let response: Value = serde_json::from_str(&line).expect("Codex returns JSON");
+            if response["id"] == 1 {
+                let _ = sender.send(response);
+                break;
+            }
+        }
+    });
+    let initialized = receiver.recv_timeout(Duration::from_secs(15));
+    drop(stdin);
+    let _ = server.kill();
+    server.wait().expect("Docker exec is reaped");
+    reader.join().expect("server output reader finishes");
+    let initialized = initialized.expect("Codex initializes within 15 seconds");
+    assert_eq!(
+        initialized["result"]["codexHome"], CODEX_HOME,
+        "{initialized}"
+    );
 
     let features = stdout_of(&container.run_codex(&[], &["codex", "features", "list"]));
     let daemon_auto_start = features

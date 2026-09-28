@@ -212,8 +212,7 @@ impl FoldersBlock<'_> {
              {PROJECTS_DIRECTORY} holds the projects in this box, one per folder.\n\
              mise is set up. Install missing tools with `mise use -g <tool>`, which keeps them on \
              /config when the container is recreated.\n\
-             Tools installed with apt, or into /home/dev outside {PROJECTS_DIRECTORY}, are lost when \
-             the container is recreated.\n"
+             Tools installed with apt are lost when the container is recreated.\n"
         );
         let host = self.github_host.display_name();
         match self.github_account {

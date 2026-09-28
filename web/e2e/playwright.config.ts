@@ -29,7 +29,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `docker run --rm --pull never --name ${CONTAINER} -p 127.0.0.1:${PORT}:8443 ${IMAGE}`,
+    command: `docker run --rm --pull never --volume /home/dev --name ${CONTAINER} -p 127.0.0.1:${PORT}:8443 ${IMAGE}`,
     url: `https://127.0.0.1:${PORT}/api/v1/session`,
     ignoreHTTPSErrors: true,
     reuseExistingServer: false,

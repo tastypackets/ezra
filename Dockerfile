@@ -227,9 +227,8 @@ set -euo pipefail
 browsers_directory="$(mktemp --directory)"
 PLAYWRIGHT_BROWSERS_PATH="${browsers_directory}" npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --no-shell chromium
 mv "${browsers_directory}"/chromium-*/chrome-linux* /opt/chromium
-install --directory --owner=dev --group=dev /home/dev/.cache /home/dev/.cache/ms-playwright
-mv "${browsers_directory}"/ffmpeg-* /home/dev/.cache/ms-playwright/
-chown --recursive dev:dev /home/dev/.cache/ms-playwright
+install --directory /opt/ms-playwright
+mv "${browsers_directory}"/ffmpeg-* /opt/ms-playwright/
 rm --recursive --force "${browsers_directory}"
 printf '#!/bin/sh\nexec /opt/chromium/chrome --no-sandbox --disable-dev-shm-usage "$@"\n' >/usr/local/bin/chromium
 chmod 0755 /usr/local/bin/chromium
@@ -239,8 +238,8 @@ ENV MISE_DATA_DIR=/config/mise \
     MISE_CONFIG_DIR=/config/mise \
     MISE_STATE_DIR=/config/mise/state \
     MISE_TRUSTED_CONFIG_PATHS=/home/dev/projects \
-    CLAUDE_CONFIG_DIR=/config/claude \
-    CODEX_HOME=/config/codex \
+    CLAUDE_CONFIG_DIR=/home/dev/.claude \
+    CODEX_HOME=/home/dev/.codex \
     GH_CONFIG_DIR=/config/gh \
     GH_PATH=/usr/local/share/ezra/shims/gh \
     GIT_CONFIG_GLOBAL=/config/git/config \

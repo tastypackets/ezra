@@ -12,8 +12,8 @@ import {
   writeInContainer,
 } from "./manager.ts";
 
-const CLAUDE_FILE = "/config/claude/settings.json";
-const CODEX_DIRECTORY = "/config/codex";
+const CLAUDE_FILE = "/home/dev/.claude/settings.json";
+const CODEX_DIRECTORY = "/home/dev/.codex";
 const CODEX_FILE = `${CODEX_DIRECTORY}/config.toml`;
 const CLAUDE_API = "**/api/v1/agents/claude/settings-file";
 const CLAUDE_TITLE = "Claude Code settings.json";
@@ -218,7 +218,7 @@ test("a save while Remote Control runs offers to restart its servers", async ({
 test.describe("with Claude Code installed", () => {
   test.beforeEach(() => installFakeClaude("2.1.0-e2e"));
   test.afterEach(async ({ request }) => {
-    inContainer("rm", "-rf", CLAUDE_FILE, "/config/claude/.cc-writes", "/config/shared");
+    inContainer("rm", "-rf", CLAUDE_FILE, "/home/dev/.claude/.cc-writes", "/config/shared");
     await removeFakeClaude(request);
   });
 

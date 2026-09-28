@@ -11,7 +11,7 @@ services:
       - "8443:8443"
     volumes:
       - config:/config
-      - projects:/home/dev/projects
+      - home:/home/dev
       - cache:/cache
     stop_grace_period: 60s
     # Codex's sandbox needs user namespaces, which Docker's default profiles block. Without these
@@ -22,5 +22,5 @@ services:
 
 volumes:
   config:
-  projects:
+  home:
   cache:
