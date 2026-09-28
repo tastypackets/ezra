@@ -575,7 +575,7 @@ impl AppState {
 
     /// Skipped while an install runs, which removes them itself.
     pub async fn remove_unused_versions(&self, agent: Agent) {
-        let Ok(_one_install_at_a_time) = self.install_lock.try_lock() else {
+        let Ok(_install) = self.install_locks.get(agent).try_lock() else {
             return;
         };
         let paths = Arc::clone(&self.install_paths);
@@ -606,6 +606,41 @@ mod tests {
     impl LineWatcher for SkipLines {
         fn watch(&mut self, line: &str) -> bool {
             line != "skip"
+        }
+    }
+
+    #[tokio::test]
+    async fn version_cleanup_only_waits_for_its_own_agent() {
+        use crate::manager::api::test_support::TestManager;
+
+        for busy in Agent::ALL {
+            let manager = TestManager::new();
+            for agent in Agent::ALL {
+                manager.install_fake_version(agent, "1.0.0", "true");
+                manager.install_fake_version(agent, "2.0.0", "true");
+            }
+            let guard = manager.state.install_locks.get(busy).lock().await;
+            for agent in Agent::ALL {
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    manager.state.remove_unused_versions(agent),
+                )
+                .await
+                .expect("cleanup skips a busy agent without blocking other agents");
+                let versions = manager.state.install_paths.versions_directory(agent);
+                assert_eq!(versions.join("1.0.0").exists(), agent == busy);
+                assert!(versions.join("2.0.0").exists());
+            }
+            drop(guard);
+            manager.state.remove_unused_versions(busy).await;
+            assert!(
+                !manager
+                    .state
+                    .install_paths
+                    .versions_directory(busy)
+                    .join("1.0.0")
+                    .exists()
+            );
         }
     }
 
