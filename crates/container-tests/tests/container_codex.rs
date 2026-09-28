@@ -1,12 +1,14 @@
 //! Black-box test of Codex remote control against the real Codex release, which it downloads.
 //! Build the image first, then run: `cargo test --test container_codex -- --ignored`
 
-use std::process::Output;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use ezra_container_tests::{DockerResource, Manager, docker, stderr_of, stdout_of};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const CODEX_HOME: &str = "/home/dev/.codex";
 const SERVER_LOG_FILTER: &str = "error,codex_app_server_transport::transport::remote_control=warn";
@@ -107,33 +109,50 @@ fn real_codex_stays_off_until_chatgpt_and_takes_ezras_launch() {
 
     manager.codex_off();
 
-    let initialized = stdout_of(&container.run_codex(
-        &[],
-        &[
-            "python3",
-            "-c",
-            r#"
-import json, signal, subprocess
-signal.alarm(15)
-server = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE,
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-try:
-    request = {"id": 1, "method": "initialize", "params": {
-        "clientInfo": {"name": "ezra_home_test", "version": "1.0.0"}}}
-    server.stdin.write(json.dumps(request) + "\n")
-    server.stdin.flush()
-    for line in server.stdout:
-        response = json.loads(line)
-        if response.get("id") == 1:
-            print(json.dumps(response))
-            break
-finally:
-    server.terminate()
-    server.wait(timeout=5)
-"#,
-        ],
-    ));
-    let initialized: Value = serde_json::from_str(&initialized).expect("Codex returns JSON");
+    let mut server = Command::new("docker")
+        .args([
+            "exec",
+            "--interactive",
+            "--user",
+            "dev",
+            "--workdir",
+            "/home/dev/projects",
+            &container.name,
+            "codex",
+            "app-server",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Codex app-server starts");
+    let mut stdin = server.stdin.take().expect("server stdin");
+    let stdout = server.stdout.take().expect("server stdout");
+    let request = json!({
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {"name": "ezra_home_test", "version": "1.0.0"}
+        }
+    });
+    writeln!(stdin, "{request}").expect("initialize request is written");
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let line = line.expect("server output is readable");
+            let response: Value = serde_json::from_str(&line).expect("Codex returns JSON");
+            if response["id"] == 1 {
+                let _ = sender.send(response);
+                break;
+            }
+        }
+    });
+    let initialized = receiver.recv_timeout(Duration::from_secs(15));
+    drop(stdin);
+    let _ = server.kill();
+    server.wait().expect("Docker exec is reaped");
+    reader.join().expect("server output reader finishes");
+    let initialized = initialized.expect("Codex initializes within 15 seconds");
     assert_eq!(
         initialized["result"]["codexHome"], CODEX_HOME,
         "{initialized}"
