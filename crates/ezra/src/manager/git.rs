@@ -470,6 +470,7 @@ impl GitHubSignIn {
             active: bool,
             login: String,
             error: Option<String>,
+            #[serde(default)]
             token_source: String,
         }
         let Ok(mut status) = serde_json::from_slice::<Status>(status_json) else {
@@ -582,6 +583,13 @@ mod tests {
             GitHubSignIn::from_status_json(status, &GitHubHost::from_value("ghe.example.com")),
             GitHubSignIn::default()
         );
+    }
+
+    #[test]
+    fn an_account_without_a_token_source_still_counts() {
+        let status =
+            br#"{"hosts":{"github.com":[{"state":"success","active":true,"login":"e2e"}]}}"#;
+        assert!(GitHubSignIn::from_status_json(status, &GitHubHost::default()).signed_in);
     }
 
     #[test]
