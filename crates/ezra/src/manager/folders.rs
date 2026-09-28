@@ -12,6 +12,7 @@ use utoipa::ToSchema;
 
 use super::events::Topic;
 use super::git::{GitError, UnsavedWork};
+use super::github_host::GitHubHost;
 use super::remote_control::{ClaudeOptions, SpawnMode};
 use super::settings::{FolderChoice, SettingsError};
 use super::state::AppState;
@@ -162,6 +163,7 @@ impl ProjectsDirectory {
     pub fn describe_folders_for_agents(
         &self,
         folders: &[Folder],
+        github_host: &GitHubHost,
         github_account: Option<&str>,
     ) -> io::Result<()> {
         let path = self.0.join("AGENTS.md");
@@ -172,6 +174,7 @@ impl ProjectsDirectory {
         };
         let block = FoldersBlock {
             folders,
+            github_host,
             github_account,
         };
         let updated = existing.with_folders_block(&block.to_markdown());
@@ -196,6 +199,7 @@ impl FolderNameExt for str {
 /// The part of `/home/dev/projects/AGENTS.md` the manager owns.
 struct FoldersBlock<'block> {
     folders: &'block [Folder],
+    github_host: &'block GitHubHost,
     github_account: Option<&'block str>,
 }
 
@@ -211,10 +215,11 @@ impl FoldersBlock<'_> {
              Tools installed with apt, or into /home/dev outside {PROJECTS_DIRECTORY}, are lost when \
              the container is recreated.\n"
         );
+        let host = self.github_host.display_name();
         match self.github_account {
-            Some("") => markdown.push_str("gh is signed in to GitHub.\n"),
+            Some("") => markdown.push_str(&format!("gh is signed in to {host}.\n")),
             Some(account) => {
-                markdown.push_str(&format!("gh is signed in to GitHub as {account}.\n"))
+                markdown.push_str(&format!("gh is signed in to {host} as {account}.\n"))
             }
             None => {}
         }
@@ -580,6 +585,7 @@ impl AppState {
                 () = watcher.settled_change() => {}
             }
             let projects = self.projects.clone();
+            let host = self.git_tools.host().clone();
             let account = {
                 let sign_in = github_sign_in.borrow_and_update();
                 sign_in
@@ -589,7 +595,7 @@ impl AppState {
             let described = tokio::task::spawn_blocking(move || {
                 let folders = projects.folders()?;
                 if let Err(error) =
-                    projects.describe_folders_for_agents(&folders, account.as_deref())
+                    projects.describe_folders_for_agents(&folders, &host, account.as_deref())
                 {
                     tracing::warn!(
                         "could not write AGENTS.md in {}: {error}",
@@ -874,7 +880,7 @@ mod tests {
             Some(("https://github.com/zeke/app.git", "main")),
         )];
         projects
-            .describe_folders_for_agents(&folders, None)
+            .describe_folders_for_agents(&folders, &GitHubHost::default(), None)
             .expect("block is written");
         let first = fs::read_to_string(&agents).expect("file is read");
         assert!(
@@ -889,13 +895,25 @@ mod tests {
 
         fs::write(&agents, format!("{first}\nAfter the block.\n")).expect("file is written");
         projects
-            .describe_folders_for_agents(&[], Some("zeke"))
+            .describe_folders_for_agents(&[], &GitHubHost::default(), Some("zeke"))
             .expect("block is written");
         let second = fs::read_to_string(&agents).expect("file is read");
         assert!(second.contains("No projects yet."), "{second}");
         assert!(
             second.contains("gh is signed in to GitHub as zeke."),
             "{second}"
+        );
+        projects
+            .describe_folders_for_agents(
+                &[],
+                &GitHubHost::from_value("ghe.example.com"),
+                Some("zeke"),
+            )
+            .expect("block is written");
+        let enterprise = fs::read_to_string(&agents).expect("file is read");
+        assert!(
+            enterprise.contains("gh is signed in to ghe.example.com as zeke."),
+            "{enterprise}"
         );
         assert!(!first.contains("gh is signed in"), "{first}");
         assert!(
@@ -934,11 +952,11 @@ mod tests {
             git: None,
         }];
         projects
-            .describe_folders_for_agents(&folders, None)
+            .describe_folders_for_agents(&folders, &GitHubHost::default(), None)
             .expect("block is written");
         let first = fs::read_to_string(directory.path().join("AGENTS.md")).expect("file is read");
         projects
-            .describe_folders_for_agents(&folders, None)
+            .describe_folders_for_agents(&folders, &GitHubHost::default(), None)
             .expect("block is written");
         let second = fs::read_to_string(directory.path().join("AGENTS.md")).expect("file is read");
         assert_eq!(first, second);

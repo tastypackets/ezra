@@ -322,7 +322,33 @@ test("the environment is shown read-only", async ({ page }) => {
   const environment = card(page, "Environment");
   await expect(environment.getByText("EZRA_PORT")).toBeVisible();
   await expect(environment.getByText("8443")).toBeVisible();
+  await expect(environment.getByText("GH_HOST")).toBeVisible();
+  await expect(environment.getByText("GH_TOKEN or GITHUB_TOKEN")).toBeVisible();
   await expect(environment.getByRole("textbox")).toHaveCount(0);
+});
+
+test("an Enterprise host signed in by its token variable is named on the Git card", async ({
+  page,
+}) => {
+  const github = {
+    host: "ghe.example.com",
+    signed_in: true,
+    account: "octocat",
+    from_environment: true,
+    token_variables: ["GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"],
+  };
+  await page.route("**/api/v1/git", async (route) => {
+    const status: { github: object } = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...status, github: { ...status.github, ...github } } });
+  });
+
+  await page.goto("./settings");
+  const git = card(page, "Git");
+  await expect(git.getByRole("heading", { name: "ghe.example.com" })).toBeVisible();
+  await expect(
+    git.getByText("Set by the GH_ENTERPRISE_TOKEN or GITHUB_ENTERPRISE_TOKEN variable."),
+  ).toBeVisible();
+  await expect(git.getByRole("button", { name: "Sign out" })).toHaveCount(0);
 });
 
 test("GitHub sign-in steps take focus and hand it back when they close", async ({ page }) => {
@@ -330,8 +356,8 @@ test("GitHub sign-in steps take focus and hand it back when they close", async (
   const prompt = { url: "https://github.com/login/device", code: "ABCD-1234" };
   let github: object = { failing: false, from_environment: false, signed_in: false };
   await page.route("**/api/v1/git", async (route) => {
-    const status: object = await (await route.fetch()).json();
-    await route.fulfill({ json: { ...status, github } });
+    const status: { github: object } = await (await route.fetch()).json();
+    await route.fulfill({ json: { ...status, github: { ...status.github, ...github } } });
   });
   await page.route("**/api/v1/git/github/login", (route) => {
     github = { ...github, login_prompt: prompt };

@@ -15,13 +15,13 @@ use utoipa::ToSchema;
 
 use super::events::{Events, Topic};
 use super::folders::{FolderNameExt, ProjectsDirectory};
+use super::github_host::GitHubHost;
 use super::remote_control::ProcessGroup;
 use super::settings::{FolderChoice, SettingsError};
 use super::state::AppState;
 use crate::path_ext::PathExt;
 
 const STAGING_PREFIX: &str = ".ezra-clone-";
-const GITHUB: &str = "https://github.com";
 const REPORT_INTERVAL: Duration = Duration::from_millis(250);
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 const LINES_KEPT: usize = 5;
@@ -38,7 +38,7 @@ pub enum CloneError {
 /// A repository to clone into a new folder in /home/dev/projects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CloneRequest {
-    /// A git URL or path, or `owner/repo` for GitHub.
+    /// A git URL or path, or `owner/repo` on the GitHub host.
     pub repository: String,
     /// The new folder's name.
     pub name: String,
@@ -196,7 +196,7 @@ impl AppState {
         }
         let (status, stop) = self.clones.begin(&request.name, repository)?;
         tokio::spawn(self.clone().run_clone(
-            repository.clone_url(),
+            repository.clone_url(self.git_tools.host()),
             request.name,
             request.serve,
             stop,
@@ -442,12 +442,12 @@ impl CloneProgressExt for str {
 }
 
 trait RepositoryExt {
-    /// `owner/repo` as its GitHub URL, anything else as given.
-    fn clone_url(&self) -> String;
+    /// `owner/repo` as its URL on `host`, anything else as given.
+    fn clone_url(&self, host: &GitHubHost) -> String;
 }
 
 impl RepositoryExt for str {
-    fn clone_url(&self) -> String {
+    fn clone_url(&self, host: &GitHubHost) -> String {
         let is_github_name = |part: &str| {
             !part.is_empty()
                 && part != "."
@@ -459,7 +459,7 @@ impl RepositoryExt for str {
         match self.split_once('/') {
             Some((owner, repository)) if is_github_name(owner) && is_github_name(repository) => {
                 let repository = repository.strip_suffix(".git").unwrap_or(repository);
-                format!("{GITHUB}/{owner}/{repository}.git")
+                format!("{}/{owner}/{repository}.git", host.https_url())
             }
             _ => self.to_owned(),
         }
@@ -489,8 +489,12 @@ mod tests {
             ("../app", "../app"),
             ("a/b/c", "a/b/c"),
         ] {
-            assert_eq!(given.clone_url(), url, "{given}");
+            assert_eq!(given.clone_url(&GitHubHost::default()), url, "{given}");
         }
+        assert_eq!(
+            "zeke/app".clone_url(&GitHubHost::from_value("ghe.example.com")),
+            "https://ghe.example.com/zeke/app.git"
+        );
     }
 
     #[test]

@@ -28,7 +28,7 @@ export const CLONE_DESCRIPTIONS = {
   open: "Clone repository",
   title: "Clone repository",
   repository: "Repository",
-  repository_hint: "A git URL, or owner/repo for GitHub.",
+  repository_hint: "A git URL, or owner/repo on the GitHub host.",
   repository_required: "Enter a repository.",
   show_repositories: "Show your GitHub repositories",
   folder: "Folder",
