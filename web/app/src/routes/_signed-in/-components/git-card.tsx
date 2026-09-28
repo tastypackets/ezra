@@ -59,7 +59,7 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="font-medium">{GIT_DESCRIPTIONS.github}</h3>
+          <h3 className="font-medium">{GIT_DESCRIPTIONS.github(github.host)}</h3>
           <Badge variant={state.variant}>{state.label}</Badge>
         </div>
         {canSignOut || canSignIn ? (
@@ -75,7 +75,9 @@ function GitHubSection({ github }: { github: GitHubStatus }) {
         ) : null}
       </div>
       {github.from_environment ? (
-        <p className="text-muted-foreground">{GIT_DESCRIPTIONS.from_environment}</p>
+        <p className="text-muted-foreground">
+          {GIT_DESCRIPTIONS.from_environment(github.token_variables)}
+        </p>
       ) : null}
       {failed ? (
         <p role="alert" className="text-destructive">

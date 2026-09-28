@@ -71,7 +71,9 @@ Clone repositories from the Folders card, or ask an agent started in `~/projects
 | `EZRA_APT_PACKAGES` | | Packages to install at every start, separated by spaces or commas |
 | `EZRA_CHOWN_EMPTY_MOUNTS` | `on` | `off` leaves empty root-owned mounts of `/config`, `/home/dev/projects` and `/cache` owned by root |
 | `EZRA_TLS_VERIFY` | `on` | `off` skips certificate checks on agent downloads, for networks that intercept TLS |
-| `GH_TOKEN` or `GITHUB_TOKEN` | | A GitHub token to use in place of signing in |
+| `GH_HOST` | `github.com` | The GitHub host to sign in to, such as a GitHub Enterprise Server host |
+| `GH_TOKEN` or `GITHUB_TOKEN` | | A token for github.com or a `ghe.com` subdomain to use in place of signing in |
+| `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` | | A token for a GitHub Enterprise Server host to use in place of signing in |
 
 Executable scripts mounted in `/etc/ezra/setup.d` run as root at every start, in name order.
 
