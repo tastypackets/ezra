@@ -127,38 +127,39 @@ pub async fn restart_servers(
 impl AppState {
     /// Runs at manager start: a configured agent is missing after the container was recreated.
     pub async fn reinstall_configured_agents(self) {
-        let configured_agents: Vec<Agent> = {
-            let settings = self.settings.lock().await;
-            Agent::ALL
-                .into_iter()
-                .filter(|agent| settings.agent(*agent).configured)
-                .collect()
-        };
-        for agent in configured_agents {
-            if self.install_paths.installed_version(agent).is_some() {
-                continue;
+        futures_util::future::join_all(
+            Agent::ALL.map(|agent| self.reinstall_configured_agent(agent)),
+        )
+        .await;
+    }
+
+    async fn reinstall_configured_agent(&self, agent: Agent) {
+        let _install = self.install_locks.get(agent).lock().await;
+        if !self.settings.lock().await.agent(agent).configured
+            || self.install_paths.installed_version(agent).is_some()
+        {
+            return;
+        }
+        match self.install_paths.link_kept_version(agent) {
+            Ok(Some(version)) => {
+                tracing::info!("{agent} {version} is linked from /cache");
+                self.reconsider_remote(agent);
+                self.events.publish(Topic::Agents);
             }
-            match self.install_paths.link_kept_version(agent) {
-                Ok(Some(version)) => {
-                    tracing::info!("{agent} {version} is linked from /cache");
-                    self.reconsider_remote(agent);
-                    self.events.publish(Topic::Agents);
+            Ok(None) => {
+                tracing::info!("reinstalling {agent}, which is configured but not installed");
+                if let Err(ApiError::AgentFailed(message) | ApiError::Internal(message)) =
+                    self.install_locked(agent).await
+                {
+                    tracing::warn!("{message}");
                 }
-                Ok(None) => {
-                    tracing::info!("reinstalling {agent}, which is configured but not installed");
-                    if let Err(ApiError::AgentFailed(message) | ApiError::Internal(message)) =
-                        self.install_and_record(agent).await
-                    {
-                        tracing::warn!("{message}");
-                    }
-                }
-                Err(error) => tracing::warn!("could not link the kept {agent}: {error}"),
             }
+            Err(error) => tracing::warn!("could not link the kept {agent}: {error}"),
         }
     }
 
     async fn uninstall_and_record(&self, agent: Agent, saved_data: bool) -> Result<(), ApiError> {
-        let _one_install_at_a_time = self.install_lock.lock().await;
+        let _install = self.install_locks.get(agent).lock().await;
         self.update_settings(|settings| {
             settings.agent_mut(agent).configured = false;
             Ok::<(), ApiError>(())
@@ -213,7 +214,12 @@ impl AppState {
     }
 
     async fn install_and_record(&self, agent: Agent) -> Result<(), ApiError> {
-        let _one_install_at_a_time = self.install_lock.lock().await;
+        let _install = self.install_locks.get(agent).lock().await;
+        self.install_locked(agent).await
+    }
+
+    /// The caller holds this agent's install lock.
+    async fn install_locked(&self, agent: Agent) -> Result<(), ApiError> {
         let channel = self.settings.lock().await.release_channel(agent);
         let progress = Arc::new(InstallProgress::default());
         self.installs_in_progress
@@ -248,6 +254,9 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::task::{Context, Waker};
+
     use axum::http::StatusCode;
 
     use super::super::test_support::{ResponseExt, TestManager};
@@ -346,6 +355,212 @@ mod tests {
         assert!(config(Agent::Claude).join("saved.json").exists());
         assert!(config(Agent::Codex).is_dir());
         assert!(!config(Agent::Codex).join("saved.json").exists());
+    }
+
+    #[tokio::test]
+    async fn agent_operations_wait_only_for_their_own_install_lock() {
+        for (blocked, other) in [(Agent::Claude, Agent::Codex), (Agent::Codex, Agent::Claude)] {
+            let manager = TestManager::new();
+            for agent in Agent::ALL {
+                manager.install_fake_version(agent, "1.0.0", "true");
+                manager
+                    .state
+                    .settings
+                    .lock()
+                    .await
+                    .agent_mut(agent)
+                    .configured = true;
+            }
+            let guard = manager.state.install_locks.get(blocked).lock().await;
+            {
+                let install = manager.state.install_and_record(blocked);
+                tokio::pin!(install);
+                assert!(
+                    install
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_pending()
+                );
+                assert!(manager.state.installs_in_progress.lock().await.is_empty());
+            }
+            let uninstall = manager.state.uninstall_and_record(blocked, false);
+            tokio::pin!(uninstall);
+            assert!(
+                uninstall
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert!(
+                manager
+                    .state
+                    .settings
+                    .lock()
+                    .await
+                    .agent(blocked)
+                    .configured
+            );
+            assert!(manager.state.install_paths.command(blocked).exists());
+
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                manager.state.uninstall_and_record(other, false),
+            )
+            .await
+            .expect("the other agent is not blocked")
+            .expect("the other agent is uninstalled");
+            assert!(!manager.state.install_paths.command(other).exists());
+            assert!(manager.state.install_paths.command(blocked).exists());
+
+            drop(guard);
+            tokio::time::timeout(Duration::from_secs(5), uninstall)
+                .await
+                .expect("uninstall resumes after its lock is released")
+                .expect("the blocked agent is uninstalled");
+            assert!(!manager.state.install_paths.command(blocked).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_restores_each_cached_agent_under_its_own_lock() {
+        for (blocked, other) in [(Agent::Claude, Agent::Codex), (Agent::Codex, Agent::Claude)] {
+            let manager = TestManager::new();
+            for agent in Agent::ALL {
+                manager.install_fake_version(agent, "1.0.0", "true");
+                manager
+                    .state
+                    .install_paths
+                    .command(agent)
+                    .remove_if_present()
+                    .expect("link is removed");
+                manager
+                    .state
+                    .settings
+                    .lock()
+                    .await
+                    .agent_mut(agent)
+                    .configured = true;
+            }
+            let guard = manager.state.install_locks.get(blocked).lock().await;
+            let restore = manager.state.clone().reinstall_configured_agents();
+            tokio::pin!(restore);
+            assert!(
+                restore
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            assert!(!manager.state.install_paths.command(blocked).exists());
+            assert_eq!(
+                manager
+                    .state
+                    .install_paths
+                    .installed_version(other)
+                    .as_deref(),
+                Some("1.0.0")
+            );
+
+            drop(guard);
+            tokio::time::timeout(Duration::from_secs(5), restore)
+                .await
+                .expect("startup resumes after the agent lock is released");
+            assert_eq!(
+                manager
+                    .state
+                    .install_paths
+                    .installed_version(blocked)
+                    .as_deref(),
+                Some("1.0.0")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_rechecks_configured_after_waiting_for_the_agent_lock() {
+        for agent in Agent::ALL {
+            let manager = TestManager::new();
+            manager.install_fake_version(agent, "1.0.0", "true");
+            manager
+                .state
+                .install_paths
+                .command(agent)
+                .remove_if_present()
+                .expect("link is removed");
+            manager
+                .state
+                .settings
+                .lock()
+                .await
+                .agent_mut(agent)
+                .configured = true;
+            let guard = manager.state.install_locks.get(agent).lock().await;
+            let restore = manager.state.clone().reinstall_configured_agents();
+            tokio::pin!(restore);
+            assert!(
+                restore
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+
+            manager
+                .state
+                .settings
+                .lock()
+                .await
+                .agent_mut(agent)
+                .configured = false;
+            drop(guard);
+            tokio::time::timeout(Duration::from_secs(5), restore)
+                .await
+                .expect("startup skips the unconfigured agent");
+            assert!(!manager.state.install_paths.command(agent).exists());
+            assert!(!manager.state.settings.lock().await.agent(agent).configured);
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_preserves_a_version_linked_while_waiting_for_the_agent_lock() {
+        for agent in Agent::ALL {
+            let manager = TestManager::new();
+            manager.install_fake_version(agent, "2.0.0", "true");
+            manager
+                .state
+                .install_paths
+                .command(agent)
+                .remove_if_present()
+                .expect("link is removed");
+            manager
+                .state
+                .settings
+                .lock()
+                .await
+                .agent_mut(agent)
+                .configured = true;
+            let guard = manager.state.install_locks.get(agent).lock().await;
+            let restore = manager.state.clone().reinstall_configured_agents();
+            tokio::pin!(restore);
+            assert!(
+                restore
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+
+            manager.install_fake_version(agent, "1.0.0", "true");
+            drop(guard);
+            tokio::time::timeout(Duration::from_secs(5), restore)
+                .await
+                .expect("startup preserves the installed agent");
+            assert_eq!(
+                manager
+                    .state
+                    .install_paths
+                    .installed_version(agent)
+                    .as_deref(),
+                Some("1.0.0")
+            );
+        }
     }
 
     #[tokio::test]

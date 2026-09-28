@@ -57,11 +57,11 @@ impl AppState {
         }
     }
 
-    /// Checks Claude's new release channel once any running install is done.
+    /// Checks Claude's new release channel once its running install is done.
     pub fn recheck_claude_release(&self) {
         let checking = self.clone();
         tokio::spawn(async move {
-            drop(checking.install_lock.lock().await);
+            drop(checking.install_locks.get(Agent::Claude).lock().await);
             checking.check_for_update(Agent::Claude).await;
         });
     }

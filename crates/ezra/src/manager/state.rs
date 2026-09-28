@@ -20,6 +20,21 @@ use super::supervision::ServerLog;
 use super::tls::ServedCertificate;
 use super::updates::LatestRelease;
 
+#[derive(Default)]
+pub struct InstallLocks {
+    claude: Mutex<()>,
+    codex: Mutex<()>,
+}
+
+impl InstallLocks {
+    pub fn get(&self, agent: Agent) -> &Mutex<()> {
+        match agent {
+            Agent::Claude => &self.claude,
+            Agent::Codex => &self.codex,
+        }
+    }
+}
+
 /// Shared by the API and the pages.
 #[derive(Clone)]
 pub struct AppState {
@@ -28,7 +43,7 @@ pub struct AppState {
     pub sessions: Arc<Sessions>,
     pub install_paths: Arc<InstallPaths>,
     pub agent_checks: Arc<AgentChecks>,
-    pub install_lock: Arc<Mutex<()>>,
+    pub install_locks: Arc<InstallLocks>,
     pub logins: Arc<Mutex<HashMap<Agent, LoginProcess>>>,
     pub download_tls_verification: TlsVerification,
     pub installs_in_progress: Arc<Mutex<HashMap<Agent, Arc<InstallProgress>>>>,
@@ -74,7 +89,7 @@ impl AppState {
             sessions: Arc::default(),
             agent_checks: Arc::new(AgentChecks::new(Arc::clone(&install_paths), events.clone())),
             install_paths,
-            install_lock: Arc::default(),
+            install_locks: Arc::default(),
             logins: Arc::default(),
             download_tls_verification,
             installs_in_progress: Arc::default(),
