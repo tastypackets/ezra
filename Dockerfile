@@ -210,6 +210,7 @@ EOF
 RUN <<'EOF'
 set -euo pipefail
 rm --force /var/lib/man-db/auto-update
+rm --recursive --force /var/lib/pebble /usr/bin/pebble
 userdel --remove ubuntu
 if getent passwd 1000 >/dev/null || getent group 1000 >/dev/null; then
     echo "UID or GID 1000 is still taken after removing the ubuntu user" >&2
