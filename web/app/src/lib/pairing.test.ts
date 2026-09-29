@@ -31,7 +31,7 @@ describe("phoneName", () => {
     expect(phoneName({ id: "1", platform: "iOS" })).toBe("iOS");
   });
 
-  it("falls back to Phone", () => {
-    expect(phoneName({ id: "1" })).toBe("Phone");
+  it("falls back to Device", () => {
+    expect(phoneName({ id: "1" })).toBe("Device");
   });
 });

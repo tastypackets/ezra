@@ -1,6 +1,6 @@
 # ezra
 
-A container that runs Claude Code and Codex for the Claude and ChatGPT phone apps, managed from a web page on port 8443.
+A container that runs Claude Code and Codex for the Claude and ChatGPT apps, managed from a web page on port 8443.
 
 > [!NOTE]
 > Most of the code is AI-generated. The agent CLIs and the AI space around them change fast and this project may not be useful a year from now, so I don't invest time to review every line by hand. I plan each change with agents, skim the code, and run the unit and end-to-end tests before committing.
@@ -58,9 +58,30 @@ At start, an empty folder mounted at one of these paths and owned by root is giv
 
 Claude Code needs a Claude subscription sign-in, not an API key. It serves `~/projects` and each folder switched on under Folders, and the Claude app lists them under Remote Control.
 
-For Codex, sign in with ChatGPT and pair your phone from the ⋯ menu next to Codex.
-
 Clone repositories from the Folders card, or ask an agent started in `~/projects` to do it.
+
+### Pair the ChatGPT app
+
+Sign in to Codex with ChatGPT on ezra web, then open the ⋯ menu next to Codex and choose Pair ChatGPT app. Leave the pairing dialog open while you connect from desktop app or mobile phone.
+
+On Desktop:
+
+1. Open the ChatGPT app and go to Settings → Pair → Control other devices.
+2. Click Add and enter the code shown in ezra's pairing dialog.
+
+On mobile:
+
+1. Open the ChatGPT app's menu and choose Remote.
+2. Open Settings or Add remote, then choose Add connection → Pair new device.
+3. Scan the QR code shown in ezra's pairing dialog.
+
+### Add a project
+
+After pairing, in the ChatGPT app:
+
+1. Click + → New project → Add folder.
+2. Change This computer to the hostname of your ezra instance.
+3. Click Add, open `projects`, and select your repository.
 
 ## Environment
 
