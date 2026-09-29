@@ -346,7 +346,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(remote.getByText(/^Restarts on Codex 9\.9\.10-stubbed by .+\.$/)).toBeVisible();
   });
 
-  test("Pair a phone says why while Codex is not connected and asks for no code", async ({
+  test("Pair ChatGPT app says why while Codex is not connected and asks for no code", async ({
     page,
     request,
   }) => {
@@ -356,8 +356,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await stubCodexStatus(page, request, () => MFA);
     await expect(remoteCell(row)).toContainText("Needs MFA");
 
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog).toContainText("Needs MFA");
     await expect(dialog).toContainText(
       "Turn on multi-factor authentication in ChatGPT, then try again.",
@@ -366,7 +366,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     expect(apiCalls.filter((call) => call.includes(PAIRING))).toEqual([]);
   });
 
-  test("Pair a phone follows Codex once it connects and then offers a code", async ({
+  test("Pair ChatGPT app follows Codex once it connects and then offers a code", async ({
     page,
     request,
   }) => {
@@ -376,8 +376,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => codex);
     await expect(remoteCell(row)).toContainText("Needs MFA");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog).toContainText("Needs MFA");
 
     codex = CONNECTED;
@@ -394,7 +394,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     expect(pairing.posts).toBe(1);
   });
 
-  test("Pair a phone shows the wait for a code and takes no second click", async ({
+  test("Pair ChatGPT app shows the wait for a code and takes no second click", async ({
     page,
     request,
   }) => {
@@ -405,22 +405,22 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
 
-    await chooseCodexAction(page, row, "Pair a phone");
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
     await expect(
       row.getByRole("status").filter({ hasText: "Getting a pairing code" }),
     ).toBeVisible();
     await row.getByRole("button", { name: "More Codex actions" }).click();
-    await expect(page.getByRole("menuitem", { name: "Pair a phone" })).toBeDisabled();
+    await expect(page.getByRole("menuitem", { name: "Pair ChatGPT app" })).toBeDisabled();
     await page.keyboard.press("Escape");
 
     release();
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByText("E2E-4821", { exact: true })).toBeVisible();
     await expect(row.getByText("Getting a pairing code")).toBeHidden();
     expect(pairing.posts).toBe(1);
   });
 
-  test("Pair a phone shows a code to enter, its time left, the box's name and a QR code", async ({
+  test("Pair ChatGPT app shows a code to enter, its time left, the box's name and a QR code", async ({
     page,
     request,
   }) => {
@@ -430,8 +430,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
 
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     const qr = dialog.getByRole("img", { name: "QR code for pairing" });
     await expect(qr).toBeVisible();
     await expect(qr).toHaveAttribute("src", new RegExp(`^${PAIRING_QR}\\?v=`));
@@ -450,13 +450,13 @@ test.describe("with Codex signed in with ChatGPT", () => {
     );
     await expect(dialog.getByRole("button", { name: /QR code/ })).toHaveCount(0);
     await expect(dialog.getByText(/^Expires in (10:00|9:\d\d)$/)).toBeVisible();
-    await expect(dialog.getByText("Waiting for the phone")).toBeVisible();
+    await expect(dialog.getByText("Waiting for the ChatGPT app")).toBeVisible();
     await expect(dialog.getByText("Name: ezra-e2e")).toBeVisible();
     await expect(dialog.getByText(PICKER_BLOCKED)).toBeHidden();
 
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toBeHidden();
-    await chooseCodexAction(page, row, "Pair a phone");
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
     await expect(dialog.getByText("E2E-4821", { exact: true })).toBeVisible();
     expect(pairing.posts).toBe(1);
   });
@@ -467,13 +467,13 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByText("E2E-4821", { exact: true })).toBeVisible();
 
     pairing.latest = { ...pairing.latest, state: "claimed" };
     await expect(dialog).toBeHidden();
-    await expect(page.getByText("Phone paired.")).toHaveCount(1);
+    await expect(page.getByText("ChatGPT app paired.")).toHaveCount(1);
   });
 
   test("a phone using the code after the dialog closed still shows one toast, on any page", async ({
@@ -485,8 +485,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByText("E2E-4821", { exact: true })).toBeVisible();
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toBeHidden();
@@ -494,7 +494,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(page.getByRole("radiogroup", { name: "Sandbox" })).toBeVisible();
 
     pairing.latest = { ...pairing.latest, state: "claimed" };
-    await expect(page.getByText("Phone paired.")).toHaveCount(1);
+    await expect(page.getByText("ChatGPT app paired.")).toHaveCount(1);
     await expect(dialog).toBeHidden();
   });
 
@@ -504,8 +504,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByRole("img", { name: "QR code for pairing" })).toBeVisible();
     await expect(dialog.getByRole("link", { name: "Open in the ChatGPT app" })).toHaveAttribute(
       "href",
@@ -514,7 +514,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(dialog.getByRole("button", { name: "Copy" })).toBeHidden();
     await expect(dialog.getByText("Or enter this code in the ChatGPT app")).toBeHidden();
     await expect(dialog.getByText(/^Expires in (10:00|9:\d\d)$/)).toBeVisible();
-    await expect(dialog.getByText("Waiting for the phone")).toBeVisible();
+    await expect(dialog.getByText("Waiting for the ChatGPT app")).toBeVisible();
   });
 
   test("an expired code offers a new one", async ({ page, request }) => {
@@ -524,8 +524,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByText("E2E-0001", { exact: true })).toBeVisible();
     const qr = dialog.getByRole("img", { name: "QR code for pairing" });
     await expect(qr).toBeVisible();
@@ -541,9 +541,9 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await dialog.getByRole("button", { name: "New code" }).click();
     await expect(dialog.getByText("E2E-0002", { exact: true })).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Copy" })).toBeFocused();
-    await expect(dialog.getByText("Waiting for the phone")).toBeVisible();
+    await expect(dialog.getByText("Waiting for the ChatGPT app")).toBeVisible();
     await expect(
-      dialog.getByRole("status").filter({ hasText: "Waiting for the phone" }),
+      dialog.getByRole("status").filter({ hasText: "Waiting for the ChatGPT app" }),
     ).toHaveCount(0);
     expect(pairing.posts).toBe(2);
 
@@ -572,8 +572,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByText("E2E-0001", { exact: true })).toBeVisible();
     expect(posts).toBe(0);
     latest = { ...latest, state: "expired" };
@@ -587,7 +587,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(gettingCode).toBeHidden();
     await expect(dialog).toBeHidden();
 
-    await chooseCodexAction(page, row, "Pair a phone");
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
     await expect(dialog.getByText("E2E-0002", { exact: true })).toBeVisible();
     expect(posts).toBe(1);
   });
@@ -602,8 +602,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByText("E2E-0001", { exact: true })).toBeVisible();
 
     pairing.latest = { ...pairing.latest, state: "failed", error: DEFERRED };
@@ -616,7 +616,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     code = "E2E-0002";
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toBeHidden();
-    await chooseCodexAction(page, row, "Pair a phone");
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
     await expect(dialog.getByText("E2E-0002", { exact: true })).toBeVisible();
     expect(pairing.posts).toBe(2);
 
@@ -625,7 +625,7 @@ test.describe("with Codex signed in with ChatGPT", () => {
     code = "E2E-0003";
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toBeHidden();
-    await chooseCodexAction(page, row, "Pair a phone");
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
     await expect(dialog.getByText("E2E-0003", { exact: true })).toBeVisible();
     expect(pairing.posts).toBe(3);
   });
@@ -655,8 +655,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => CONNECTED);
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     const failed = dialog
       .getByRole("status")
       .filter({ hasText: `Could not get a pairing code: ${UNTIL_ENROLLED}` });
@@ -677,21 +677,21 @@ test.describe("with Codex signed in with ChatGPT", () => {
     expect(posts).toBe(2);
   });
 
-  test("Paired phones lists each phone and removes one", async ({ page }) => {
+  test("Paired devices lists each phone and removes one", async ({ page }) => {
     await stubPhones(page, PHONE_LIST);
     const removed = page.waitForRequest(
       (sent) => sent.method() === "DELETE" && new URL(sent.url()).pathname === `${PHONES}/phone-1`,
     );
     await page.goto("./");
-    await chooseCodexAction(page, codexRow(page), "Paired phones");
-    const dialog = page.getByRole("dialog", { name: "Paired phones" });
+    await chooseCodexAction(page, codexRow(page), "Paired devices");
+    const dialog = page.getByRole("dialog", { name: "Paired devices" });
     const phones = dialog.getByRole("listitem");
     await expect(phones).toHaveCount(3);
     await expect(phones.nth(0)).toContainText("Zeke's iPhone");
     await expect(phones.nth(0)).toContainText(/Last seen \S.*\d/);
     await expect(phones.nth(1)).toContainText("Pixel 9");
     await expect(phones.nth(1)).not.toContainText("Last seen");
-    await expect(phones.nth(2).getByText("Phone", { exact: true })).toBeVisible();
+    await expect(phones.nth(2).getByText("Device", { exact: true })).toBeVisible();
 
     const remove = phones.nth(0).getByRole("button", { name: "Remove" });
     await expect(remove).toHaveAccessibleDescription("Zeke's iPhone");
@@ -700,13 +700,13 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(confirm).toHaveAccessibleDescription(
       "It can no longer reach this box. Pairing it again can fail.",
     );
-    await confirm.getByRole("button", { name: "Remove phone" }).click();
+    await confirm.getByRole("button", { name: "Remove device" }).click();
     await removed;
     await expect(confirm).toBeHidden();
     await expect(phones).toHaveCount(2);
     await expect(dialog).not.toContainText("Zeke's iPhone");
-    await expect(dialog.getByRole("heading", { name: "Paired phones" })).toBeFocused();
-    await expect(page.getByText("Phone removed.")).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "Paired devices" })).toBeFocused();
+    await expect(page.getByText("Device removed.")).toBeVisible();
   });
 
   test("a failed removal keeps the phone and says why", async ({ page }) => {
@@ -716,12 +716,12 @@ test.describe("with Codex signed in with ChatGPT", () => {
       (route) => route.fulfill({ status: 409, json: { error: "Codex is not running" } }),
     );
     await page.goto("./");
-    await chooseCodexAction(page, codexRow(page), "Paired phones");
-    const dialog = page.getByRole("dialog", { name: "Paired phones" });
+    await chooseCodexAction(page, codexRow(page), "Paired devices");
+    const dialog = page.getByRole("dialog", { name: "Paired devices" });
     const phones = dialog.getByRole("listitem");
     await phones.nth(0).getByRole("button", { name: "Remove" }).click();
     const confirm = page.getByRole("alertdialog", { name: "Remove Zeke's iPhone?" });
-    await confirm.getByRole("button", { name: "Remove phone" }).click();
+    await confirm.getByRole("button", { name: "Remove device" }).click();
     await expect(confirm.getByRole("alert")).toHaveText("Codex is not running");
     await expect(confirm).toBeVisible();
     await confirm.getByRole("button", { name: "Cancel" }).click();
@@ -730,17 +730,17 @@ test.describe("with Codex signed in with ChatGPT", () => {
     await expect(phones.nth(0)).toContainText("Zeke's iPhone");
   });
 
-  test("Paired phones says when there are none, and why it cannot list them", async ({ page }) => {
+  test("Paired devices says when there are none, and why it cannot list them", async ({ page }) => {
     await page.goto("./");
-    await chooseCodexAction(page, codexRow(page), "Paired phones");
-    const dialog = page.getByRole("dialog", { name: "Paired phones" });
+    await chooseCodexAction(page, codexRow(page), "Paired devices");
+    const dialog = page.getByRole("dialog", { name: "Paired devices" });
     await expect(dialog.getByRole("alert")).toHaveText("Codex is not running");
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toBeHidden();
 
     await stubPhones(page, []);
-    await chooseCodexAction(page, codexRow(page), "Paired phones");
-    await expect(dialog).toContainText("No phones yet.");
+    await chooseCodexAction(page, codexRow(page), "Paired devices");
+    await expect(dialog).toContainText("No devices yet.");
   });
 
   test("a folder picker that fails in this container is noted when pairing and in Settings", async ({
@@ -752,8 +752,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
     const row = codexRow(page);
     await stubCodexStatus(page, request, () => ({ ...CONNECTED, folder_picker: "blocked" }));
     await expect(remoteCell(row)).toContainText("Connected");
-    await chooseCodexAction(page, row, "Pair a phone");
-    const dialog = page.getByRole("dialog", { name: "Pair a phone" });
+    await chooseCodexAction(page, row, "Pair ChatGPT app");
+    const dialog = page.getByRole("dialog", { name: "Pair ChatGPT app" });
     await expect(dialog.getByText(PICKER_BLOCKED)).toBeVisible();
     await dialog.getByRole("button", { name: "Close" }).click();
 
@@ -774,8 +774,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
       const codex = page.getByRole("listitem").filter({ hasText: "Codex" });
       await expect(codex).toContainText("Connected");
 
-      await chooseCodexAction(page, codex, "Pair a phone");
-      const pair = page.getByRole("dialog", { name: "Pair a phone" });
+      await chooseCodexAction(page, codex, "Pair ChatGPT app");
+      const pair = page.getByRole("dialog", { name: "Pair ChatGPT app" });
       const openInApp = pair.getByRole("link", { name: "Open in the ChatGPT app" });
       await openInApp.scrollIntoViewIfNeeded();
       await expect(openInApp).toBeInViewport({ ratio: 1 });
@@ -788,8 +788,8 @@ test.describe("with Codex signed in with ChatGPT", () => {
       await pair.getByRole("button", { name: "Close" }).click();
       await expect(pair).toBeHidden();
 
-      await chooseCodexAction(page, codex, "Paired phones");
-      const phones = page.getByRole("dialog", { name: "Paired phones" });
+      await chooseCodexAction(page, codex, "Paired devices");
+      const phones = page.getByRole("dialog", { name: "Paired devices" });
       const remove = phones.getByRole("button", { name: "Remove" }).first();
       await expect(remove).toBeInViewport({ ratio: 1 });
       expect(await phones.evaluate((dialog) => dialog.scrollWidth - dialog.clientWidth)).toBe(0);
