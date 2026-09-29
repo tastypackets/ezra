@@ -116,10 +116,11 @@ impl ProjectsDirectory {
         self.0.join(name)
     }
 
-    /// Whether `name` is a listed top-level folder, not a link to one.
+    /// Whether `name` is a listed top-level folder, excluding links and linked git worktrees.
     pub fn has_folder(&self, name: &str) -> bool {
         name.is_folder_name()
             && fs::symlink_metadata(self.folder(name)).is_ok_and(|metadata| metadata.is_dir())
+            && !GitCheckout::in_folder(&self.folder(name)).is_linked_worktree()
     }
 
     /// Drops the choices of folders that are neither in `listed` nor in the directory now.
@@ -141,16 +142,17 @@ impl ProjectsDirectory {
         })
     }
 
-    /// Top-level folders sorted by name. Hidden folders, and ones that vanish or cannot be read
-    /// while listing, are left out.
+    /// Top-level folders sorted by name. Hidden folders, linked git worktrees, and folders that
+    /// vanish or cannot be read while listing are left out.
     pub fn folders(&self) -> io::Result<Vec<Folder>> {
         let mut folders: Vec<Folder> = fs::read_dir(&self.0)?
             .filter_map(Result::ok)
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
             .filter_map(|entry| {
                 let name = entry.file_name().into_string().ok()?;
-                name.is_folder_name().then(|| Folder {
-                    git: GitCheckout::in_folder(&entry.path()).details(),
+                let git = GitCheckout::in_folder(&entry.path());
+                (name.is_folder_name() && !git.is_linked_worktree()).then(|| Folder {
+                    git: git.details(),
                     name,
                 })
             })
@@ -307,6 +309,12 @@ impl GitCheckout {
             })
         };
         Self { git_directory }
+    }
+
+    fn is_linked_worktree(&self) -> bool {
+        self.git_directory.as_ref().is_some_and(|directory| {
+            directory.join("commondir").is_file() && directory.join("gitdir").is_file()
+        })
     }
 
     fn details(&self) -> Option<GitDetails> {
@@ -690,9 +698,34 @@ impl FolderWatcher {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use tokio::time::timeout;
 
     use super::*;
+    use crate::process_ext::CommandStatusExt;
+
+    trait TestGitExt {
+        fn git(&self, arguments: &[&str]);
+    }
+
+    impl TestGitExt for Path {
+        fn git(&self, arguments: &[&str]) {
+            Command::new("git")
+                .current_dir(self)
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "protocol.file.allow=always",
+                ])
+                .args(arguments)
+                .run_checked()
+                .expect("git runs");
+        }
+    }
 
     fn folder(name: &str, git: Option<(&str, &str)>) -> Folder {
         Folder {
@@ -759,26 +792,139 @@ mod tests {
         )
         .expect("pointer is written");
 
-        let folders = ProjectsDirectory(root.to_path_buf())
-            .folders()
-            .expect("folders are listed");
+        assert_eq!(
+            GitCheckout::in_folder(&root.join("feature")).details(),
+            folder(
+                "feature",
+                Some(("https://github.com/zeke/app.git", "feature"))
+            )
+            .git
+        );
+        assert_eq!(
+            ProjectsDirectory(root.to_path_buf())
+                .folders()
+                .expect("folders are listed"),
+            [Folder {
+                name: "main".to_owned(),
+                git: Some(GitDetails {
+                    branch: Some("main".to_owned()),
+                    repository: Some("https://github.com/zeke/app.git".to_owned()),
+                    worktrees: 1,
+                }),
+            }]
+        );
+    }
+
+    #[test]
+    fn linked_worktrees_are_not_projects_or_kept_choices() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path();
+        let projects = ProjectsDirectory(root.to_path_buf());
+        root.git(&["init", "--quiet", "--initial-branch=main", "main"]);
+        let main = projects.folder("main");
+        main.git(&["commit", "--quiet", "--allow-empty", "--message=first"]);
+        main.git(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "absolute",
+            "../absolute",
+        ]);
+        main.git(&["worktree", "add", "--quiet", "--detach", "../relative"]);
+        fs::write(
+            main.join(".git/worktrees/absolute/commondir"),
+            format!("{}\n", main.join(".git").display()),
+        )
+        .expect("absolute common directory is written");
+        fs::write(
+            projects.folder("relative").join(".git"),
+            "gitdir: ../main/.git/worktrees/relative\n",
+        )
+        .expect("relative pointer is written");
+        fs::write(
+            main.join(".git/worktrees/relative/gitdir"),
+            "../../../../relative/.git\n",
+        )
+        .expect("relative back-link is written");
+        fs::create_dir(projects.folder("worktrees")).expect("ordinary folder is created");
+
+        let folders = projects.folders().expect("folders are listed");
         assert_eq!(
             folders,
             [
-                folder(
-                    "feature",
-                    Some(("https://github.com/zeke/app.git", "feature"))
-                ),
                 Folder {
                     name: "main".to_owned(),
                     git: Some(GitDetails {
                         branch: Some("main".to_owned()),
-                        repository: Some("https://github.com/zeke/app.git".to_owned()),
-                        worktrees: 1,
+                        repository: None,
+                        worktrees: 2,
                     }),
                 },
+                folder("worktrees", None),
             ]
         );
+        for name in ["absolute", "relative"] {
+            projects.folder(name).git(&["status", "--porcelain"]);
+            assert!(!projects.has_folder(name), "{name}");
+            assert_eq!(projects.find(name), None, "{name}");
+            assert!(projects.folder(name).is_dir(), "{name}");
+        }
+        for folder in &folders {
+            assert!(projects.has_folder(&folder.name), "{}", folder.name);
+            assert_eq!(projects.find(&folder.name).as_ref(), Some(folder));
+        }
+
+        let mut choices = BTreeMap::from([
+            ("absolute".to_owned(), true),
+            ("relative".to_owned(), true),
+            ("main".to_owned(), false),
+        ]);
+        projects.forget_gone_folders(&mut choices, &folders);
+        assert_eq!(choices, BTreeMap::from([("main".to_owned(), false)]));
+    }
+
+    #[test]
+    fn submodules_and_separate_git_directories_are_projects() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path();
+        root.git(&["init", "--quiet", "--initial-branch=main", "source"]);
+        root.join("source")
+            .git(&["commit", "--quiet", "--allow-empty", "--message=first"]);
+        root.git(&["init", "--quiet", "--initial-branch=main", "projects"]);
+        let projects = ProjectsDirectory(root.join("projects"));
+        projects.0.git(&[
+            "submodule",
+            "add",
+            "--quiet",
+            root.join("source").to_str().expect("source path is UTF-8"),
+            "submodule",
+        ]);
+        projects.0.git(&[
+            "init",
+            "--quiet",
+            "--initial-branch=main",
+            "--separate-git-dir=../separate.git",
+            "separate",
+        ]);
+
+        let folders = projects.folders().expect("folders are listed");
+        assert_eq!(
+            folders
+                .iter()
+                .map(|folder| folder.name.as_str())
+                .collect::<Vec<_>>(),
+            ["separate", "submodule"]
+        );
+        for folder in folders {
+            assert!(projects.folder(&folder.name).join(".git").is_file());
+            assert!(projects.has_folder(&folder.name), "{}", folder.name);
+            assert_eq!(projects.find(&folder.name).as_ref(), Some(&folder));
+            assert_eq!(
+                folder.git.as_ref().and_then(|git| git.branch.as_deref()),
+                Some("main")
+            );
+        }
     }
 
     #[test]

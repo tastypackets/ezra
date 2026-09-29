@@ -15,6 +15,7 @@ use crate::manager::remote_control::ClaudeOptions;
     operation_id = "listFolders",
     tag = "folders",
     summary = "List the folders in /home/dev/projects",
+    description = "Hidden folders, symbolic links and linked Git worktrees are omitted.",
     responses(
         (status = 200, description = "Folders sorted by name", body = Vec<FolderStatus>),
         (status = 401, description = "Not signed in to the manager", body = ErrorBody)
@@ -395,6 +396,97 @@ mod tests {
                     claude: ClaudeOptions::default(),
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn linked_worktrees_are_not_listed_or_changed_through_folder_routes() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let projects = &manager.state.projects;
+        let app = projects.folder("app");
+        let feature = projects.folder("feature");
+        fs::create_dir_all(&app).expect("repository folder is created");
+        fs::create_dir_all(&feature).expect("feature folder is created");
+        git(&app, &["init", "--quiet", "--initial-branch=main"]);
+        git(
+            &app,
+            &["commit", "--quiet", "--allow-empty", "--message=first"],
+        );
+        manager
+            .state
+            .change_folder_choice("feature", |choice| choice.serve = true)
+            .await
+            .expect("the old folder choice is saved");
+        git(
+            &app,
+            &["worktree", "add", "--quiet", "--detach", "../feature"],
+        );
+
+        let folders: Vec<FolderStatus> = manager
+            .get("/api/v1/folders", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].folder.name, "app");
+        assert_eq!(
+            folders[0]
+                .folder
+                .git
+                .as_ref()
+                .expect("app is a repository")
+                .worktrees,
+            1
+        );
+        for (route, body) in [
+            ("remote-control", r#"{"serve":true}"#),
+            ("claude-options", r#"{"spawn":"same-dir"}"#),
+        ] {
+            assert_eq!(
+                manager
+                    .put(
+                        &format!("/api/v1/folders/feature/{route}"),
+                        body,
+                        Some(&cookie)
+                    )
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND,
+                "{route}"
+            );
+        }
+        assert_eq!(
+            manager
+                .get("/api/v1/folders/feature/unsaved-work", Some(&cookie))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            manager
+                .delete("/api/v1/folders/feature", Some(&cookie))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert!(feature.join(".git").is_file());
+        let present = projects.folders().expect("projects are listed");
+        manager
+            .state
+            .record_folder_choices(&present)
+            .await
+            .expect("folder choices are reconciled");
+        assert!(
+            !manager
+                .state
+                .settings
+                .lock()
+                .await
+                .agents
+                .claude
+                .folders
+                .contains_key("feature")
         );
     }
 

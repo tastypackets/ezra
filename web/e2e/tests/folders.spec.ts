@@ -7,6 +7,7 @@ import {
   inContainer,
   installFakeClaude,
   installFakeGitHubSignIn,
+  nudgeRemoteControl,
   PROJECTS_DIRECTORY,
   removeFakeClaude,
   removeFakeGitHubSignIn,
@@ -23,6 +24,52 @@ function makeRepository(path: string): void {
 function folderRow(page: Page, folder: string) {
   return page.getByRole("listitem").filter({ hasText: folder });
 }
+
+test("a sibling worktree is counted without becoming a project or Claude server", async ({
+  page,
+  request,
+}) => {
+  const id = randomUUID().slice(0, 8);
+  const folder = `primary-${id}`;
+  const linked = `linked-${id}`;
+  const repository = `${PROJECTS_DIRECTORY}/${folder}`;
+  const worktree = `${PROJECTS_DIRECTORY}/${linked}`;
+  makeRepository(repository);
+  installFakeClaude(
+    "2.1.0-e2e",
+    "echo 'https://claude.ai/code?environment=env_e2e'; exec sleep 600",
+  );
+  try {
+    await nudgeRemoteControl(request);
+    await page.goto("./");
+    const row = folderRow(page, folder);
+    await expect(row.getByText("Running", { exact: true })).toBeVisible();
+
+    inContainer("git", "-C", repository, "worktree", "add", "--quiet", "--detach", worktree);
+    await expect(row.getByText("1 worktree", { exact: true })).toBeVisible();
+    await expect(folderRow(page, linked)).toBeHidden();
+
+    const folders = await (await request.get("api/v1/folders")).json();
+    expect(folders).toContainEqual(
+      expect.objectContaining({ name: folder, git: expect.objectContaining({ worktrees: 1 }) }),
+    );
+    expect(folders).not.toContainEqual(expect.objectContaining({ name: linked }));
+    const remote = await (await request.get("api/v1/remote-control")).json();
+    expect(remote.folders[folder]).toEqual(expect.objectContaining({ state: "running" }));
+    expect(remote.folders).not.toHaveProperty(linked);
+    const instructions = inContainer("cat", `${PROJECTS_DIRECTORY}/AGENTS.md`);
+    expect(instructions).toContain(`- ${folder}:`);
+    expect(instructions).not.toContain(`- ${linked}:`);
+
+    const refused = await request.put(`api/v1/folders/${linked}/remote-control`, {
+      data: { serve: true },
+    });
+    expect(refused.status()).toBe(404);
+  } finally {
+    await removeFakeClaude(request);
+    inContainer("rm", "-rf", repository, worktree);
+  }
+});
 
 test("a repository is cloned from its URL and deleted after confirming", async ({
   page,

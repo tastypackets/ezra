@@ -119,6 +119,9 @@ async fn serve() -> Result<(), ManagerError> {
     );
     state.environment =
         environment::EnvironmentSettings::read(&hostname, port, tls_verification, &git_tools);
+    if let Err(error) = state.install_paths.set_default_codex_worktree_root() {
+        tracing::warn!("could not set Codex's default worktree root: {error}");
+    }
     let tls_config = certificate.config.clone();
     state.certificate = Some(certificate);
     let projects = state.projects.clone();

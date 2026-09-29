@@ -878,6 +878,7 @@
           "folders"
         ],
         "summary": "List the folders in /home/dev/projects",
+        "description": "Hidden folders, symbolic links and linked Git worktrees are omitted.",
         "operationId": "listFolders",
         "responses": {
           "200": {
