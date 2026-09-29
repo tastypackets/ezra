@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.3.1"
+    "version": "0.3.2"
   },
   "paths": {
     "/api/v1/agents": {
@@ -878,6 +878,7 @@
           "folders"
         ],
         "summary": "List the folders in /home/dev/projects",
+        "description": "Hidden folders, symbolic links and linked Git worktrees are omitted.",
         "operationId": "listFolders",
         "responses": {
           "200": {

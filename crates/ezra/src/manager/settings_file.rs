@@ -30,6 +30,7 @@ const STAGING_PREFIX: &str = ".ezra.";
 const RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 const QUIET_PERIOD: Duration = Duration::from_millis(250);
 const LONGEST_SETTLE: Duration = Duration::from_secs(5);
+const CODEX_WORKTREE_ROOT: &str = "/home/dev/worktrees/codex";
 
 /// How a settings file is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -159,6 +160,39 @@ pub struct SettingsFile {
 }
 
 impl InstallPaths {
+    /// Sets Codex's worktree root only when its user settings leave it unset. Blocks.
+    pub fn set_default_codex_worktree_root(&self) -> Result<(), SettingsFileError> {
+        let Some(file) = self.settings_file(Agent::Codex) else {
+            return Ok(());
+        };
+        let current = file.read()?;
+        let mut document = current
+            .text
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| {
+                file.failed(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    error.message().to_owned(),
+                ))
+            })?;
+        let desktop = document
+            .entry("desktop")
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_like_mut()
+            .ok_or_else(|| {
+                file.failed(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "desktop is not a TOML table",
+                ))
+            })?;
+        if desktop.contains_key("git-worktree-root") {
+            return Ok(());
+        }
+        desktop.insert("git-worktree-root", toml_edit::value(CODEX_WORKTREE_ROOT));
+        file.save(document.to_string(), &current.version)?;
+        Ok(())
+    }
+
     /// Claude Code's `settings.json` or Codex's `config.toml`, absent when the agent's config
     /// directory is unknown.
     pub fn settings_file(&self, agent: Agent) -> Option<SettingsFile> {
@@ -742,6 +776,112 @@ mod tests {
             ),
         ] {
             assert_eq!(problem(Toml, text), at(line, column, error), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn codex_worktree_default_creates_private_settings_and_is_idempotent() {
+        let files = Files::new();
+        files
+            .paths
+            .set_default_codex_worktree_root()
+            .expect("the default is written");
+        let codex = files.of(Agent::Codex);
+        let first = codex.read().expect("the file reads");
+        let document: toml::Value = toml::from_str(&first.text).expect("the settings parse");
+        assert_eq!(
+            document["desktop"]["git-worktree-root"].as_str(),
+            Some(CODEX_WORKTREE_ROOT)
+        );
+        assert_eq!(mode_of(&codex.path), 0o600);
+        let modified = fs::metadata(&codex.path)
+            .expect("the file exists")
+            .modified()
+            .expect("the modification time exists");
+        files
+            .paths
+            .set_default_codex_worktree_root()
+            .expect("the default is already set");
+        assert_eq!(codex.read().expect("the file reads"), first);
+        assert_eq!(
+            fs::metadata(&codex.path)
+                .expect("the file exists")
+                .modified()
+                .expect("the modification time exists"),
+            modified
+        );
+        assert!(!files.of(Agent::Claude).path.exists());
+    }
+
+    #[test]
+    fn codex_worktree_default_preserves_every_existing_value() {
+        let files = Files::new();
+        for text in [
+            "# my choice\n[desktop]\ngit-worktree-root = '/mnt/worktrees' # keep\n",
+            "\u{feff}desktop.git-worktree-root = \"\"\r\n",
+            "desktop = { git-worktree-root = false }\n",
+            "[desktop.git-worktree-root]\ncustom = true\n",
+        ] {
+            files.write("config/codex/config.toml", text.as_bytes());
+            files
+                .paths
+                .set_default_codex_worktree_root()
+                .expect("an existing value is kept");
+            assert_eq!(files.read("config/codex/config.toml"), text.as_bytes());
+        }
+    }
+
+    #[test]
+    fn codex_worktree_default_preserves_other_settings_and_comments() {
+        let files = Files::new();
+        for text in [
+            "# my model\nmodel = 'mine' # keep\n",
+            "# desktop settings\n[desktop]\nother = true # keep\n",
+            "desktop = { other = true } # keep\n",
+            "desktop.other = true # keep\n",
+        ] {
+            files.write("config/codex/config.toml", text.as_bytes());
+            let original: toml::Value = toml::from_str(text).expect("the original settings parse");
+            files
+                .paths
+                .set_default_codex_worktree_root()
+                .expect("the missing key is added");
+            let updated = files.of(Agent::Codex).read().expect("the file reads").text;
+            assert!(updated.contains("# keep"), "{updated}");
+            let mut document: toml::Value =
+                toml::from_str(&updated).expect("the updated settings parse");
+            let desktop = document["desktop"]
+                .as_table_mut()
+                .expect("desktop is a table");
+            assert_eq!(
+                desktop.remove("git-worktree-root"),
+                Some(CODEX_WORKTREE_ROOT.into())
+            );
+            if !original
+                .as_table()
+                .expect("the document is a table")
+                .contains_key("desktop")
+            {
+                document
+                    .as_table_mut()
+                    .expect("the document is a table")
+                    .remove("desktop");
+            }
+            assert_eq!(document, original);
+        }
+    }
+
+    #[test]
+    fn codex_worktree_default_leaves_invalid_documents_untouched() {
+        let files = Files::new();
+        for text in [
+            "model = [",
+            "desktop = false\n",
+            "[[desktop]]\nother = true\n",
+        ] {
+            files.write("config/codex/config.toml", text.as_bytes());
+            assert!(files.paths.set_default_codex_worktree_root().is_err());
+            assert_eq!(files.read("config/codex/config.toml"), text.as_bytes());
         }
     }
 

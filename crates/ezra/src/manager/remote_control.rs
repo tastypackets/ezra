@@ -2118,6 +2118,64 @@ esac"#,
     }
 
     #[tokio::test]
+    async fn a_served_folder_stops_when_it_becomes_a_linked_worktree() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
+        );
+        let app = state.projects.folder("app");
+        let feature = state.projects.folder("feature");
+        fs::create_dir_all(&app).expect("repository folder is created");
+        fs::create_dir_all(&feature).expect("feature folder is created");
+        for arguments in [
+            vec!["init", "--quiet", "--initial-branch=main"],
+            vec!["commit", "--quiet", "--allow-empty", "--message=first"],
+        ] {
+            let output = Command::new("git")
+                .current_dir(&app)
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+                .args(arguments)
+                .output()
+                .await
+                .expect("git runs");
+            assert!(output.status.success(), "{output:?}");
+        }
+        state
+            .change_folder_choice("feature", |choice| choice.serve = true)
+            .await
+            .expect("the folder choice is saved");
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_in(&state, &app, ServerState::Running).await;
+        wait_in(&state, &feature, ServerState::Running).await;
+
+        let output = Command::new("git")
+            .current_dir(&app)
+            .args(["worktree", "add", "--quiet", "--detach", "../feature"])
+            .output()
+            .await
+            .expect("git creates the linked worktree");
+        assert!(output.status.success(), "{output:?}");
+        state.remote_control.supervision.reconsider();
+        assert!(state.remote_control.wait_until_gone(&feature, WAIT).await);
+        assert!(state.settings.lock().await.agents.claude.folders["feature"].serve);
+        assert!(feature.join(".git").is_file());
+        assert_eq!(
+            state
+                .remote_control
+                .status_of(&app)
+                .expect("app is served")
+                .state,
+            ServerState::Running
+        );
+
+        state.remote_control.supervision.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
     async fn a_folders_own_options_restart_only_that_folders_server() {
         let manager = TestManager::new();
         let directory = tempfile::tempdir().expect("temporary directory");

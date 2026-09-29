@@ -15,7 +15,8 @@ const WATCHED_CHANGE_TIMEOUT: Duration = Duration::from_secs(2);
 const REREAD_TIMEOUT: Duration = Duration::from_secs(12);
 const SETTINGS_FILE_CHANGED: &str = r#""topic":"settings_file""#;
 const CLAUDE_TEXT: &str = "{\r\n  \"model\": \"opus\"\r\n}\r\n";
-const CODEX_TEXT: &str = "\u{feff}# ezra\r\n[projects]\r\n\"/home/dev/projects/a\" = {\r\n  trust_level = \"trusted\",\r\n}\r\n";
+const CODEX_TEXT: &str = "\u{feff}# ezra\r\n[desktop]\r\ngit-worktree-root = '/home/dev/my-worktrees'\r\n[projects]\r\n\"/home/dev/projects/a\" = {\r\n  trust_level = \"trusted\",\r\n}\r\n";
+const CODEX_DEFAULT_TEXT: &str = "[desktop]\ngit-worktree-root = \"/home/dev/worktrees/codex\"\n";
 
 trait ManagerExt {
     fn open(&self, agent: &str) -> Value;
@@ -192,7 +193,7 @@ fn files_in_mounted_directories_are_replaced_and_keep_their_mode() {
     let claude = manager.open("claude");
     assert_eq!(claude["text"], CLAUDE_TEXT);
     let codex = manager.open("codex");
-    assert_eq!(codex["text"], "");
+    assert_eq!(codex["text"], CODEX_DEFAULT_TEXT);
 
     let events = manager.events();
     let by_claude = "{\n  \"model\": \"haiku\"\n}\n";
@@ -392,6 +393,10 @@ fn missing_files_and_their_folders_are_created_for_the_agent_user() {
         ("claude", "/home/dev/.claude", "{}"),
         ("codex", "/home/dev/.codex", "a = 1\n"),
     ] {
+        if agent == "codex" {
+            assert_eq!(manager.open(agent)["text"], CODEX_DEFAULT_TEXT);
+            stdout_of(&manager.container.run_as_agent(&["rm", "-r", directory]));
+        }
         assert!(
             !docker(&["exec", &manager.container.name, "test", "-e", directory])
                 .status
@@ -418,5 +423,60 @@ fn missing_files_and_their_folders_are_created_for_the_agent_user() {
                 saved["path"].as_str().expect("the path is text")
             )
         );
+    }
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn codex_worktree_default_uses_codex_home_and_keeps_user_edits_after_recreation() {
+    let home = agent_directory();
+    let mount = format!("{}:/home/dev/custom-codex", home.path().display());
+    let options = [
+        "--volume",
+        &mount,
+        "--env",
+        "CODEX_HOME=/home/dev/custom-codex",
+    ];
+    let manager = Manager::start("codex-worktree-default", &options);
+    let codex = manager.open("codex");
+    assert_eq!(codex["path"], "/home/dev/custom-codex/config.toml");
+    assert_eq!(codex["text"], CODEX_DEFAULT_TEXT);
+    assert_eq!(
+        stdout_of(&manager.container.run_as_agent(&[
+            "stat",
+            "--format",
+            "%a %U",
+            "/home/dev/custom-codex/config.toml",
+        ])),
+        "600 dev"
+    );
+    let custom = "# my worktrees\ndesktop.git-worktree-root = '/home/dev/my-worktrees'\n";
+    let (status, saved) = manager.save("codex", custom, &codex["version"]);
+    assert_eq!(status, "200", "{saved}");
+    drop(manager);
+
+    let restarted = Manager::start("codex-worktree-custom", &options);
+    assert_eq!(restarted.open("codex")["text"], custom);
+}
+
+#[test]
+#[ignore = "needs Docker and a built ezra image"]
+fn codex_worktree_default_does_not_prevent_starting_with_unwritable_or_invalid_settings() {
+    for (text, read_only) in [
+        ("model = 'mine'\n", true),
+        ("model = [", false),
+        ("desktop = false\n", false),
+    ] {
+        let home = agent_directory();
+        let config = home.path().join("config.toml");
+        config.write_with_mode(text.as_bytes(), 0o600);
+        let mount = format!(
+            "{}:/home/dev/.codex{}",
+            home.path().display(),
+            if read_only { ":ro" } else { "" }
+        );
+        let manager = Manager::start("codex-worktree-unchanged", &["--volume", &mount]);
+        assert_eq!(manager.open("codex")["text"], text);
+        assert_eq!(fs::read_to_string(&config).expect("the file reads"), text);
     }
 }
