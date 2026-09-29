@@ -60,10 +60,6 @@ Claude Code needs a Claude subscription sign-in, not an API key. It serves `~/pr
 
 Clone repositories from the Folders card, or ask an agent started in `~/projects` to do it.
 
-Linked Git worktrees are omitted from Folders and do not get their own Claude Remote Control servers. Their count is shown on the main repository.
-
-At manager startup, ezra adds `desktop.git-worktree-root = "/home/dev/worktrees/codex"` to Codex's user config when the setting is missing. Existing values are preserved, and you can change the path in Codex's settings file.
-
 ### Pair the ChatGPT app
 
 Sign in to Codex with ChatGPT on ezra web, then open the ⋯ menu next to Codex and choose Pair ChatGPT app. Leave the pairing dialog open while you connect from desktop app or mobile phone.
