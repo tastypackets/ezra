@@ -1401,6 +1401,419 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn chat_holds_serialize_one_chat_without_blocking_others() {
+        let (_home, _fake, client, _events) = connected().await;
+        let first = client.hold_chat(thread()).await;
+        assert!(
+            timeout(Duration::from_millis(10), client.hold_chat(thread()))
+                .await
+                .is_err()
+        );
+        let other = timeout(WAIT, client.hold_chat(ThreadId("other-chat".to_owned())))
+            .await
+            .expect("another chat remains available");
+        drop(first);
+        let next = timeout(WAIT, client.hold_chat(thread()))
+            .await
+            .expect("released chat is available");
+        drop(next);
+        drop(other);
+        let _current = client.hold_chat(ThreadId("current-chat".to_owned())).await;
+        assert_eq!(client.chat_locks.lock().expect("chat locks read").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_operation_releases_its_chat_hold() {
+        let (_home, _fake, client, _events) = connected().await;
+        let client = Arc::new(client);
+        let sending = Arc::clone(&client);
+        let (started, ready) = oneshot::channel();
+        let operation = tokio::spawn(async move {
+            let _hold = sending.hold_chat(thread()).await;
+            started.send(()).expect("test waits for hold");
+            std::future::pending::<()>().await;
+        });
+        ready.await.expect("operation holds chat");
+        operation.abort();
+        assert!(
+            operation
+                .await
+                .expect_err("operation cancelled")
+                .is_cancelled()
+        );
+        let _hold = timeout(WAIT, client.hold_chat(thread()))
+            .await
+            .expect("cancelled operation released chat");
+    }
+
+    #[tokio::test]
+    async fn saved_chat_resumes_without_overrides_and_starts_the_requested_submission() {
+        use ezra::inbound::codex::{ChatStatus, TurnStatus};
+        let (_home, fake, client, _events) = connected().await;
+        fake.reply(
+            "thread/resume",
+            [Reply::Result(json!({
+                "thread": {"id": "saved-chat", "status": {"type": "idle", "futureStatusField": true}, "futureThreadField": {"nested": [1, 2]}},
+                "cwd": "/home/dev/projects/repository",
+                "model": "saved-model", "reasoningEffort": "high", "futureResumeField": {"version": 2},
+            }))],
+        );
+        fake.reply(
+            "thread/queue/start",
+            [Reply::Result(json!({
+                "turn": {"id": "turn-1", "status": "inProgress", "items": [], "futureTurnField": true}, "futureStartField": ["value"],
+            }))],
+        );
+        let resumed = client
+            .request(ResumeChat {
+                thread_id: "saved-chat".to_owned(),
+                exclude_turns: true,
+            })
+            .await
+            .expect("chat resumes");
+        assert_eq!(resumed.thread.id, "saved-chat");
+        assert_eq!(resumed.thread.status, ChatStatus::Idle);
+        assert_eq!(resumed.cwd, "/home/dev/projects/repository");
+        let started = client
+            .request(StartQueuedMessage {
+                thread_id: resumed.thread.id,
+                queued_submission_id: "submission-1".to_owned(),
+            })
+            .await
+            .expect("queued submission starts");
+        assert_eq!(started.turn.id, "turn-1");
+        assert_eq!(started.turn.status, TurnStatus::InProgress);
+        assert_eq!(
+            fake.requests_after_initialize(),
+            [
+                requested(
+                    "thread/resume",
+                    json!({"threadId": "saved-chat", "excludeTurns": true})
+                ),
+                requested(
+                    "thread/queue/start",
+                    json!({"threadId": "saved-chat", "queuedSubmissionId": "submission-1"})
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_commands_preserve_native_defaults_and_accept_future_fields() {
+        use ezra::inbound::codex::ChatStatus;
+        let (_home, fake, client, _events) = connected().await;
+        fake.reply(
+            "thread/unarchive",
+            [Reply::Result(json!({
+                "thread": {"id": "saved-chat", "status": {"type": "futureStatus"}, "futureField": true},
+                "futureResponseField": [1, 2],
+            }))],
+        );
+        fake.reply(
+            "thread/start",
+            [Reply::Result(json!({
+                "thread": {"id": "new-chat", "status": {"type": "idle"}, "futureField": true},
+                "cwd": "/workspace", "model": "native-default", "futureResponseField": true,
+            }))],
+        );
+        let restored = client
+            .request(UnarchiveChat {
+                thread_id: "saved-chat".to_owned(),
+            })
+            .await
+            .expect("chat unarchives");
+        assert_eq!(restored.thread.id, "saved-chat");
+        assert_eq!(restored.thread.status, ChatStatus::Unknown);
+        let created = client
+            .request(CreateChat {
+                project_id: None,
+                cwd: "/workspace".to_owned(),
+                ephemeral: false,
+            })
+            .await
+            .expect("persistent chat creates");
+        assert_eq!(created.thread.id, "new-chat");
+        assert_eq!(created.cwd, "/workspace");
+        assert_eq!(created.thread.status, ChatStatus::Idle);
+        assert_eq!(
+            fake.requests_after_initialize(),
+            [
+                requested("thread/unarchive", json!({"threadId": "saved-chat"})),
+                requested(
+                    "thread/start",
+                    json!({"cwd": "/workspace", "ephemeral": false})
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn project_lookup_and_assignment_accept_future_fields() {
+        let (_home, fake, client, _events) = connected().await;
+        fake.reply(
+            "project/list",
+            [Reply::Result(json!({
+                "data": [{
+                    "id": "project-1",
+                    "roots": [{"path": "/workspace", "futureRootField": true}],
+                    "futureProjectField": {"nested": true}
+                }],
+                "nextCursor": "next-page",
+                "futureResponseField": true
+            }))],
+        );
+        fake.reply(
+            "thread/start",
+            [Reply::Result(json!({
+                "thread": {
+                    "id": "project-chat", "projectId": "project-1",
+                    "status": {"type": "idle"}
+                },
+                "cwd": "/workspace"
+            }))],
+        );
+        let page = client
+            .request(ListProjects {
+                cursor: Some("previous-page".to_owned()),
+                limit: 100,
+            })
+            .await
+            .expect("projects read");
+        assert_eq!(page.next_cursor.as_deref(), Some("next-page"));
+        assert_eq!(page.data[0].roots[0].path, "/workspace");
+        let created = client
+            .request(CreateChat {
+                project_id: Some(page.data[0].id.clone()),
+                cwd: "/workspace".to_owned(),
+                ephemeral: false,
+            })
+            .await
+            .expect("project chat created");
+        assert_eq!(created.thread.project_id.as_deref(), Some("project-1"));
+        assert_eq!(
+            fake.requests_after_initialize(),
+            [
+                requested(
+                    "project/list",
+                    json!({"cursor":"previous-page", "limit":100})
+                ),
+                requested(
+                    "thread/start",
+                    json!({
+                        "projectId":"project-1", "cwd":"/workspace", "ephemeral":false
+                    })
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_unarchive_response_does_not_break_the_control_connection() {
+        let (_home, fake, client, _events) = connected().await;
+        fake.reply(
+            "thread/unarchive",
+            [
+                Reply::Result(json!({"thread": {"status": {"type": "idle"}}})),
+                Reply::Result(json!({"thread": {"id": "saved-chat", "status": {"type": "idle"}}})),
+            ],
+        );
+        assert!(matches!(
+            client
+                .request(UnarchiveChat {
+                    thread_id: "saved-chat".to_owned(),
+                })
+                .await,
+            Err(ControlError::Io(_))
+        ));
+        assert_eq!(
+            client
+                .request(UnarchiveChat {
+                    thread_id: "saved-chat".to_owned(),
+                })
+                .await
+                .expect("connection still answers")
+                .thread
+                .id,
+            "saved-chat"
+        );
+    }
+
+    #[test]
+    fn resumed_and_started_statuses_do_not_treat_unknown_values_as_idle_or_running() {
+        use ezra::inbound::codex::{ChatStatus, TurnStatus};
+        for (status, expected) in [
+            (
+                json!({"type": "active", "activeFlags": ["waitingOnApproval"]}),
+                ChatStatus::Active,
+            ),
+            (json!({"type": "systemError"}), ChatStatus::SystemError),
+            (json!({"type": "notLoaded"}), ChatStatus::NotLoaded),
+            (json!({"type": "futureStatus"}), ChatStatus::Unknown),
+        ] {
+            let response: ResumedChat = serde_json::from_value(
+                json!({"thread": {"id": "chat-1", "status": status}, "cwd": "/workspace"}),
+            )
+            .expect("resume response decodes");
+            assert_eq!(response.thread.status, expected);
+        }
+        for (status, expected) in [
+            ("completed", TurnStatus::Completed),
+            ("failed", TurnStatus::Failed),
+            ("interrupted", TurnStatus::Interrupted),
+            ("futureStatus", TurnStatus::Unknown),
+        ] {
+            let response: StartedQueuedMessage =
+                serde_json::from_value(json!({"turn": {"id": "turn-1", "status": status}}))
+                    .expect("start response decodes");
+            assert_eq!(response.turn.status, expected);
+        }
+        assert!(
+            serde_json::from_value::<ResumedChat>(
+                json!({"thread": {"id": "chat-1"}, "cwd": "/workspace"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<StartedQueuedMessage>(json!({"turn": {"id": "turn-1"}}))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn inbound_message_is_queued_with_a_matching_receipt_and_native_defaults() {
+        use ezra::inbound::{ConversationKey, EventKey, InboundEvent};
+        let (_home, fake, client, _events) = connected().await;
+        let event = InboundEvent {
+            key: EventKey {
+                conversation: ConversationKey {
+                    source: "github:github.com".to_owned(),
+                    subject: "repository/123".to_owned(),
+                },
+                id: "comment-456".to_owned(),
+            },
+            new_chat: false,
+            options: Default::default(),
+            chat_name: None,
+            source_url: None,
+            initial_context: None,
+            actor: "author".to_owned(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            message: "Keep this formatting:\n\n```rust\nrun();\n```\n🦦".to_owned(),
+        };
+        let delivery_id = event.key.delivery_id();
+        fake.reply(
+            "thread/queue/add",
+            [Reply::Result(json!({
+                "queuedSubmission": {
+                    "id": "submission-1", "clientUserMessageId": delivery_id, "futureReceiptField": {"data": [1, 2]},
+                    "input": [{"type": "text", "text": event.message}],
+                }
+            }))],
+        );
+        let receipt = client
+            .request(QueueMessage::for_event("thread-1".to_owned(), &event))
+            .await
+            .expect("message acknowledged");
+        assert!(QueueMessage::for_event("thread-1".to_owned(), &event).accepts_receipt(&receipt));
+        assert_eq!(receipt.queued_submission.id, "submission-1");
+        assert_eq!(
+            fake.requests_after_initialize(),
+            [requested(
+                "thread/queue/add",
+                json!({
+                    "threadId": "thread-1", "clientUserMessageId": delivery_id,
+                    "input": [{"type": "text", "text": event.message}],
+                })
+            )]
+        );
+
+        for response in [
+            json!({"queuedSubmission": {"id": "submission-2", "clientUserMessageId": "another-event"}}),
+            json!({"queuedSubmission": {"id": "", "clientUserMessageId": delivery_id}}),
+        ] {
+            let receipt = serde_json::from_value(response).expect("receipt decodes");
+            assert!(
+                !QueueMessage::for_event("thread-1".to_owned(), &event).accepts_receipt(&receipt)
+            );
+        }
+        assert!(
+            serde_json::from_value::<QueueMessageResponse>(
+                json!({"queuedSubmission": {"id": "submission-1"}})
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_message_receipts_do_not_break_status_or_pairing_on_the_connection() {
+        use ezra::inbound::{ConversationKey, EventKey, InboundEvent};
+        let (_home, fake, client, _events) = connected().await;
+        fake.reply(
+            "thread/queue/add",
+            [
+                Reply::Result(json!({"queuedSubmission": {"id": "submission-1"}})),
+                Reply::Result(
+                    json!({"queuedSubmission": {"id": 123, "clientUserMessageId": "message-1"}}),
+                ),
+                Reply::Result(json!({"futureResponseShape": true})),
+            ],
+        );
+        fake.reply(
+            "remoteControl/status/read",
+            [Reply::Result(FakeControlServer::relay("connected"))],
+        );
+        fake.reply(
+            "remoteControl/pairing/start",
+            [Reply::Result(json!({
+                "pairingCode": "pairing-1", "manualPairingCode": "ABCD-2345",
+                "expiresAt": 1_790_000_600, "futurePairingField": {"enabled": true},
+            }))],
+        );
+        let event = InboundEvent {
+            key: EventKey {
+                conversation: ConversationKey {
+                    source: "github:github.com".to_owned(),
+                    subject: "issue-1".to_owned(),
+                },
+                id: "comment-1".to_owned(),
+            },
+            new_chat: false,
+            options: Default::default(),
+            chat_name: None,
+            source_url: None,
+            initial_context: None,
+            actor: "author".to_owned(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            message: "Continue this work".to_owned(),
+        };
+        for _attempt in 0..3 {
+            assert!(matches!(
+                client
+                    .request(QueueMessage::for_event("chat-1".to_owned(), &event))
+                    .await,
+                Err(ControlError::Io(_))
+            ));
+            assert_eq!(
+                client
+                    .request(StatusRead)
+                    .await
+                    .expect("relay status still works")
+                    .status,
+                RelayStatusWire::Connected
+            );
+            assert_eq!(
+                client
+                    .request(PairingStart { manual_code: true })
+                    .await
+                    .expect("pairing still works")
+                    .manual_pairing_code
+                    .as_deref(),
+                Some("ABCD-2345")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn chats_are_listed_read_and_unsubscribed_with_each_status() {
         let (_home, fake, client, _events) = connected().await;
         fake.reply(
