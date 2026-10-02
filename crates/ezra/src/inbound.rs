@@ -1,12 +1,15 @@
 pub mod codex;
+pub mod github;
 mod receipt;
 mod sender;
+mod settings;
 mod shortcuts;
 pub mod store;
 
 pub use sender::{
     MessageAttempt, MessageReceipt, MessageSendError, MessageSender, UntrackedAttempt,
 };
+pub use settings::InboundSettings;
 pub use shortcuts::{Shortcut, ShortcutError};
 
 use serde::{Deserialize, Serialize};

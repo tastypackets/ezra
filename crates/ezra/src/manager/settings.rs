@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use ezra::inbound::InboundSettings;
 use serde::{Deserialize, Serialize};
 
 use super::agents::{Agent, ReleaseChannel};
@@ -17,6 +18,8 @@ pub struct Settings {
     pub manager: ManagerSettings,
     #[serde(default)]
     pub agents: AgentsSettings,
+    #[serde(default)]
+    pub inbound: InboundSettings,
 }
 
 impl Settings {
