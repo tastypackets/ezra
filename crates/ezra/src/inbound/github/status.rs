@@ -79,3 +79,74 @@ impl StatusFooter<'_> {
         updated
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_changes_preserve_the_request_and_do_not_accumulate_footers() {
+        let request = "/ezra investigate\n\n```rust\nrun();\n```\n🦦\t\n";
+        let mut body = request.to_owned();
+        for status in [
+            CommentStatus::Received,
+            CommentStatus::Unconfirmed,
+            CommentStatus::Delivered,
+            CommentStatus::Failed,
+        ] {
+            let footer = StatusFooter {
+                status,
+                chat_name: Some("owner/repo#42: Fix the crash"),
+            };
+            body = footer.apply(&body);
+            assert_eq!(StatusFooter::strip(&body), request);
+            assert_eq!(body.matches(FOOTER_START).count(), 1);
+            assert_eq!(footer.apply(&body), body);
+            assert!(body.contains("owner/repo#42: Fix the crash"));
+        }
+    }
+
+    #[test]
+    fn text_added_after_a_footer_survives_when_the_footer_moves_to_the_bottom() {
+        let footer = StatusFooter {
+            status: CommentStatus::Received,
+            chat_name: None,
+        };
+        let body = format!(
+            "{}\n\nAlso check the other case.",
+            footer.apply("/ezra fix it")
+        );
+        let updated = footer.apply(&body);
+        assert_eq!(
+            StatusFooter::strip(&updated),
+            "/ezra fix it\n\nAlso check the other case."
+        );
+        assert!(updated.ends_with(FOOTER_END));
+        assert_eq!(updated.matches(FOOTER_START).count(), 1);
+    }
+
+    #[test]
+    fn malformed_marker_blocks_are_preserved() {
+        for body in [
+            format!("/ezra{FOOTER_START}user text{FOOTER_END}"),
+            format!("/ezra{FOOTER_START}<sub>unfinished"),
+            format!("/ezra{FOOTER_START}<sub>user\ntext</sub>{FOOTER_END}"),
+        ] {
+            assert_eq!(StatusFooter::strip(&body), body);
+        }
+    }
+
+    #[test]
+    fn chat_names_cannot_inject_html_or_unbounded_content() {
+        let chat_name = format!("<img src=x> &\n{}", "🦦".repeat(1000));
+        let body = StatusFooter {
+            status: CommentStatus::Delivered,
+            chat_name: Some(&chat_name),
+        }
+        .apply("/ezra");
+        assert!(body.contains("&lt;img src=x&gt; &amp; "));
+        assert!(!body.contains("<img"));
+        assert!(body.len() < 4096);
+        assert_eq!(StatusFooter::strip(&body), "/ezra");
+    }
+}

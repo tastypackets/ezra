@@ -69,3 +69,68 @@ impl GitHubOriginExt for str {
         Some(repository.to_ascii_lowercase())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_repository_origins_on_the_configured_host_match() {
+        for origin in [
+            "https://github.com/owner/repo.git",
+            "git@github.com:owner/repo.git",
+            "ssh://git@github.com/owner/repo.git",
+        ] {
+            assert_eq!(
+                origin.github_repository("github.com").as_deref(),
+                Some("owner/repo")
+            );
+        }
+        for origin in [
+            "/local/repo",
+            "https://other.example/owner/repo",
+            "git@other.example:owner/repo",
+            "https://github.com/owner/repo/extra",
+            "https://github.com/owner/repo?other=1",
+        ] {
+            assert!(origin.github_repository("github.com").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_selection_requires_unique_local_repositories() {
+        let directory = tempfile::tempdir().expect("projects");
+        for folder in ["first", "duplicate", "disabled"] {
+            let git_directory = directory.path().join(folder).join(".git");
+            std::fs::create_dir_all(&git_directory).expect("git directory");
+            std::fs::write(git_directory.join("HEAD"), "ref: refs/heads/main").expect("head");
+            let repository = if folder == "disabled" {
+                "disabled"
+            } else {
+                "repo"
+            };
+            std::fs::write(
+                git_directory.join("config"),
+                format!("[remote \"origin\"]\nurl = https://github.com/owner/{repository}.git\n"),
+            )
+            .expect("origin");
+        }
+        let projects = ProjectsDirectory(directory.path().to_owned());
+        let settings = ezra::inbound::github::GitHubSettings::default();
+        let workspaces = projects
+            .github_workspaces("github.com", &settings)
+            .await
+            .expect("scan");
+        assert_eq!(workspaces.len(), 2);
+        assert_eq!(workspaces["owner/repo"], PathBuf::from("/home/dev"));
+        assert!(workspaces.contains_key("owner/disabled"));
+        std::fs::remove_dir_all(directory.path().join("duplicate"))
+            .expect("remove duplicate fixture");
+        let workspaces = projects
+            .github_workspaces("github.com", &settings)
+            .await
+            .expect("scan");
+        assert_eq!(workspaces.len(), 2);
+        assert_eq!(workspaces["owner/repo"], directory.path().join("first"));
+    }
+}
