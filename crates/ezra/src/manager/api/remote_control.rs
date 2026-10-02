@@ -325,6 +325,21 @@ mod tests {
     use crate::manager::remote_control::ServerState;
 
     #[tokio::test]
+    async fn model_discovery_requires_login_and_a_running_codex_server() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let path = "/api/v1/agents/codex/models";
+        assert_eq!(
+            manager.get(path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            manager.get(path, Some(&cookie)).await.status(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    #[tokio::test]
     async fn every_server_is_listed_once_logged_in() {
         let manager = TestManager::new();
         let cookie = manager.logged_in().await;

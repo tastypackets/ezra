@@ -214,6 +214,78 @@ mod tests {
     }
 
     #[test]
+    fn inbound_settings_default_for_old_files_and_partial_overrides() {
+        let old_settings: Settings =
+            toml::from_str("[agents.codex]\nconfigured = true\n").expect("old settings parse");
+        assert_eq!(old_settings.inbound, InboundSettings::default());
+        assert_eq!(old_settings.inbound.retention_days, 90);
+        let partial: Settings =
+            toml::from_str("[inbound]\nretention_days = 180\nmax_queued_events = 20\n")
+                .expect("partial inbound settings parse");
+        assert_eq!(
+            partial.inbound,
+            InboundSettings {
+                retention_days: 180,
+                max_queued_events: 20,
+                ..InboundSettings::default()
+            }
+        );
+    }
+
+    #[test]
+    fn inbound_settings_survive_saving_other_choices() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("settings.toml");
+        let mut settings = Settings {
+            inbound: InboundSettings {
+                retention_days: 120,
+                max_queued_events: 50,
+                max_queued_message_bytes: 1_000_000,
+                max_history_events: 500,
+                max_history_message_bytes: 5_000_000,
+                max_idle_conversations: 200,
+                ..InboundSettings::default()
+            },
+            ..Settings::default()
+        };
+        settings.inbound.shortcuts.insert(
+            "/ezra-codex".to_owned(),
+            ezra::inbound::Shortcut {
+                agent: Some("codex".to_owned()),
+                model: Some("chosen-model".to_owned()),
+                effort: Some("high".to_owned()),
+            },
+        );
+        settings.inbound.github.only_added_repositories = false;
+        settings.inbound.github.max_concurrent_requests =
+            std::num::NonZeroUsize::new(2).expect("positive concurrency");
+        settings.save(&path).expect("inbound settings save");
+        let mut loaded = Settings::load(&path).expect("inbound settings load");
+        loaded.agent_mut(Agent::Codex).configured = true;
+        loaded.save(&path).expect("agent choice saves");
+        settings.agent_mut(Agent::Codex).configured = true;
+        assert_eq!(Settings::load(&path).expect("settings reload"), settings);
+    }
+
+    #[test]
+    fn inbound_settings_reject_negative_and_out_of_range_limits() {
+        for assignment in [
+            "retention_days = -1",
+            "retention_days = 4294967296",
+            "max_queued_events = -1",
+            "max_queued_message_bytes = -1",
+            "max_history_events = -1",
+            "max_history_message_bytes = -1",
+            "max_idle_conversations = -1",
+        ] {
+            assert!(
+                toml::from_str::<Settings>(&format!("[inbound]\n{assignment}\n")).is_err(),
+                "{assignment}"
+            );
+        }
+    }
+
+    #[test]
     fn claude_settings_sit_in_one_table() {
         let settings: Settings =
             toml::from_str("[agents.claude]\nconfigured = true\nrelease_channel = \"stable\"\n")
