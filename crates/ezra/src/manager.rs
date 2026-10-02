@@ -10,6 +10,7 @@ mod folders;
 mod git;
 mod github_host;
 mod https_redirect;
+mod inbound;
 mod login;
 mod processes;
 mod remote_control;
@@ -57,6 +58,8 @@ pub enum ManagerError {
     Configuration(#[from] config::ConfigError),
     #[error(transparent)]
     Settings(#[from] settings::SettingsError),
+    #[error("could not prepare inbound storage: {0}")]
+    Inbound(#[from] ezra::inbound::store::StoreError),
     #[error("could not prepare the TLS certificate: {0}")]
     Certificate(io::Error),
     #[error("could not serve on port {port}: {source}")]
@@ -124,6 +127,11 @@ async fn serve() -> Result<(), ManagerError> {
     }
     let tls_config = certificate.config.clone();
     state.certificate = Some(certificate);
+    let inbound = inbound::InboundRuntime::open(
+        &state_directory.join("ezra.db"),
+        Arc::clone(&state.settings),
+    )
+    .await?;
     let projects = state.projects.clone();
     if let Err(error) = tokio::task::spawn_blocking(move || projects.remove_unfinished_clones())
         .await
@@ -132,6 +140,11 @@ async fn serve() -> Result<(), ManagerError> {
     {
         tracing::warn!("could not remove unfinished clones: {error}");
     }
+    let inbound_runtime = tokio::spawn(inbound.run(
+        Arc::clone(&state.codex_remote),
+        state.git_tools.as_ref().clone(),
+        state.projects.clone(),
+    ));
     tokio::spawn(state.clone().reinstall_configured_agents());
     tokio::spawn(state.clone().check_for_updates_regularly());
     tokio::spawn(Arc::clone(&state.agent_checks).check_regularly());
@@ -156,6 +169,8 @@ async fn serve() -> Result<(), ManagerError> {
         .serve(app.into_make_service())
         .await
         .map_err(|source| ManagerError::Serve { port, source });
+    inbound_runtime.abort();
+    let _ = inbound_runtime.await;
     let (claude_stopped, codex_stopped) = tokio::join!(
         remote_control
             .supervision
