@@ -3,6 +3,8 @@ use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
@@ -11,6 +13,15 @@ use utoipa::ToSchema;
 use super::github_host::GitHubHost;
 use super::login::{LoginError, LoginProcess, LoginPrompt, PromptShape};
 use crate::process_ext::OutputExt;
+
+#[path = "git/github-account-comments.rs"]
+mod github_account_comments;
+#[path = "git/github-comments.rs"]
+mod github_comments;
+#[path = "git/github-links.rs"]
+mod github_links;
+#[path = "git/github-source.rs"]
+mod github_source;
 
 const GITHUB_REPOSITORIES: &str =
     "/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100";
@@ -46,6 +57,9 @@ pub struct GitTools {
     gh_config_directory: PathBuf,
     host: GitHubHost,
     token_from_environment: bool,
+    github_identity: Arc<tokio::sync::Mutex<github_comments::GitHubIdentity>>,
+    #[cfg(test)]
+    github_executable: Option<PathBuf>,
 }
 
 impl GitTools {
@@ -67,6 +81,9 @@ impl GitTools {
                 .iter()
                 .any(|variable| env::var_os(variable).is_some_and(|token| !token.is_empty())),
             host,
+            github_identity: Arc::default(),
+            #[cfg(test)]
+            github_executable: None,
         }
     }
 
@@ -87,11 +104,14 @@ impl GitTools {
             gh_config_directory: directory.join("gh"),
             host: GitHubHost::default(),
             token_from_environment: false,
+            github_identity: Arc::default(),
+            github_executable: None,
         }
     }
 
     /// Starts the device sign-in, asking for the `workflow` scope.
     pub async fn start_github_login(&self) -> Result<(LoginProcess, LoginPrompt), LoginError> {
+        self.github_identity.lock().await.user = None;
         let mut command = self.gh();
         command.args([
             "auth",
@@ -109,8 +129,9 @@ impl GitTools {
 
     /// Anything unexpected in gh's answer counts as signed out.
     pub async fn github_sign_in(&self) -> GitHubSignIn {
-        let Ok(output) = self
-            .gh()
+        let mut identity = self.github_identity.lock().await;
+        let mut command = self.gh();
+        command
             .args([
                 "auth",
                 "status",
@@ -119,19 +140,25 @@ impl GitTools {
                 &self.hostname_argument(),
             ])
             .stdin(Stdio::null())
-            .output()
-            .await
+            .kill_on_drop(true);
+        let Ok(Ok(output)) = tokio::time::timeout(Duration::from_secs(30), command.output()).await
         else {
+            identity.user = None;
             return GitHubSignIn::default();
         };
-        GitHubSignIn::from_status_json(&output.stdout, &self.host)
+        let sign_in = GitHubSignIn::from_status_json(&output.stdout, &self.host);
+        identity.observe(&sign_in);
+        sign_in
     }
 
     /// Signs out every account on the host, so no other one takes over.
     pub async fn log_out_of_github(&self) -> Result<(), GitError> {
-        for account in self.github_sign_in().await.accounts {
-            let output = self
-                .gh()
+        let accounts = self.github_sign_in().await.accounts;
+        let mut identity = self.github_identity.lock().await;
+        identity.user = None;
+        for account in accounts {
+            let mut command = self.gh();
+            command
                 .args([
                     "auth",
                     "logout",
@@ -140,8 +167,12 @@ impl GitTools {
                     &account,
                 ])
                 .stdin(Stdio::null())
-                .output()
-                .await?;
+                .kill_on_drop(true);
+            let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "GitHub logout timed out")
+                })??;
             if !output.status.success() {
                 return Err(GitError::GitHub {
                     action: "logout",
@@ -391,7 +422,11 @@ impl GitTools {
     }
 
     fn gh(&self) -> Command {
-        let mut command = Command::new("gh");
+        #[cfg(not(test))]
+        let executable = Path::new("gh");
+        #[cfg(test)]
+        let executable = self.github_executable.as_deref().unwrap_or(Path::new("gh"));
+        let mut command = Command::new(executable);
         command
             .env(GIT_CONFIG_VARIABLE, &self.git_config)
             .env(GH_CONFIG_VARIABLE, &self.gh_config_directory);
