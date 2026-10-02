@@ -43,7 +43,7 @@ RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
     <<'EOF'
 set -euo pipefail
 rust_target="$(uname -m)-unknown-linux-musl"
-cargo build --locked --release --target "${rust_target}" --package ezra
+SQLX_OFFLINE=true cargo build --locked --release --target "${rust_target}" --package ezra
 install -D "target/${rust_target}/release/ezra" /out/ezra
 EOF
 

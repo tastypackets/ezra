@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT actor, created_at AS \"created_at: OffsetDateTime\", message, initial_context, requested_agent, requested_model, requested_effort, chat_name, source_url, new_chat AS \"new_chat!: bool\"\n               FROM inbound_events\n               WHERE source = ?1 AND subject = ?2 AND event_id = ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "actor",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "created_at: OffsetDateTime",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "initial_context",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "initial_context"
+          }
+        }
+      },
+      {
+        "name": "requested_agent",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_agent"
+          }
+        }
+      },
+      {
+        "name": "requested_model",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_model"
+          }
+        }
+      },
+      {
+        "name": "requested_effort",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_effort"
+          }
+        }
+      },
+      {
+        "name": "chat_name",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "chat_name"
+          }
+        }
+      },
+      {
+        "name": "source_url",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "source_url"
+          }
+        }
+      },
+      {
+        "name": "new_chat!: bool",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "new_chat"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "b42c7e831d186534bdbd519e7106be1fc6af41fb4f99156d134aa98b03c85e24"
+}
