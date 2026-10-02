@@ -1,12 +1,12 @@
 mod bytes_ext;
 mod environment_config;
 mod init;
+mod logging;
 mod manager;
 mod path_ext;
 mod process_ext;
 
 use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -35,11 +35,7 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::stderr().is_terminal())
-        .with_target(false)
-        .init();
+    logging::Logging::new(&std::env::var("RUST_LOG").unwrap_or_default()).init();
 
     match Cli::parse().command {
         Command::Init { program, arguments } => init::run(&program, &arguments),

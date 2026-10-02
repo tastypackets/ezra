@@ -3,6 +3,7 @@ mod control;
 #[cfg(test)]
 mod fake;
 mod foreign;
+mod inbound;
 mod launch;
 mod leftovers;
 mod pairing;
@@ -148,6 +149,7 @@ pub struct CodexRemote {
     /// Sign-ins in progress, which keep the server stopped.
     holds: watch::Sender<u32>,
     control: SyncMutex<Control>,
+    control_available: watch::Sender<bool>,
     /// The pairing code asked for last.
     pairing: SyncMutex<Option<Pairing>>,
 }
@@ -194,6 +196,7 @@ impl CodexRemote {
             expected,
             holds: watch::Sender::new(0),
             control: SyncMutex::default(),
+            control_available: watch::Sender::new(false),
             pairing: SyncMutex::default(),
         }
     }
@@ -258,7 +261,18 @@ impl CodexRemote {
     }
 
     fn with_control<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {
-        change(&mut self.control.lock().unwrap_or_else(PoisonError::into_inner))
+        let mut control = self.control.lock().unwrap_or_else(PoisonError::into_inner);
+        let result = change(&mut control);
+        let available = control.client.is_some();
+        self.control_available.send_if_modified(|current| {
+            if *current == available {
+                false
+            } else {
+                *current = available;
+                true
+            }
+        });
+        result
     }
 
     fn client(&self) -> Option<Arc<ControlClient>> {

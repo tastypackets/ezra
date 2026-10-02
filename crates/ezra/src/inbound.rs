@@ -1,3 +1,4 @@
+pub mod codex;
 mod receipt;
 mod sender;
 mod shortcuts;

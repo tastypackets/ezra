@@ -2,9 +2,14 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex as SyncMutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex as SyncMutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
+use ezra::inbound::codex::{
+    CreateChat, CreatedChat, ListProjects, NameChat, ProjectPage, QueueMessage,
+    QueueMessageResponse, ResumeChat, ResumedChat, StartQueuedMessage, StartedQueuedMessage,
+    UnarchiveChat, UnarchivedChat, UpdateChatSettings, UpdatedChatSettings,
+};
 use futures_util::{SinkExt, StreamExt};
 use nix::unistd::Pid;
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -12,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc, oneshot};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{WebSocketStream, client_async};
@@ -164,7 +169,48 @@ impl From<WebSocketError> for ControlError {
 /// A request ezra sends Codex, and the answer it gets.
 pub trait ControlRequest: Serialize {
     const METHOD: &'static str;
+    const MAX_WAIT: Option<Duration> = None;
     type Response: DeserializeOwned;
+}
+
+impl ControlRequest for QueueMessage {
+    const METHOD: &'static str = "thread/queue/add";
+    type Response = QueueMessageResponse;
+}
+
+impl ControlRequest for UpdateChatSettings {
+    const METHOD: &'static str = "thread/settings/update";
+    type Response = UpdatedChatSettings;
+}
+
+impl ControlRequest for ResumeChat {
+    const METHOD: &'static str = "thread/resume";
+    type Response = ResumedChat;
+}
+
+impl ControlRequest for UnarchiveChat {
+    const METHOD: &'static str = "thread/unarchive";
+    type Response = UnarchivedChat;
+}
+
+impl ControlRequest for CreateChat {
+    const METHOD: &'static str = "thread/start";
+    type Response = CreatedChat;
+}
+
+impl ControlRequest for NameChat {
+    const METHOD: &'static str = "thread/name/set";
+    type Response = IgnoredAny;
+}
+
+impl ControlRequest for ListProjects {
+    const METHOD: &'static str = "project/list";
+    type Response = ProjectPage;
+}
+
+impl ControlRequest for StartQueuedMessage {
+    const METHOD: &'static str = "thread/queue/start";
+    type Response = StartedQueuedMessage;
 }
 
 /// Reads the relay status.
@@ -280,6 +326,18 @@ pub struct ThreadRead {
 impl ControlRequest for ThreadRead {
     const METHOD: &'static str = "thread/read";
     type Response = ThreadReadWire;
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatNameRead {
+    pub thread_id: ThreadId,
+}
+
+impl ControlRequest for ChatNameRead {
+    const METHOD: &'static str = "thread/read";
+    const MAX_WAIT: Option<Duration> = Some(Duration::from_secs(1));
+    type Response = ChatNameReadWire;
 }
 
 /// Stops this connection following a chat.
@@ -445,6 +503,17 @@ pub struct ThreadReadWire {
     pub thread: ThreadWire,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChatNameReadWire {
+    pub thread: ChatNameWire,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatNameWire {
+    pub id: ThreadId,
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ThreadWire {
     pub id: ThreadId,
@@ -459,6 +528,8 @@ pub enum ThreadStatusWire {
     SystemError,
     /// Running a turn or waiting for an answer.
     Active,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -672,6 +743,7 @@ impl Connection {
 /// A control connection to one Codex server.
 #[derive(Debug)]
 pub struct ControlClient {
+    chat_locks: SyncMutex<HashMap<ThreadId, Weak<AsyncMutex<()>>>>,
     outgoing: mpsc::UnboundedSender<String>,
     replies: Arc<PendingReplies>,
     next_id: AtomicI64,
@@ -710,6 +782,7 @@ impl ControlClient {
             .run(),
         );
         let client = Self {
+            chat_locks: SyncMutex::default(),
             outgoing: outgoing_sender,
             replies,
             next_id: AtomicI64::new(1),
@@ -729,6 +802,25 @@ impl ControlClient {
         Ok((client, events))
     }
 
+    pub async fn hold_chat(&self, thread_id: ThreadId) -> OwnedMutexGuard<()> {
+        let chat_lock = {
+            let mut locks = self
+                .chat_locks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            locks.retain(|_, chat_lock| chat_lock.strong_count() > 0);
+            locks
+                .get(&thread_id)
+                .and_then(Weak::upgrade)
+                .unwrap_or_else(|| {
+                    let chat_lock = Arc::new(AsyncMutex::new(()));
+                    locks.insert(thread_id, Arc::downgrade(&chat_lock));
+                    chat_lock
+                })
+        };
+        chat_lock.lock_owned().await
+    }
+
     pub async fn request<R: ControlRequest>(
         &self,
         request: R,
@@ -744,7 +836,10 @@ impl ControlClient {
             self.replies.forget(id);
             return Err(error);
         }
-        let Ok(reply) = timeout(self.answer_within, reply).await else {
+        let answer_within = R::MAX_WAIT.map_or(self.answer_within, |maximum| {
+            self.answer_within.min(maximum)
+        });
+        let Ok(reply) = timeout(answer_within, reply).await else {
             self.replies.forget(id);
             return Err(ControlError::TimedOut);
         };

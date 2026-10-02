@@ -737,6 +737,7 @@ impl Asking {
     /// Unsubscribes ezra's connection from a chat.
     fn leave(&mut self, client: Arc<ControlClient>, thread_id: ThreadId) {
         self.0.spawn(async move {
+            let _chat_hold = client.hold_chat(thread_id.clone()).await;
             let unsubscribe = ThreadUnsubscribe {
                 thread_id: thread_id.clone(),
             };
