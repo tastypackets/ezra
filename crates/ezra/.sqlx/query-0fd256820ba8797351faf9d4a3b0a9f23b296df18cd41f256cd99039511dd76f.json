@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT delivered_chat_name FROM inbound_events\n             WHERE source = ?1 AND subject = ?2 AND event_id = ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "delivered_chat_name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "delivered_chat_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "0fd256820ba8797351faf9d4a3b0a9f23b296df18cd41f256cd99039511dd76f"
+}

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET delivery_state = 'expired'\n             WHERE delivery_state IN ('pending', 'delivering') AND attempted_at IS NULL AND received_at <= ?1\n             RETURNING source, subject, event_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "source",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "name": "subject",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "name": "event_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "event_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d56bbb4305946ac8bf0d61decfedae39213e6ef5eb9b303b81f3583f5c7ca672"
+}

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM inbound_events\n                   WHERE source = ?1 AND subject = ?2 AND event_id = ?3\n               ) AS \"exists!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "exists!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "22269293ee31e8ccf36244fb600cd1017bbb76fca7998e8d8e45bc087b3a269d"
+}

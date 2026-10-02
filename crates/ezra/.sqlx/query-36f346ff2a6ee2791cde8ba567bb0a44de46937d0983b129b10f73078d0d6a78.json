@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                SELECT 1 FROM inbound_events WHERE source = ?1 AND subject = ?2 AND event_id = ?3\n                  AND delivery_state = 'pending' AND attempted_at IS NULL AND received_at > ?4\n            ) AS \"eligible!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "eligible!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "36f346ff2a6ee2791cde8ba567bb0a44de46937d0983b129b10f73078d0d6a78"
+}

@@ -1,4 +1,10 @@
+mod admission;
+mod delivery;
+mod expiry;
 mod identity;
+
+pub use admission::{InsertOutcome, QueueLimits};
+pub use delivery::{DeliveryOutcome, DeliveryScope, DeliveryState};
 
 use std::path::Path;
 use std::time::Duration;
