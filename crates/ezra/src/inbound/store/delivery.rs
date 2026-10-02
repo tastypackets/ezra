@@ -272,3 +272,404 @@ impl EventStore {
         Ok(result.rows_affected())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inbound::store::{InsertOutcome, TEST_QUEUE_LIMITS};
+    use time::macros::datetime;
+
+    #[tokio::test]
+    async fn a_fresh_chat_request_is_persistent_and_holds_only_later_messages() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let database = directory.path().join("ezra.db");
+        let store = EventStore::open(&database).await.expect("store");
+        let older = InboundEvent::delivery_example("issue-1", "older");
+        let mut reset = InboundEvent::delivery_example("issue-1", "reset");
+        reset.new_chat = true;
+        let later = InboundEvent::delivery_example("issue-1", "later");
+        let unrelated = InboundEvent::delivery_example("issue-2", "unrelated");
+        for event in [&older, &reset, &later, &unrelated] {
+            store
+                .insert(event, TEST_QUEUE_LIMITS)
+                .await
+                .expect("insert");
+        }
+        reset.new_chat = false;
+        assert_eq!(
+            store
+                .insert(&reset, TEST_QUEUE_LIMITS)
+                .await
+                .expect("duplicate"),
+            InsertOutcome::Duplicate
+        );
+        store.pool.close().await;
+        let store = EventStore::open(&database).await.expect("reopen");
+        assert!(
+            store
+                .get(&reset.key)
+                .await
+                .expect("request")
+                .expect("saved")
+                .new_chat
+        );
+        assert_eq!(
+            store.claim_next(None).await.expect("older claim"),
+            Some(older.clone())
+        );
+        store
+            .finish_delivery(&older.key, DeliveryOutcome::Delivered, None)
+            .await
+            .expect("older finishes");
+        assert_eq!(
+            store.claim_next(None).await.expect("unrelated claim"),
+            Some(unrelated)
+        );
+        assert!(
+            store
+                .claim_next(None)
+                .await
+                .expect("reset barrier")
+                .is_none()
+        );
+        assert_eq!(
+            store.delivery_state(&reset.key).await.expect("state"),
+            Some(DeliveryState::Pending)
+        );
+        assert_eq!(
+            store.delivery_state(&later.key).await.expect("state"),
+            Some(DeliveryState::Pending)
+        );
+    }
+
+    #[tokio::test]
+    async fn delivered_names_are_bounded_and_set_only_with_a_finished_claim() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store");
+        let event = InboundEvent::delivery_example("issue-1", "comment-1");
+        store
+            .insert(&event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("insert");
+        let name = format!("{}🦦", "x".repeat(510));
+        assert!(
+            !store
+                .finish_delivery(&event.key, DeliveryOutcome::Delivered, Some(&name))
+                .await
+                .expect("unclaimed")
+        );
+        assert_eq!(
+            store.delivered_chat_name(&event.key).await.expect("name"),
+            None
+        );
+        store.claim_next(None).await.expect("claim");
+        assert!(
+            store
+                .finish_delivery(&event.key, DeliveryOutcome::Delivered, Some(&name))
+                .await
+                .expect("finish")
+        );
+        assert_eq!(
+            store
+                .delivered_chat_name(&event.key)
+                .await
+                .expect("bounded name"),
+            Some("x".repeat(510))
+        );
+        assert!(
+            !store
+                .finish_delivery(&event.key, DeliveryOutcome::Delivered, Some("overwrite"))
+                .await
+                .expect("already finished")
+        );
+        assert_eq!(
+            store
+                .delivered_chat_name(&event.key)
+                .await
+                .expect("retained name"),
+            Some("x".repeat(510))
+        );
+    }
+
+    impl InboundEvent {
+        fn delivery_example(subject: &str, event_id: &str) -> Self {
+            Self {
+                key: EventKey {
+                    conversation: ConversationKey {
+                        source: "github:github.com".to_owned(),
+                        subject: subject.to_owned(),
+                    },
+                    id: event_id.to_owned(),
+                },
+                new_chat: false,
+                options: Default::default(),
+                chat_name: None,
+                source_url: None,
+                initial_context: None,
+                actor: "author".to_owned(),
+                created_at: datetime!(2026-09-30 12:00 UTC),
+                message: "Continue this work".to_owned(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unattempted_requests_survive_restart_and_serialize_only_their_chat() {
+        let directory = tempfile::tempdir().expect("directory");
+        let database = directory.path().join("ezra.db");
+        let store = EventStore::open(&database).await.expect("store");
+        let oldest = InboundEvent::delivery_example("issue-1", "first");
+        let linked = InboundEvent::delivery_example("pull-2", "second");
+        let unrelated = InboundEvent::delivery_example("issue-3", "third");
+        let target = super::super::SessionTarget {
+            host_id: "host-a".into(),
+            agent: "codex".into(),
+            chat_id: "shared".into(),
+            workspace: "/repo".into(),
+        };
+        store
+            .bind_conversation(&oldest.key.conversation, &target)
+            .await
+            .expect("bind");
+        store
+            .link_conversation(&linked.key.conversation, &oldest.key.conversation)
+            .await
+            .expect("link");
+        store
+            .bind_conversation(
+                &unrelated.key.conversation,
+                &super::super::SessionTarget {
+                    chat_id: "independent".into(),
+                    ..target
+                },
+            )
+            .await
+            .expect("independent binding");
+        for event in [&oldest, &linked, &unrelated] {
+            store
+                .insert(event, TEST_QUEUE_LIMITS)
+                .await
+                .expect("insert");
+        }
+        let scope = DeliveryScope {
+            host_id: "host-a",
+            agent: "codex",
+        };
+        assert_eq!(
+            store.claim_event(&oldest.key, scope).await.expect("claim"),
+            Some(oldest.clone())
+        );
+        store
+            .finish_delivery(&oldest.key, DeliveryOutcome::Pending, None)
+            .await
+            .expect("offline");
+        store.pool.close().await;
+        let store = EventStore::open(&database).await.expect("reopen");
+        assert_eq!(
+            store
+                .waiting_events("github:github.com")
+                .await
+                .expect("recovery"),
+            [
+                oldest.key.clone(),
+                linked.key.clone(),
+                unrelated.key.clone()
+            ]
+        );
+        assert_eq!(
+            store
+                .claim_event(&linked.key, scope)
+                .await
+                .expect("ordered"),
+            None
+        );
+        assert_eq!(
+            store
+                .claim_event(&unrelated.key, scope)
+                .await
+                .expect("independent"),
+            Some(unrelated.clone())
+        );
+        store
+            .finish_delivery(&unrelated.key, DeliveryOutcome::Delivered, None)
+            .await
+            .expect("finish independent");
+        assert_eq!(
+            store
+                .claim_event(&oldest.key, scope)
+                .await
+                .expect("resumed"),
+            Some(oldest.clone())
+        );
+        store
+            .finish_delivery(&oldest.key, DeliveryOutcome::Delivered, None)
+            .await
+            .expect("finish first");
+        assert_eq!(
+            store
+                .claim_event(&linked.key, scope)
+                .await
+                .expect("followup"),
+            Some(linked)
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_claims_deliver_a_conversation_in_order() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("ezra.db");
+        let first_store = EventStore::open(&path).await.expect("first store opens");
+        let second_store = EventStore::open(&path).await.expect("second store opens");
+        let first_event = InboundEvent::delivery_example("issue-1", "comment-1");
+        let followup_event = InboundEvent::delivery_example("issue-1", "comment-2");
+        first_store
+            .insert(&first_event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("first event inserts");
+        first_store
+            .insert(&followup_event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("follow-up inserts");
+
+        let (first_claim, second_claim) =
+            tokio::join!(first_store.claim_next(None), second_store.claim_next(None));
+        let claims: Vec<_> = [
+            first_claim.expect("first claim succeeds"),
+            second_claim.expect("second claim succeeds"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        assert_eq!(claims, vec![first_event.clone()]);
+        assert!(
+            !first_store
+                .finish_delivery(&followup_event.key, DeliveryOutcome::Delivered, None)
+                .await
+                .expect("pending event cannot finish")
+        );
+        assert!(
+            first_store
+                .finish_delivery(&first_event.key, DeliveryOutcome::Delivered, None)
+                .await
+                .expect("claimed event finishes")
+        );
+        assert_eq!(
+            second_store
+                .claim_next(None)
+                .await
+                .expect("follow-up claims"),
+            Some(followup_event)
+        );
+        assert_eq!(
+            first_store
+                .delivery_state(&first_event.key)
+                .await
+                .expect("state reads"),
+            Some(DeliveryState::Delivered)
+        );
+        assert_eq!(
+            first_store
+                .insert(&first_event, TEST_QUEUE_LIMITS)
+                .await
+                .expect("duplicate is handled"),
+            InsertOutcome::Duplicate
+        );
+        assert_eq!(
+            first_store
+                .delivery_state(&first_event.key)
+                .await
+                .expect("duplicate keeps state"),
+            Some(DeliveryState::Delivered)
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_never_replays_attempted_messages_and_allows_followups() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("ezra.db");
+        let store = EventStore::open(&path).await.expect("store opens");
+        let interrupted_event = InboundEvent::delivery_example("issue-1", "comment-1");
+        let followup_event = InboundEvent::delivery_example("issue-1", "comment-2");
+        let independent_event = InboundEvent::delivery_example("issue-2", "comment-3");
+        for event in [&interrupted_event, &followup_event, &independent_event] {
+            store
+                .insert(event, TEST_QUEUE_LIMITS)
+                .await
+                .expect("event inserts");
+        }
+        assert_eq!(
+            store.claim_next(None).await.expect("event claims"),
+            Some(interrupted_event.clone())
+        );
+        sqlx::query(
+            "UPDATE inbound_events SET attempted_at = unixepoch() WHERE event_id = 'comment-1'",
+        )
+        .execute(&store.pool)
+        .await
+        .expect("native submission was attempted");
+        store.pool.close().await;
+
+        let store = EventStore::open(&path).await.expect("store reopens");
+        assert_eq!(
+            store
+                .recover_interrupted()
+                .await
+                .expect("recovery succeeds"),
+            1
+        );
+        assert_eq!(
+            store
+                .recover_interrupted()
+                .await
+                .expect("repeated recovery succeeds"),
+            0
+        );
+        assert_eq!(
+            store
+                .delivery_state(&interrupted_event.key)
+                .await
+                .expect("state reads"),
+            Some(DeliveryState::Uncertain)
+        );
+        assert!(
+            !store
+                .finish_delivery(&interrupted_event.key, DeliveryOutcome::Delivered, None)
+                .await
+                .expect("recovered event cannot finish")
+        );
+        assert_eq!(
+            store.claim_next(None).await.expect("followup proceeds"),
+            Some(followup_event.clone())
+        );
+        store
+            .finish_delivery(&followup_event.key, DeliveryOutcome::Delivered, None)
+            .await
+            .expect("followup delivered");
+        assert_eq!(
+            store
+                .claim_next(None)
+                .await
+                .expect("other conversation claims"),
+            Some(independent_event.clone())
+        );
+        assert!(
+            store
+                .finish_delivery(&independent_event.key, DeliveryOutcome::Uncertain, None)
+                .await
+                .expect("uncertain outcome persists")
+        );
+        assert_eq!(
+            store.claim_next(None).await.expect("no eligible events"),
+            None
+        );
+        assert_eq!(
+            store
+                .delivery_state(&followup_event.key)
+                .await
+                .expect("follow-up delivered"),
+            Some(DeliveryState::Delivered)
+        );
+    }
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_feedback_attempts SET created_at_seconds = 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "9c14536f94a1637454305b1c446ca2fab5e03f2dd858076a6b0daee23179ce8c"
+}

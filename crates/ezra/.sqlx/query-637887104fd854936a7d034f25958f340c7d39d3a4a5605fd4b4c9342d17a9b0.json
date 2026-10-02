@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_sessions SET last_used_at = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "637887104fd854936a7d034f25958f340c7d39d3a4a5605fd4b4c9342d17a9b0"
+}

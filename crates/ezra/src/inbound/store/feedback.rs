@@ -58,3 +58,92 @@ impl EventStore {
         Ok(removed.rows_affected())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inbound::ConversationKey;
+
+    #[tokio::test]
+    async fn newly_observed_feedback_uses_local_time_after_retention_cleanup() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store");
+        let cutoff = OffsetDateTime::now_utc() - time::Duration::days(90);
+        store
+            .prune_feedback(cutoff, 100)
+            .await
+            .expect("retention floor");
+        let key = EventKey {
+            conversation: ConversationKey {
+                source: "github:github.com".into(),
+                subject: "7/42".into(),
+            },
+            id: "old-comment:new-status".into(),
+        };
+        assert!(
+            store
+                .claim_feedback(&key, 100)
+                .await
+                .expect("new status claim")
+        );
+        let received_at = sqlx::query_scalar!(
+            "SELECT created_at_seconds FROM inbound_feedback_attempts WHERE event_id = ?1",
+            key.id
+        )
+        .fetch_one(&store.pool)
+        .await
+        .expect("feedback receipt");
+        assert!(received_at >= cutoff.unix_timestamp());
+    }
+
+    #[tokio::test]
+    async fn feedback_claim_survives_restart_and_has_a_hard_capacity_limit() {
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("ezra.db");
+        let store = EventStore::open(&path).await.expect("store");
+        let key = EventKey {
+            conversation: ConversationKey {
+                source: "github:github.com".into(),
+                subject: "7/42".into(),
+            },
+            id: "10".into(),
+        };
+        assert!(store.claim_feedback(&key, 1).await.expect("claim"));
+        drop(store);
+        let store = EventStore::open(&path).await.expect("reopen");
+        assert!(!store.claim_feedback(&key, 1).await.expect("no repeat"));
+        let another = EventKey {
+            id: "11".into(),
+            ..key.clone()
+        };
+        assert!(!store.claim_feedback(&another, 1).await.expect("capacity"));
+        sqlx::query!("UPDATE inbound_feedback_attempts SET created_at_seconds = 0")
+            .execute(&store.pool)
+            .await
+            .expect("old feedback receipt");
+        assert_eq!(
+            store
+                .prune_feedback(OffsetDateTime::now_utc() - time::Duration::days(1), 1)
+                .await
+                .expect("age cleanup"),
+            1
+        );
+        assert!(store.claim_feedback(&another, 1).await.expect("room"));
+        assert_eq!(
+            store
+                .prune_feedback(OffsetDateTime::UNIX_EPOCH, 0)
+                .await
+                .expect("count cleanup"),
+            1
+        );
+        assert_eq!(
+            store
+                .prune_feedback(OffsetDateTime::UNIX_EPOCH, 1)
+                .await
+                .expect("empty cleanup"),
+            0
+        );
+    }
+}

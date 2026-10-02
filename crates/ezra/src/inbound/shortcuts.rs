@@ -112,3 +112,112 @@ impl InboundSettings {
         Ok(matched)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_matching_requires_token_boundaries_and_allows_repeated_shortcuts() {
+        let settings = InboundSettings::default();
+        for message in [
+            "/ezra",
+            "Please /ezra fix this",
+            "(/ezra): help",
+            "`/ezra`",
+            "> /ezra",
+            "/ezra then /ezra",
+            "🦦 /ezra",
+        ] {
+            assert_eq!(
+                settings
+                    .match_shortcut(message)
+                    .expect("match")
+                    .expect("found")
+                    .0,
+                "/ezra"
+            );
+        }
+        for message in [
+            "/ezra-other",
+            "/ezra_other",
+            "/ezra2",
+            "project/ezra",
+            "https://example.com/ezra",
+            "/ezra/path",
+            "/EZRA",
+            "/ezraé",
+        ] {
+            assert!(
+                settings.match_shortcut(message).expect("match").is_none(),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn removing_triggers_preserves_substrings_and_accepts_empty_requests() {
+        assert_eq!(Shortcut::remove_trigger("/ezra", "/ezra"), "");
+        assert_eq!(
+            Shortcut::remove_trigger("🦦 /ezra fix /ezra-more then /ezra", "/ezra"),
+            "🦦  fix /ezra-more then"
+        );
+        assert_eq!(
+            Shortcut::remove_trigger("project/ezra /ezra/path", "/ezra"),
+            "project/ezra /ezra/path"
+        );
+    }
+
+    #[test]
+    fn custom_shortcuts_return_their_options_and_reject_ambiguity() {
+        let mut settings = InboundSettings::default();
+        let options = Shortcut {
+            agent: Some("codex".to_owned()),
+            model: Some("chosen-model".to_owned()),
+            effort: Some("high".to_owned()),
+        };
+        settings
+            .shortcuts
+            .insert("/ezra-codex".to_owned(), options.clone());
+        assert_eq!(
+            settings
+                .match_shortcut("Please /ezra-codex investigate")
+                .expect("match"),
+            Some(("/ezra-codex", &options))
+        );
+        assert_eq!(
+            settings.match_shortcut("/ezra and /ezra-codex"),
+            Err(ShortcutError::Ambiguous)
+        );
+        settings.shortcuts.clear();
+        assert!(
+            settings
+                .match_shortcut("/ezra")
+                .expect("disabled shortcuts")
+                .is_none()
+        );
+        settings
+            .shortcuts
+            .insert("@custom".to_owned(), Shortcut::default());
+        assert!(
+            settings
+                .match_shortcut("@custom help")
+                .expect("custom text")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn invalid_configuration_is_reported() {
+        for trigger in ["", "two words", "bad\ntrigger", &"x".repeat(129)] {
+            let mut settings = InboundSettings::default();
+            settings
+                .shortcuts
+                .insert(trigger.to_owned(), Shortcut::default());
+            assert!(matches!(
+                settings.match_shortcut("comment"),
+                Err(ShortcutError::InvalidTrigger(_))
+            ));
+        }
+    }
+}

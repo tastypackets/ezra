@@ -63,3 +63,60 @@ impl InboundSettings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::datetime;
+
+    #[test]
+    fn waiting_expiry_defaults_to_one_day_and_requires_positive_hours() {
+        let now = datetime!(2026-10-02 12:00 UTC);
+        let mut settings = InboundSettings::default();
+        assert_eq!(settings.waiting_cutoff(now), now - Duration::hours(24));
+        settings.waiting_expiry_hours = NonZeroU32::new(2).expect("positive expiry");
+        assert_eq!(settings.waiting_cutoff(now), now - Duration::hours(2));
+        assert!(serde_json::from_str::<InboundSettings>(r#"{"waiting_expiry_hours":0}"#).is_err());
+    }
+
+    #[test]
+    fn retention_supports_zero_and_saturates_at_the_oldest_date() {
+        let now = datetime!(2026-09-30 12:00 UTC);
+        assert_eq!(
+            InboundSettings::default().retention_cutoff(now),
+            datetime!(2026-07-02 12:00 UTC)
+        );
+        let mut settings = InboundSettings {
+            retention_days: 0,
+            ..InboundSettings::default()
+        };
+        assert_eq!(settings.retention_cutoff(now), now);
+        settings.retention_days = u32::MAX;
+        assert!(settings.retention_cutoff(now) < datetime!(-9998-01-01 00:00 UTC));
+    }
+
+    #[test]
+    fn storage_limits_use_the_configured_values() {
+        let settings = InboundSettings {
+            max_queued_events: 7,
+            max_queued_message_bytes: 1234,
+            max_history_events: 99,
+            max_history_message_bytes: 5678,
+            ..InboundSettings::default()
+        };
+        assert_eq!(
+            settings.queue_limits(),
+            QueueLimits {
+                max_events: 7,
+                max_message_bytes: 1234
+            }
+        );
+        assert_eq!(
+            settings.history_limits(),
+            HistoryLimits {
+                max_events: 99,
+                max_message_bytes: 5678
+            }
+        );
+    }
+}

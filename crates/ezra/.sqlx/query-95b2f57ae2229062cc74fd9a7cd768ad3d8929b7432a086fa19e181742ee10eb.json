@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_used_at FROM inbound_sessions",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_used_at",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "last_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "95b2f57ae2229062cc74fd9a7cd768ad3d8929b7432a086fa19e181742ee10eb"
+}
