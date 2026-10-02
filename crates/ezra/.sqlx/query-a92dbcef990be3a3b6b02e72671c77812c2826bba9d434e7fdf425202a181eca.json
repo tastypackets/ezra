@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO inbound_events (source, subject, event_id, actor, created_at, message)\n             VALUES ('github:github.com', '1234/87', '456', '789', '2026-09-29T10:00:00Z', 'Continue')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "a92dbcef990be3a3b6b02e72671c77812c2826bba9d434e7fdf425202a181eca"
+}

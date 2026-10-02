@@ -246,3 +246,491 @@ impl EventStore {
         Ok(outcome)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::inbound::store::{DeliveryState, SessionTarget, TEST_QUEUE_LIMITS};
+    use crate::inbound::{ConversationKey, InboundEvent};
+
+    const SCOPE: DeliveryScope<'_> = DeliveryScope {
+        host_id: "host-a",
+        agent: "codex",
+    };
+
+    enum Reply {
+        Accepted,
+        Unavailable,
+        Uncertain,
+        Mismatched,
+    }
+
+    struct Sender {
+        reply: Reply,
+        chats: Mutex<Vec<String>>,
+        messages: Mutex<Vec<String>>,
+    }
+
+    impl MessageSender for Sender {
+        async fn create_chat(
+            &self,
+            _workspace: &str,
+            _chat_name: Option<&str>,
+        ) -> Result<String, MessageSendError> {
+            panic!("these cases must not create chats")
+        }
+
+        async fn queue_message_tracked(
+            &self,
+            chat_id: &str,
+            event: &InboundEvent,
+            attempt: &(impl MessageAttempt + Sync),
+        ) -> Result<MessageReceipt, MessageSendError> {
+            if !matches!(self.reply, Reply::Unavailable) {
+                attempt.mark_attempted(&event.key).await?;
+            }
+            self.queue_message(chat_id, event).await
+        }
+
+        async fn queue_message(
+            &self,
+            chat_id: &str,
+            event: &InboundEvent,
+        ) -> Result<MessageReceipt, MessageSendError> {
+            self.chats
+                .lock()
+                .expect("chat log locks")
+                .push(chat_id.to_owned());
+            self.messages
+                .lock()
+                .expect("messages")
+                .push(event.message.clone());
+            match self.reply {
+                Reply::Accepted => Ok(MessageReceipt {
+                    chat_name: Some("Existing chat name".to_owned()),
+                    native_message_id: "native-1".to_owned(),
+                    delivery_id: event.key.delivery_id(),
+                }),
+                Reply::Unavailable => Err(MessageSendError::Unavailable),
+                Reply::Uncertain => {
+                    Err(MessageSendError::Uncertain("connection closed".to_owned()))
+                }
+                Reply::Mismatched => Ok(MessageReceipt {
+                    chat_name: Some("Untrusted chat name".to_owned()),
+                    native_message_id: "native-1".to_owned(),
+                    delivery_id: "another-event".to_owned(),
+                }),
+            }
+        }
+    }
+
+    impl InboundEvent {
+        fn dispatch_example(subject: &str) -> Self {
+            Self {
+                key: EventKey {
+                    conversation: ConversationKey {
+                        source: "github:github.com".to_owned(),
+                        subject: subject.to_owned(),
+                    },
+                    id: "comment-1".to_owned(),
+                },
+                new_chat: false,
+                options: Default::default(),
+                chat_name: None,
+                source_url: None,
+                initial_context: None,
+                actor: "author".to_owned(),
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+                message: "Continue this work".to_owned(),
+            }
+        }
+    }
+
+    impl SessionTarget {
+        fn dispatch_example(host: &str, agent: &str, chat: &str) -> Self {
+            Self {
+                host_id: host.to_owned(),
+                agent: agent.to_owned(),
+                chat_id: chat.to_owned(),
+                workspace: "/home/dev/projects/repository".to_owned(),
+            }
+        }
+    }
+
+    struct RecoverySender<'store> {
+        store: &'store EventStore,
+        creation_fails: bool,
+        replacement_fails: bool,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl MessageSender for RecoverySender<'_> {
+        async fn create_chat(
+            &self,
+            workspace: &str,
+            chat_name: Option<&str>,
+        ) -> Result<String, MessageSendError> {
+            assert_eq!(workspace, "/home/dev/projects/repository");
+            assert_eq!(chat_name, Some("repository#42: Fix crash"));
+            self.calls.lock().expect("calls").push("create".to_owned());
+            if self.creation_fails {
+                Err(MessageSendError::Uncertain("creation timed out".to_owned()))
+            } else {
+                Ok("new-chat".to_owned())
+            }
+        }
+
+        async fn queue_message(
+            &self,
+            chat_id: &str,
+            event: &InboundEvent,
+        ) -> Result<MessageReceipt, MessageSendError> {
+            self.calls.lock().expect("calls").push(chat_id.to_owned());
+            assert_eq!(
+                event.message.contains("Original description"),
+                chat_id != "old-chat"
+            );
+            if chat_id == "old-chat" {
+                return Err(MessageSendError::NeedsReplacement(
+                    "chat deleted".to_owned(),
+                ));
+            }
+            assert_eq!(
+                self.store
+                    .find_binding(&event.key.conversation)
+                    .await
+                    .expect("binding")
+                    .expect("bound")
+                    .chat_id,
+                chat_id
+            );
+            if self.replacement_fails {
+                return Err(MessageSendError::NeedsReplacement(
+                    "replacement also deleted".to_owned(),
+                ));
+            }
+            Ok(MessageReceipt {
+                chat_name: None,
+                native_message_id: "receipt".to_owned(),
+                delivery_id: event.key.delivery_id(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_persists_replacement_before_delivery_and_never_loops_on_failure() {
+        for (creation_fails, replacement_fails) in [(false, false), (true, false), (false, true)] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let store = EventStore::open(&directory.path().join("ezra.db"))
+                .await
+                .expect("store opens");
+            let mut event = InboundEvent::dispatch_example("issue-1");
+            event.chat_name = Some("repository#42: Fix crash".to_owned());
+            event.initial_context = Some("\n\nOriginal description".to_owned());
+            let target = SessionTarget::dispatch_example("host-a", "codex", "old-chat");
+            store
+                .bind_conversation(&event.key.conversation, &target)
+                .await
+                .expect("bind");
+            store
+                .insert(&event, TEST_QUEUE_LIMITS)
+                .await
+                .expect("insert");
+            let sender = RecoverySender {
+                store: &store,
+                creation_fails,
+                replacement_fails,
+                calls: Mutex::default(),
+            };
+            let outcome = store.dispatch_next(SCOPE, &sender).await.expect("dispatch");
+            let expected_state = if creation_fails {
+                assert!(matches!(outcome, DispatchOutcome::Failed { .. }));
+                DeliveryState::Failed
+            } else if replacement_fails {
+                assert!(matches!(outcome, DispatchOutcome::Uncertain { .. }));
+                DeliveryState::Uncertain
+            } else {
+                assert!(matches!(outcome, DispatchOutcome::Delivered { .. }));
+                DeliveryState::Delivered
+            };
+            assert_eq!(
+                store.delivery_state(&event.key).await.expect("state"),
+                Some(expected_state)
+            );
+            assert_eq!(
+                store
+                    .find_binding(&event.key.conversation)
+                    .await
+                    .expect("binding")
+                    .expect("bound")
+                    .chat_id,
+                if creation_fails {
+                    "old-chat"
+                } else {
+                    "new-chat"
+                }
+            );
+            assert_eq!(
+                *sender.calls.lock().expect("calls"),
+                if creation_fails {
+                    vec!["old-chat", "create"]
+                } else {
+                    vec!["old-chat", "create", "new-chat"]
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_claims_only_the_selected_host_and_agent_and_uses_the_saved_chat() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store opens");
+        let unbound = InboundEvent::dispatch_example("unbound");
+        let other_host = InboundEvent::dispatch_example("other-host");
+        let other_agent = InboundEvent::dispatch_example("other-agent");
+        let ours = InboundEvent::dispatch_example("ours");
+        for event in [&unbound, &other_host, &other_agent, &ours] {
+            store
+                .insert(event, TEST_QUEUE_LIMITS)
+                .await
+                .expect("event inserts");
+        }
+        for (event, target) in [
+            (
+                &other_host,
+                SessionTarget::dispatch_example("host-b", "codex", "other-chat"),
+            ),
+            (
+                &other_agent,
+                SessionTarget::dispatch_example("host-a", "claude", "other-chat"),
+            ),
+            (
+                &ours,
+                SessionTarget::dispatch_example("host-a", "codex", "saved-chat"),
+            ),
+        ] {
+            store
+                .bind_conversation(&event.key.conversation, &target)
+                .await
+                .expect("session binds");
+        }
+        let sender = Sender {
+            reply: Reply::Accepted,
+            chats: Mutex::default(),
+            messages: Mutex::default(),
+        };
+        let outcome = store
+            .dispatch_next(SCOPE, &sender)
+            .await
+            .expect("message dispatches");
+        let DispatchOutcome::Delivered { event, receipt } = outcome else {
+            panic!("expected delivered outcome")
+        };
+        assert_eq!(event, ours.key);
+        assert_eq!(receipt.delivery_id, ours.key.delivery_id());
+        assert_eq!(
+            *sender.chats.lock().expect("chat log locks"),
+            ["saved-chat"]
+        );
+        assert!(matches!(
+            store
+                .dispatch_next(SCOPE, &sender)
+                .await
+                .expect("no more local work"),
+            DispatchOutcome::Idle
+        ));
+        for event in [&unbound, &other_host, &other_agent] {
+            assert_eq!(
+                store
+                    .delivery_state(&event.key)
+                    .await
+                    .expect("other event state"),
+                Some(DeliveryState::Pending)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_settles_outcomes_without_blocking_distinct_messages() {
+        for (reply, expected_state) in [
+            (Reply::Accepted, DeliveryState::Delivered),
+            (Reply::Unavailable, DeliveryState::Pending),
+            (Reply::Uncertain, DeliveryState::Uncertain),
+            (Reply::Mismatched, DeliveryState::Uncertain),
+        ] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let path = directory.path().join("ezra.db");
+            let store = EventStore::open(&path).await.expect("store opens");
+            let issue = InboundEvent::dispatch_example("issue-1");
+            let followup = InboundEvent::dispatch_example("pull-2");
+            store
+                .bind_conversation(
+                    &issue.key.conversation,
+                    &SessionTarget::dispatch_example("host-a", "codex", "shared-chat"),
+                )
+                .await
+                .expect("issue binds");
+            store
+                .link_conversation(&followup.key.conversation, &issue.key.conversation)
+                .await
+                .expect("PR links");
+            for event in [&issue, &followup] {
+                store
+                    .insert(event, TEST_QUEUE_LIMITS)
+                    .await
+                    .expect("event inserts");
+            }
+            let sender = Sender {
+                reply,
+                chats: Mutex::default(),
+                messages: Mutex::default(),
+            };
+            let outcome = store
+                .dispatch_next(SCOPE, &sender)
+                .await
+                .expect("dispatch outcome persists");
+            match expected_state {
+                DeliveryState::Delivered => {
+                    assert!(matches!(outcome, DispatchOutcome::Delivered { .. }))
+                }
+                DeliveryState::Pending => {
+                    assert!(matches!(outcome, DispatchOutcome::Unavailable { .. }))
+                }
+                DeliveryState::Uncertain => {
+                    assert!(matches!(outcome, DispatchOutcome::Uncertain { .. }))
+                }
+                DeliveryState::Delivering => panic!("dispatch must settle its claim"),
+                DeliveryState::Failed | DeliveryState::Expired => {
+                    panic!("fixture expects no terminal rejection")
+                }
+            }
+            assert_eq!(sender.chats.lock().expect("chat log locks").len(), 1);
+            store.pool.close().await;
+            let store = EventStore::open(&path).await.expect("store reopens");
+            assert_eq!(
+                store
+                    .delivery_state(&issue.key)
+                    .await
+                    .expect("persisted delivery state"),
+                Some(expected_state)
+            );
+            assert_eq!(
+                store
+                    .delivered_chat_name(&issue.key)
+                    .await
+                    .expect("saved name")
+                    .as_deref(),
+                if expected_state == DeliveryState::Delivered {
+                    Some("Existing chat name")
+                } else {
+                    None
+                },
+            );
+            let next = store
+                .claim_next(Some(SCOPE))
+                .await
+                .expect("next eligible claim");
+            match expected_state {
+                DeliveryState::Delivered => assert_eq!(next, Some(followup)),
+                DeliveryState::Pending => assert_eq!(next, Some(issue.clone())),
+                DeliveryState::Uncertain => assert_eq!(next, Some(followup)),
+                DeliveryState::Delivering => panic!("dispatch must settle its claim"),
+                DeliveryState::Failed | DeliveryState::Expired => {
+                    panic!("fixture expects no terminal rejection")
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn new_chat_context_survives_retries_and_confirmation_but_not_linked_followups() {
+        for reply in [Reply::Accepted, Reply::Unavailable, Reply::Uncertain] {
+            let directory = tempfile::tempdir().expect("directory");
+            let database = directory.path().join("ezra.db");
+            let store = EventStore::open(&database).await.expect("store");
+            let mut event = InboundEvent::dispatch_example("issue-1");
+            event.initial_context = Some("\n\nOriginal description".to_owned());
+            store
+                .insert(&event, TEST_QUEUE_LIMITS)
+                .await
+                .expect("insert");
+            assert!(matches!(
+                store
+                    .claim_routing(&event.key, &[], SCOPE, "/home/dev/projects/repository")
+                    .await
+                    .expect("route"),
+                super::super::RoutingOutcome::Create { .. }
+            ));
+            store
+                .finish_routing(
+                    &event.key,
+                    &SessionTarget::dispatch_example("host-a", "codex", "fresh-chat"),
+                )
+                .await
+                .expect("created");
+            let sender = Sender {
+                reply,
+                chats: Mutex::default(),
+                messages: Mutex::default(),
+            };
+            let outcome = store.dispatch_next(SCOPE, &sender).await.expect("dispatch");
+            assert_eq!(
+                *sender.messages.lock().expect("messages"),
+                [event.with_initial_context().message]
+            );
+            store.pool.close().await;
+            let store = EventStore::open(&database).await.expect("reopen");
+            let accepted = Sender {
+                reply: Reply::Accepted,
+                chats: Mutex::default(),
+                messages: Mutex::default(),
+            };
+            match outcome {
+                DispatchOutcome::Unavailable { .. } => {
+                    assert!(matches!(
+                        store.dispatch_next(SCOPE, &accepted).await.expect("retry"),
+                        DispatchOutcome::Delivered { .. }
+                    ));
+                    assert_eq!(
+                        *accepted.messages.lock().expect("messages"),
+                        [event.with_initial_context().message]
+                    );
+                    accepted.messages.lock().expect("messages").clear();
+                }
+                DispatchOutcome::Uncertain { .. } => {
+                    assert!(store.confirm_delivery(&event.key).await.expect("confirm"));
+                }
+                DispatchOutcome::Delivered { .. } => {}
+                DispatchOutcome::Idle | DispatchOutcome::Failed { .. } => {
+                    panic!("first event must be attempted")
+                }
+            }
+            let mut followup = event.clone();
+            followup.key.conversation.subject = "pull-2".to_owned();
+            followup.message = "Full followup\n\n```rust\nrun();\n```".to_owned();
+            store
+                .link_conversation(&followup.key.conversation, &event.key.conversation)
+                .await
+                .expect("link");
+            store
+                .insert(&followup, TEST_QUEUE_LIMITS)
+                .await
+                .expect("followup");
+            assert!(matches!(
+                store
+                    .dispatch_next(SCOPE, &accepted)
+                    .await
+                    .expect("dispatch followup"),
+                DispatchOutcome::Delivered { .. }
+            ));
+            assert_eq!(
+                *accepted.messages.lock().expect("messages"),
+                [followup.message]
+            );
+        }
+    }
+}

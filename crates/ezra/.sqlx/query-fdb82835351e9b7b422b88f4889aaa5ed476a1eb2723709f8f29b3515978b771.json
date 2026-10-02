@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET attempted_at = unixepoch() WHERE delivery_state = 'delivering'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "fdb82835351e9b7b422b88f4889aaa5ed476a1eb2723709f8f29b3515978b771"
+}

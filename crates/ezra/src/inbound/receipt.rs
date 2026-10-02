@@ -25,3 +25,73 @@ impl EventKey {
         delivery_id
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inbound::ConversationKey;
+
+    impl EventKey {
+        fn receipt_example(source: &str, subject: &str, id: &str) -> Self {
+            Self {
+                conversation: ConversationKey {
+                    source: source.to_owned(),
+                    subject: subject.to_owned(),
+                },
+                id: id.to_owned(),
+            }
+        }
+    }
+
+    #[test]
+    fn delivery_id_has_a_stable_encoding_across_serialization() {
+        let key = EventKey::receipt_example("github:github.com", "repository/123", "comment-456");
+        let persisted = serde_json::to_string(&key).expect("key serializes");
+        let restored: EventKey = serde_json::from_str(&persisted).expect("key deserializes");
+        assert_eq!(key.delivery_id(), restored.delivery_id());
+        assert_eq!(
+            key.delivery_id(),
+            "ezra-b19b5d2348b98191190d8e7903c33ba82e4cda289eb8accbf04d864f4ea0b48f"
+        );
+    }
+
+    #[test]
+    fn each_identity_component_changes_the_delivery_id() {
+        let original =
+            EventKey::receipt_example("github:github.com", "repository/123", "comment-456");
+        for changed in [
+            EventKey::receipt_example("github:enterprise.example", "repository/123", "comment-456"),
+            EventKey::receipt_example("github:github.com", "repository/124", "comment-456"),
+            EventKey::receipt_example("github:github.com", "repository/123", "comment-457"),
+        ] {
+            assert_ne!(original.delivery_id(), changed.delivery_id());
+        }
+    }
+
+    #[test]
+    fn component_boundaries_are_unambiguous_including_multibyte_identifiers() {
+        for (first, second) in [
+            (
+                EventKey::receipt_example("a", "bc", "d"),
+                EventKey::receipt_example("ab", "c", "d"),
+            ),
+            (
+                EventKey::receipt_example("a", "b", "cd"),
+                EventKey::receipt_example("a", "bc", "d"),
+            ),
+            (
+                EventKey::receipt_example("a:b", "c", "d"),
+                EventKey::receipt_example("a", "b:c", "d"),
+            ),
+            (
+                EventKey::receipt_example("é", "a", "b"),
+                EventKey::receipt_example("éa", "b", ""),
+            ),
+        ] {
+            assert_ne!(first.delivery_id(), second.delivery_id());
+        }
+        let key = EventKey::receipt_example("源", "议题", "消息");
+        assert_eq!(key.delivery_id().len(), 69);
+        assert!(key.delivery_id().is_ascii());
+    }
+}

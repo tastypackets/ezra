@@ -133,3 +133,196 @@ impl EventStore {
         Ok(target)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl SessionTarget {
+        fn binding_example(host_id: &str, agent: &str) -> Self {
+            Self {
+                host_id: host_id.to_owned(),
+                agent: agent.to_owned(),
+                chat_id: "native-chat-1".to_owned(),
+                workspace: "/home/dev/projects/work with spaces".to_owned(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn binding_survives_restart_and_cannot_be_silently_replaced() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("ezra.db");
+        let conversation = ConversationKey {
+            source: "github:github.com".to_owned(),
+            subject: "repo/issue-1".to_owned(),
+        };
+        let original_target = SessionTarget::binding_example("host-a", "codex");
+        let store = EventStore::open(&path).await.expect("store opens");
+        assert_eq!(
+            store
+                .find_binding(&conversation)
+                .await
+                .expect("missing lookup"),
+            None
+        );
+        assert_eq!(
+            store
+                .bind_conversation(&conversation, &original_target)
+                .await
+                .expect("binding creates"),
+            BindOutcome::Created
+        );
+        store.pool.close().await;
+
+        let store = EventStore::open(&path).await.expect("store reopens");
+        let mut replacement = SessionTarget::binding_example("host-b", "claude");
+        replacement.chat_id = "different-chat".to_owned();
+        replacement.workspace = "/home/dev/projects/other".to_owned();
+        for target in [&original_target, &replacement] {
+            assert_eq!(
+                store
+                    .bind_conversation(&conversation, target)
+                    .await
+                    .expect("existing binding is retained"),
+                BindOutcome::AlreadyBound
+            );
+        }
+        assert_eq!(
+            store
+                .find_binding(&conversation)
+                .await
+                .expect("binding lookup"),
+            Some(original_target)
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_bindings_keep_the_winning_destination() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("ezra.db");
+        let first_store = EventStore::open(&path).await.expect("first store opens");
+        let second_store = EventStore::open(&path).await.expect("second store opens");
+        let conversation = ConversationKey {
+            source: "github:github.com".to_owned(),
+            subject: "repo/issue-1".to_owned(),
+        };
+        let first_target = SessionTarget::binding_example("host-a", "codex");
+        let second_target = SessionTarget::binding_example("host-b", "claude");
+        let (first_result, second_result) = tokio::join!(
+            first_store.bind_conversation(&conversation, &first_target),
+            second_store.bind_conversation(&conversation, &second_target)
+        );
+        let first_outcome = first_result.expect("first binding succeeds");
+        let second_outcome = second_result.expect("second binding succeeds");
+        let (expected_target, unused_target) = match (first_outcome, second_outcome) {
+            (BindOutcome::Created, BindOutcome::AlreadyBound) => (first_target, second_target),
+            (BindOutcome::AlreadyBound, BindOutcome::Created) => (second_target, first_target),
+            outcomes => panic!("expected one winning binding, got {outcomes:?}"),
+        };
+        assert_eq!(
+            first_store
+                .find_binding(&conversation)
+                .await
+                .expect("first lookup"),
+            Some(expected_target.clone())
+        );
+        assert_eq!(
+            second_store
+                .find_binding(&conversation)
+                .await
+                .expect("second lookup"),
+            Some(expected_target)
+        );
+        let other_conversation = ConversationKey {
+            subject: "repo/issue-2".to_owned(),
+            ..conversation
+        };
+        assert_eq!(
+            first_store
+                .bind_conversation(&other_conversation, &unused_target)
+                .await
+                .expect("losing attempt did not reserve its target"),
+            BindOutcome::Created,
+        );
+    }
+
+    #[tokio::test]
+    async fn sources_and_native_session_namespaces_remain_independent() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store opens");
+        for (source, host_id, agent) in [
+            ("github:github.com", "host-a", "codex"),
+            ("github:enterprise.example", "host-b", "codex"),
+            ("api:local", "host-a", "claude"),
+        ] {
+            let conversation = ConversationKey {
+                source: source.to_owned(),
+                subject: "repo/issue-1".to_owned(),
+            };
+            let target = SessionTarget::binding_example(host_id, agent);
+            assert_eq!(
+                store
+                    .bind_conversation(&conversation, &target)
+                    .await
+                    .expect("independent binding creates"),
+                BindOutcome::Created
+            );
+            assert_eq!(
+                store
+                    .find_binding(&conversation)
+                    .await
+                    .expect("binding lookup"),
+                Some(target)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_destinations_are_not_persisted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store opens");
+        let conversation = ConversationKey {
+            source: "github:github.com".to_owned(),
+            subject: "repo/issue-1".to_owned(),
+        };
+        for target in [
+            SessionTarget {
+                host_id: String::new(),
+                ..SessionTarget::binding_example("host-a", "codex")
+            },
+            SessionTarget {
+                agent: "bad agent".to_owned(),
+                ..SessionTarget::binding_example("host-a", "codex")
+            },
+            SessionTarget {
+                chat_id: "x".repeat(513),
+                ..SessionTarget::binding_example("host-a", "codex")
+            },
+            SessionTarget {
+                workspace: "relative/path".to_owned(),
+                ..SessionTarget::binding_example("host-a", "codex")
+            },
+            SessionTarget {
+                workspace: "/home/dev/projects/bad\0path".to_owned(),
+                ..SessionTarget::binding_example("host-a", "codex")
+            },
+        ] {
+            assert!(matches!(
+                store.bind_conversation(&conversation, &target).await,
+                Err(StoreError::InvalidBinding(_))
+            ));
+            assert_eq!(
+                store
+                    .find_binding(&conversation)
+                    .await
+                    .expect("invalid binding lookup"),
+                None
+            );
+        }
+    }
+}

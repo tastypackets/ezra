@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT created_at_seconds FROM inbound_feedback_attempts WHERE event_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "created_at_seconds",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_feedback_attempts",
+            "name": "created_at_seconds"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f1c585b6ba16530cabb51dcf14fa600ca86189251405f6dd4d7386c724f36521"
+}
