@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO inbound_events (source, subject, event_id, actor, created_at, message, created_at_seconds, requested_agent, requested_model, requested_effort, chat_name, source_url, new_chat, initial_context)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": []
+  },
+  "hash": "09acdecb6a23e79a7e50aa1aa160a010d97d0059744712f49613684b3348c86e"
+}

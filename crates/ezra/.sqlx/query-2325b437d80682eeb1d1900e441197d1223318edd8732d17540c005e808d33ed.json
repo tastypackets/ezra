@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO inbound_events\n                (source, subject, event_id, actor, created_at, created_at_seconds, message, delivery_state, source_url)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', 'failed', ?7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "2325b437d80682eeb1d1900e441197d1223318edd8732d17540c005e808d33ed"
+}

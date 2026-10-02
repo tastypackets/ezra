@@ -1,0 +1,28 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"event_count!: u64\",\n                      COALESCE(SUM(length(CAST(message AS BLOB)) + COALESCE(length(CAST(initial_context AS BLOB)), 0)), 0) AS \"message_bytes!: u64\"\n               FROM inbound_events WHERE delivery_state IN ('pending', 'delivering')",
+  "describe": {
+    "columns": [
+      {
+        "name": "event_count!: u64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "message_bytes!: u64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "39e864c174a541a6fc03e97250e80dfeac42a4bde9e75d34f9effc275bbe2dc0"
+}

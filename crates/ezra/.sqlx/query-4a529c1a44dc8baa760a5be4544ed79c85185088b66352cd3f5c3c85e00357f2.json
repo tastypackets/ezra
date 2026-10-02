@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT subject, event_id FROM inbound_events\n             WHERE source = ?1 AND delivery_state = 'pending' AND attempted_at IS NULL ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "subject",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "name": "event_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "event_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4a529c1a44dc8baa760a5be4544ed79c85185088b66352cd3f5c3c85e00357f2"
+}

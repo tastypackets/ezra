@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT delivery_state AS \"delivery_state: DeliveryState\" FROM inbound_events\n               WHERE source = ?1 AND subject = ?2 AND event_id = ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "delivery_state: DeliveryState",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "delivery_state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "438f9762ca7a95e9cf2b1a859264e7ae4eb9ccb24d2da31d9f08cdbae5974866"
+}

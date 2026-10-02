@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET delivery_state = CASE WHEN attempted_at IS NULL THEN 'pending' ELSE 'uncertain' END\n             WHERE delivery_state = 'delivering'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "085777b69cd2fd0d866a981955e9e3569a6907ea7b02025521b78bb57b2c63d9"
+}
