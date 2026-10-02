@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", new_chat AS \"new_chat!: bool\",\n                      new_chat_applied AS \"new_chat_applied!: bool\",\n                      delivery_state AS \"delivery_state: DeliveryState\"\n               FROM inbound_events WHERE source = ?1 AND subject = ?2 AND event_id = ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "new_chat!: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "new_chat"
+          }
+        }
+      },
+      {
+        "name": "new_chat_applied!: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "new_chat_applied"
+          }
+        }
+      },
+      {
+        "name": "delivery_state: DeliveryState",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "delivery_state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "dc646f45ce7f56357bd6e6bc25aa2671eb9029bec56eed19e9039b5cc91f953c"
+}

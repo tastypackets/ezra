@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO inbound_conversations (source, subject, session_id) VALUES (?1, ?2, ?3)\n                 ON CONFLICT (source, subject) DO UPDATE SET session_id = excluded.session_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "14f524e41a19c54a8b0d447343c1f4ffa84371210e1ff3e244eac49dc7e360fe"
+}

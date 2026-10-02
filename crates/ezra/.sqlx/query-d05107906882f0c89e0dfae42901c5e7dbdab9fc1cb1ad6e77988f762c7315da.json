@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace\n                 FROM inbound_conversations AS conversations\n                 JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id\n                 JOIN json_each(?1) AS related\n                   ON conversations.source = json_extract(related.value, '$.source')\n                  AND conversations.subject = json_extract(related.value, '$.subject')",
+  "describe": {
+    "columns": [
+      {
+        "name": "host_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "host_id"
+          }
+        }
+      },
+      {
+        "name": "agent",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "chat_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "chat_id"
+          }
+        }
+      },
+      {
+        "name": "workspace",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "workspace"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d05107906882f0c89e0dfae42901c5e7dbdab9fc1cb1ad6e77988f762c7315da"
+}

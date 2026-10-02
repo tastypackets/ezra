@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT events.subject, events.event_id, events.actor,\n                      events.created_at AS \"created_at: time::OffsetDateTime\", events.message, events.initial_context,\n                      events.requested_agent, events.requested_model, events.requested_effort,\n                      events.chat_name, events.source_url, events.new_chat AS \"new_chat!: bool\"\n               FROM inbound_events AS events\n               WHERE events.delivery_state = 'pending' AND events.source = ?1\n                 AND substr(events.subject, 1, length(?2)) = ?2\n                 AND ((events.new_chat = 1 AND events.new_chat_applied = 0) OR NOT EXISTS (\n                     SELECT 1 FROM inbound_conversations AS conversations\n                     WHERE conversations.source = events.source AND conversations.subject = events.subject\n                 ))\n               ORDER BY events.rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "subject",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "name": "event_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "event_id"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "created_at: time::OffsetDateTime",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "initial_context",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "initial_context"
+          }
+        }
+      },
+      {
+        "name": "requested_agent",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_agent"
+          }
+        }
+      },
+      {
+        "name": "requested_model",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_model"
+          }
+        }
+      },
+      {
+        "name": "requested_effort",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_effort"
+          }
+        }
+      },
+      {
+        "name": "chat_name",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "chat_name"
+          }
+        }
+      },
+      {
+        "name": "source_url",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "source_url"
+          }
+        }
+      },
+      {
+        "name": "new_chat!: bool",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "new_chat"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "efb5d93daa20ecf9ddfc4fd6cec92ed5c6cd3a48fb60027105fb9c5d6ff40d75"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO inbound_sessions (host_id, agent, chat_id, workspace, initial_context_pending)\n             VALUES (?1, ?2, ?3, ?4, 1) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5ae56df293bbee5caeec70a134240ff036386c27a20fb6fa9e74914f94e7bf79"
+}
