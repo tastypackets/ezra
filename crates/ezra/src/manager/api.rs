@@ -3,6 +3,7 @@ mod clones;
 mod events;
 mod folders;
 pub mod git;
+mod inbound;
 mod login;
 mod manager;
 mod remote_control;
@@ -35,6 +36,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/login", post(session::log_in))
         .route("/api/v1/logout", post(session::log_out))
         .route("/api/v1/agents", get(agents::list))
+        .route(
+            "/api/v1/agents/codex/models",
+            get(remote_control::codex_models),
+        )
         .route("/api/v1/agents/{agent}", delete(agents::uninstall))
         .route("/api/v1/agents/{agent}/install", post(agents::install))
         .route(
@@ -47,6 +52,10 @@ pub fn router(state: AppState) -> Router {
             post(login::submit_code),
         )
         .route("/api/v1/agents/{agent}/logout", post(login::log_out))
+        .route(
+            "/api/v1/inbound/settings",
+            get(inbound::settings).put(inbound::update_settings),
+        )
         .route(
             "/api/v1/agents/claude/settings",
             get(settings::claude).put(settings::update_claude),
@@ -220,12 +229,15 @@ pub struct ErrorBody {
         session::log_in,
         session::log_out,
         agents::list,
+        remote_control::codex_models,
         agents::install,
         agents::uninstall,
         agents::restart_servers,
         login::start,
         login::submit_code,
         login::log_out,
+        inbound::settings,
+        inbound::update_settings,
         settings::claude,
         settings::update_claude,
         settings::codex,

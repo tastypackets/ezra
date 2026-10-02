@@ -126,6 +126,60 @@
         }
       }
     },
+    "/api/v1/agents/codex/models": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "List Codex models and their supported reasoning efforts",
+        "operationId": "listCodexModels",
+        "responses": {
+          "200": {
+            "description": "The running Codex server's model catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CodexModel"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Codex is not running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Codex could not list models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents/codex/settings": {
       "get": {
         "tags": [
@@ -1435,6 +1489,86 @@
         }
       }
     },
+    "/api/v1/inbound/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get inbound trigger settings",
+        "operationId": "getInboundSettings",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Change inbound trigger settings",
+        "operationId": "updateInboundSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboundSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboundSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid trigger settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in to the manager",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/login": {
       "post": {
         "tags": [
@@ -2294,6 +2428,55 @@
           "never"
         ]
       },
+      "CodexEffort": {
+        "type": "object",
+        "required": [
+          "reasoning_effort"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "type": "string"
+          }
+        }
+      },
+      "CodexModel": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "default_reasoning_effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "supported_reasoning_efforts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodexEffort"
+            }
+          }
+        }
+      },
       "CodexPairing": {
         "type": "object",
         "description": "A code a phone pairs with Codex through.",
@@ -2759,6 +2942,34 @@
           }
         }
       },
+      "GitHubSettings": {
+        "type": "object",
+        "properties": {
+          "edit_comment_status": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_concurrent_requests": {
+            "type": "integer",
+            "default": 4,
+            "minimum": 1
+          },
+          "only_added_repositories": {
+            "type": "boolean",
+            "default": true
+          },
+          "poll_interval_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "default": 30,
+            "minimum": 1
+          },
+          "react_on_status": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
       "GitHubStatus": {
         "type": "object",
         "description": "The GitHub sign-in git pushes with.",
@@ -2825,6 +3036,75 @@
           },
           "identity": {
             "$ref": "#/components/schemas/CommitIdentity"
+          }
+        }
+      },
+      "InboundSettings": {
+        "type": "object",
+        "properties": {
+          "github": {
+            "$ref": "#/components/schemas/GitHubSettings",
+            "default": {
+              "edit_comment_status": false,
+              "max_concurrent_requests": 4,
+              "only_added_repositories": true,
+              "poll_interval_seconds": 30,
+              "react_on_status": true
+            }
+          },
+          "max_history_events": {
+            "type": "integer",
+            "format": "int32",
+            "default": 100000,
+            "minimum": 0
+          },
+          "max_history_message_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "default": 268435456,
+            "minimum": 0
+          },
+          "max_idle_conversations": {
+            "type": "integer",
+            "format": "int32",
+            "default": 10000,
+            "minimum": 0
+          },
+          "max_queued_events": {
+            "type": "integer",
+            "format": "int32",
+            "default": 1000,
+            "minimum": 0
+          },
+          "max_queued_message_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "default": 16777216,
+            "minimum": 0
+          },
+          "retention_days": {
+            "type": "integer",
+            "format": "int32",
+            "default": 90,
+            "minimum": 0
+          },
+          "shortcuts": {
+            "type": "object",
+            "default": {
+              "/ezra": {}
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Shortcut"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "waiting_expiry_hours": {
+            "type": "integer",
+            "format": "int32",
+            "default": 24,
+            "minimum": 1
           }
         }
       },
@@ -3382,6 +3662,32 @@
           }
         }
       },
+      "Shortcut": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        }
+      },
       "SpawnMode": {
         "type": "string",
         "description": "Where sessions started from the Claude app work.",
@@ -3397,6 +3703,7 @@
           "agents",
           "claude_settings",
           "codex_settings",
+          "inbound_settings",
           "codex_phones",
           "folders",
           "clones",
