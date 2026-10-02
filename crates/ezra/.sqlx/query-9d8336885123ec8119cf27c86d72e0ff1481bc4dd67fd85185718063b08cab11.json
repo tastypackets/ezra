@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_source_checkpoints\n             SET scanned_through = MAX(scanned_through, ?3), updated_at = unixepoch()\n             WHERE source = ?1 AND subject = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "9d8336885123ec8119cf27c86d72e0ff1481bc4dd67fd85185718063b08cab11"
+}

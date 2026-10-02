@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_feedback_retention\n             SET created_at_floor = MAX(created_at_floor, ?1)\n             WHERE singleton = 1 RETURNING created_at_floor",
+  "describe": {
+    "columns": [
+      {
+        "name": "created_at_floor",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_feedback_retention",
+            "name": "created_at_floor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d622e78d1a6d59c62d42c69430fc483c17b78759208b4a9f215fba4d27b060b5"
+}

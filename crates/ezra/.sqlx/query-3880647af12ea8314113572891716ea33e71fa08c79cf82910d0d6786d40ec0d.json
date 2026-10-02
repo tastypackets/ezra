@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_source_checkpoints\n             SET scanned_through = MIN(scanned_through, ?3), activated_at = MIN(activated_at, ?3), updated_at = unixepoch()\n             WHERE source = ?1 AND subject = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "3880647af12ea8314113572891716ea33e71fa08c79cf82910d0d6786d40ec0d"
+}

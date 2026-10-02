@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM inbound_source_checkpoints\n             WHERE rowid IN (\n                 SELECT rowid FROM inbound_source_checkpoints\n                 WHERE active = 0 AND updated_at < ?1\n                 UNION\n                 SELECT rowid FROM (\n                     SELECT rowid FROM inbound_source_checkpoints\n                     WHERE active = 0\n                     ORDER BY updated_at DESC, rowid DESC LIMIT -1 OFFSET ?2\n                 )\n             )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "450744b6fb277e1e7d5c32df1f30658bed4b056f0058f9ae0d69e7f2eb823877"
+}

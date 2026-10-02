@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT attempted_at IS NOT NULL AS \"attempted!: bool\" FROM inbound_events\n               WHERE source = ?1 AND subject = ?2 AND event_id = ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "attempted!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5f60999697916e9332e45e9f4ed28834dba252f6929ee82577caef93c9866ca3"
+}

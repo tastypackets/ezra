@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT initial_context_pending AS \"initial_context_pending!: bool\"\n               FROM inbound_sessions WHERE host_id = ?1 AND agent = ?2 AND chat_id = ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "initial_context_pending!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "initial_context_pending"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bd6827e8c0e4b85b8bf2b1fac2bb9a163dadbf70fab0f84dc551c092eccd90b2"
+}
