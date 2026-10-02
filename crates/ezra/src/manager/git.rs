@@ -22,6 +22,8 @@ mod github_comments;
 mod github_links;
 #[path = "git/github-source.rs"]
 mod github_source;
+#[path = "git/github-workspaces.rs"]
+mod github_workspaces;
 
 const GITHUB_REPOSITORIES: &str =
     "/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100";
