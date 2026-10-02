@@ -146,6 +146,21 @@ impl Chats {
 mod tests {
     use super::*;
 
+    #[test]
+    fn unknown_agent_status_keeps_the_chat_busy() {
+        let mut chats = Chats::default();
+        let thread: ThreadWire = serde_json::from_value(serde_json::json!({
+            "id": "thread-1", "status": {"type": "futureStatus", "newField": [1, 2]},
+            "extraThreadField": true,
+        }))
+        .expect("unknown thread status decodes");
+        assert_eq!(thread.status, ThreadStatusWire::Unknown);
+        chats.listed(vec![thread.id.clone()]);
+        chats.read(thread);
+        assert_eq!(chats.running(), 1);
+        assert!(chats.are_busy());
+    }
+
     fn id(name: &str) -> ThreadId {
         ThreadId(name.to_owned())
     }
