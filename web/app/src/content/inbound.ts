@@ -1,0 +1,40 @@
+export const INBOUND_COPY = {
+  title: "GitHub triggers",
+  description: "Trigger Codex from your own GitHub issue and pull request conversation comments.",
+  onlyAddedRepositories: "Only repositories added to Ezra",
+  onlyAddedRepositoriesHint:
+    "Turn off to accept commands from any repository. New chats use your home folder when no local checkout exists.",
+  shortcuts: "Shortcuts",
+  shortcutHint:
+    "Shortcuts match anywhere in a comment, including quotes and code. Add --new immediately after the command to start a new chat for that discussion. Model and effort change the chat defaults for subsequent turns. Leave them blank to keep the current defaults.",
+  trigger: "Command",
+  model: "Chat model",
+  effort: "Chat effort",
+  showModels: "Show Codex models",
+  showEfforts: "Show Codex effort levels",
+  currentDefault: "Keep current default",
+  discoveryUnavailable:
+    "Codex suggestions are unavailable. You can still type model and effort values.",
+  add: "Add shortcut",
+  remove: "Remove shortcut",
+  retention: "History retention in days",
+  waitingExpiry: "Waiting request expiry in hours",
+  waitingExpiryHint: "Defaults to 24 hours. Requests expire while waiting to be sent to the agent.",
+  invalidWaitingExpiry: "Waiting expiry must be a whole number of hours from 1 to 4294967295.",
+  pollInterval: "Polling interval in seconds",
+  pollIntervalHint: "Wait between GitHub scans. Defaults to 30 seconds.",
+  invalidPollInterval: "Polling interval must be a whole number of seconds from 1 to 4294967295.",
+  retentionHint:
+    "Defaults to 90 days. Cleanup removes integration metadata, not native chats or repositories.",
+  feedback: "Status feedback",
+  feedbackReactions: "Reactions",
+  feedbackFooter: "Edit a status footer into my comment",
+  feedbackOff: "Off",
+  feedbackHint:
+    "Reactions use 🚀 for delivery and 😕 when attention is needed. Footers show received, delivered, unconfirmed, or failed status with the chat name. Feedback never posts a new comment.",
+  save: "Save",
+  saved: "GitHub trigger settings saved",
+  duplicate: "Each shortcut command must be unique.",
+  commandRequired: "Every shortcut needs a command.",
+  invalidRetention: "Retention must be a whole number of days from 0 to 4294967295.",
+};

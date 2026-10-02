@@ -8,12 +8,34 @@ use utoipa::ToSchema;
 
 use super::{ApiError, AppState, ErrorBody, Session, internal};
 use crate::manager::codex_remote::{
-    CodexPairing, CodexPairingState, ControlError, PairedPhone, PairingError,
+    CodexModel, CodexPairing, CodexPairingState, ControlError, PairedPhone, PairingError,
 };
 use crate::manager::remote_control::{RemoteControlOverview, Served};
 use crate::manager::supervision::ServerLog;
 
 const CODEX_NOT_RUNNING: &str = "Codex is not running";
+
+#[utoipa::path(
+    get, path = "/api/v1/agents/codex/models", operation_id = "listCodexModels", tag = "agents",
+    summary = "List Codex models and their supported reasoning efforts",
+    responses(
+        (status = 200, description = "The running Codex server's model catalog", body = Vec<CodexModel>),
+        (status = 401, description = "Not signed in to the manager", body = ErrorBody),
+        (status = 409, description = "Codex is not running", body = ErrorBody),
+        (status = 502, description = "Codex could not list models", body = ErrorBody)
+    )
+)]
+pub async fn codex_models(
+    _: Session,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<CodexModel>>, ApiError> {
+    state
+        .codex_remote
+        .models()
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}
 
 impl From<ControlError> for ApiError {
     fn from(error: ControlError) -> Self {

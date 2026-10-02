@@ -7,11 +7,16 @@ import { gitStatusQueryOptions } from "@/queries/git-queries";
 import { managerQueryOptions } from "@/queries/manager-queries";
 import { remoteControlQueryOptions } from "@/queries/remote-control-queries";
 import { settingsFileQueryOptions } from "@/queries/settings-file-queries";
-import { getClaudeSettingsOptions, getCodexSettingsOptions } from "@ezra/client/react-query.gen";
+import {
+  getClaudeSettingsOptions,
+  getCodexSettingsOptions,
+  getInboundSettingsOptions,
+} from "@ezra/client/react-query.gen";
 
 import { ClaudeSettingsCard } from "./-components/claude-settings-card";
 import { CodexSettingsCard } from "./-components/codex-settings-card";
 import { EnvironmentCard } from "./-components/environment-card";
+import { InboundSettingsCard } from "./-components/inbound-settings-card";
 import { GitCard } from "./-components/git-card";
 import { ManagerCard } from "./-components/manager-card";
 
@@ -34,6 +39,7 @@ export const Route = createFileRoute("/_signed-in/settings")({
       settingsFiles,
       context.queryClient.ensureQueryData(getClaudeSettingsOptions()),
       context.queryClient.ensureQueryData(getCodexSettingsOptions()),
+      context.queryClient.ensureQueryData(getInboundSettingsOptions()),
       context.queryClient.ensureQueryData(gitStatusQueryOptions),
       context.queryClient.ensureQueryData(managerQueryOptions),
       context.queryClient.ensureQueryData(remoteControlQueryOptions),
@@ -52,6 +58,7 @@ function SettingsPage() {
       <ClaudeSettingsCard />
       {codexInstalled ? <CodexSettingsCard /> : null}
       <GitCard />
+      <InboundSettingsCard />
       <ManagerCard />
       <EnvironmentCard />
     </div>

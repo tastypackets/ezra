@@ -30,6 +30,8 @@ Defend against the agent, not the operator. Agents run arbitrary code inside the
 
 Never invent how Claude Code, Codex or gh behave. A flag, default, limit, file location or error message gets checked against the vendor's docs or the installed CLI itself before it goes in code or copy. If it cannot be checked, use the tool's default and say so.
 
+Agents update independently. Tolerate unknown fields and variants, and isolate protocol errors to the affected operation.
+
 ## Code
 
 Default to minimal comments. The rare comment states a constraint the code cannot show, such as an ordering requirement or an upstream bug being worked around, never the reasoning behind a change. No function that only forwards to another call. In Rust, logic lives on impls and `<Type>Ext` traits rather than free helper functions, and `expect` with a reason instead of `unwrap`.

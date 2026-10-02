@@ -1,0 +1,105 @@
+import type { CodexModel, InboundSettings } from "@ezra/client";
+
+import { INBOUND_COPY } from "@/content/inbound";
+
+export function modelSuggestions(models: readonly CodexModel[]) {
+  return models.map((model) => ({
+    value: model.model,
+    description: model.description || model.display_name,
+  }));
+}
+
+export function effortSuggestions(models: readonly CodexModel[], selectedModel: string) {
+  const selected = models.find((model) => model.model === selectedModel.trim());
+  const candidates = selected ? [selected] : models;
+  return [
+    ...new Map(
+      candidates.flatMap((model) =>
+        (model.supported_reasoning_efforts ?? []).map(
+          (effort) =>
+            [
+              effort.reasoning_effort,
+              { value: effort.reasoning_effort, description: effort.description },
+            ] as const,
+        ),
+      ),
+    ).values(),
+  ];
+}
+
+export function inboundDraft(settings: InboundSettings) {
+  return {
+    shortcuts: Object.entries(settings.shortcuts ?? { "/ezra": {} }).map(([trigger, shortcut]) => ({
+      trigger,
+      model: shortcut.model ?? "",
+      effort: shortcut.effort ?? "",
+    })),
+    retention_days: String(settings.retention_days ?? 90),
+    waiting_expiry_hours: String(settings.waiting_expiry_hours ?? 24),
+    poll_interval_seconds: String(settings.github?.poll_interval_seconds ?? 30),
+    only_added_repositories: settings.github?.only_added_repositories ?? true,
+    feedback: settings.github?.edit_comment_status
+      ? "footer"
+      : settings.github?.react_on_status === false
+        ? "off"
+        : "reactions",
+  };
+}
+
+export function settingsFromDraft(
+  settings: InboundSettings,
+  draft: ReturnType<typeof inboundDraft>,
+) {
+  const commands = draft.shortcuts.map((shortcut) => shortcut.trigger.trim());
+  if (commands.some((command) => !command)) throw new Error(INBOUND_COPY.commandRequired);
+  if (new Set(commands).size !== commands.length) throw new Error(INBOUND_COPY.duplicate);
+  const retentionDays = Number(draft.retention_days);
+  const waitingExpiryHours = Number(draft.waiting_expiry_hours);
+  if (
+    !draft.waiting_expiry_hours.trim() ||
+    !Number.isInteger(waitingExpiryHours) ||
+    waitingExpiryHours < 1 ||
+    waitingExpiryHours > 4_294_967_295
+  ) {
+    throw new Error(INBOUND_COPY.invalidWaitingExpiry);
+  }
+  const pollIntervalSeconds = Number(draft.poll_interval_seconds);
+  if (
+    !draft.poll_interval_seconds.trim() ||
+    !Number.isInteger(pollIntervalSeconds) ||
+    pollIntervalSeconds < 1 ||
+    pollIntervalSeconds > 4_294_967_295
+  ) {
+    throw new Error(INBOUND_COPY.invalidPollInterval);
+  }
+  if (
+    !draft.retention_days.trim() ||
+    !Number.isInteger(retentionDays) ||
+    retentionDays < 0 ||
+    retentionDays > 4_294_967_295
+  ) {
+    throw new Error(INBOUND_COPY.invalidRetention);
+  }
+  return {
+    ...settings,
+    retention_days: retentionDays,
+    waiting_expiry_hours: waitingExpiryHours,
+    github: {
+      ...settings.github,
+      poll_interval_seconds: pollIntervalSeconds,
+      only_added_repositories: draft.only_added_repositories,
+      edit_comment_status: draft.feedback === "footer",
+      react_on_status: draft.feedback === "reactions",
+    },
+    shortcuts: Object.fromEntries(
+      draft.shortcuts.map((shortcut) => [
+        shortcut.trigger.trim(),
+        {
+          agent: "codex",
+          ...(shortcut.model.trim() ? { model: shortcut.model.trim() } : {}),
+          ...(shortcut.effort.trim() ? { effort: shortcut.effort.trim() } : {}),
+        },
+      ]),
+    ),
+  };
+}

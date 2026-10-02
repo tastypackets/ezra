@@ -6,6 +6,7 @@ mod foreign;
 mod inbound;
 mod launch;
 mod leftovers;
+mod models;
 mod pairing;
 mod picker;
 mod problem;
@@ -30,6 +31,7 @@ use super::supervision::{
 pub use control::ControlError;
 use control::{ControlClient, Enable, RelayStatusWire, RelayWire};
 use launch::LaunchFlagCache;
+pub use models::CodexModel;
 use pairing::Pairing;
 pub use pairing::{CodexPairing, CodexPairingState, PairedPhone, PairingError};
 use picker::{FolderPicker, FolderPickers};

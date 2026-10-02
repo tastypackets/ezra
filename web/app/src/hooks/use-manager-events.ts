@@ -3,6 +3,7 @@ import type { Topic } from "@ezra/client";
 import {
   getClaudeSettingsOptions,
   getCodexSettingsOptions,
+  getInboundSettingsOptions,
   getSettingsFileOptions,
 } from "@ezra/client/react-query.gen";
 import type { QueryKey } from "@tanstack/react-query";
@@ -26,6 +27,7 @@ const TOPIC_QUERIES: Record<Topic, readonly QueryKey[]> = {
   agents: [agentsQueryOptions.queryKey],
   claude_settings: [getClaudeSettingsOptions().queryKey],
   codex_settings: [getCodexSettingsOptions().queryKey],
+  inbound_settings: [getInboundSettingsOptions().queryKey],
   codex_phones: [codexPhonesQueryOptions.queryKey],
   folders: [foldersQueryOptions.queryKey],
   clones: [clonesQueryOptions.queryKey],
