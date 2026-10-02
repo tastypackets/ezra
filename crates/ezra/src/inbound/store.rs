@@ -1,17 +1,29 @@
 mod admission;
 mod alias;
 mod binding;
+mod checkpoints;
 mod delivery;
+mod dispatch;
 mod expiry;
+mod feedback;
 mod identity;
+mod reconciliation;
+#[path = "store/replace-chat.rs"]
+mod replace_chat;
+mod retention;
 #[path = "store/route-claim.rs"]
 mod route_claim;
 mod routing;
+#[path = "store/session-retention.rs"]
+mod session_retention;
 
 pub use admission::{InsertOutcome, QueueLimits};
 pub use alias::AliasOutcome;
 pub use binding::{BindOutcome, InvalidBinding, SessionTarget};
+pub use checkpoints::SourceCheckpoint;
 pub use delivery::{DeliveryOutcome, DeliveryScope, DeliveryState};
+pub use dispatch::DispatchOutcome;
+pub use retention::HistoryLimits;
 pub use routing::RoutingOutcome;
 
 use std::path::Path;

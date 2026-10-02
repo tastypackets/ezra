@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM inbound_feedback_attempts WHERE created_at_seconds < ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "6c6ea9966abce438c6e15279dce18a0a9f11c8c69ea2310ba3f5b61684ca3d3a"
+}

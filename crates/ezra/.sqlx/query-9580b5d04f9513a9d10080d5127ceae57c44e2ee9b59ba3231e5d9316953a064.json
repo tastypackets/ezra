@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(created_at_seconds) AS \"expired?: i64\" FROM (\n                 SELECT created_at_seconds FROM inbound_feedback_attempts\n                 ORDER BY created_at_seconds DESC LIMIT -1 OFFSET ?1\n             )",
+  "describe": {
+    "columns": [
+      {
+        "name": "expired?: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9580b5d04f9513a9d10080d5127ceae57c44e2ee9b59ba3231e5d9316953a064"
+}

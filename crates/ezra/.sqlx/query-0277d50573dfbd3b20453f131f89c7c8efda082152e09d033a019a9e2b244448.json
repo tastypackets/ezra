@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM inbound_events\n             WHERE delivery_state IN ('delivered', 'uncertain', 'failed', 'expired') AND received_at < ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0277d50573dfbd3b20453f131f89c7c8efda082152e09d033a019a9e2b244448"
+}

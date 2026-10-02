@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET attempted_at = COALESCE(attempted_at, unixepoch())\n             WHERE source = ?1 AND subject = ?2 AND event_id = ?3 AND delivery_state = 'delivering'\n               AND (attempted_at IS NOT NULL OR received_at > ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "06dfa80218f6685b12e99c07031b641b145962062eb63efc35a1fff7cbca1ab1"
+}

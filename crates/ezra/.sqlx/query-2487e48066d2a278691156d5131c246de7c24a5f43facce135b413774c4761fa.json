@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO inbound_source_checkpoints (source, subject, scanned_through, activated_at)\n             VALUES (?1, ?2, ?3, ?3)\n             ON CONFLICT (source, subject) DO UPDATE SET updated_at = unixepoch(), active = 1\n             RETURNING scanned_through, activated_at",
+  "describe": {
+    "columns": [
+      {
+        "name": "scanned_through",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_source_checkpoints",
+            "name": "scanned_through"
+          }
+        }
+      },
+      {
+        "name": "activated_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_source_checkpoints",
+            "name": "activated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2487e48066d2a278691156d5131c246de7c24a5f43facce135b413774c4761fa"
+}

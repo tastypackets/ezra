@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO inbound_feedback_attempts (source, subject, event_id, created_at_seconds)\n             SELECT ?1, ?2, ?3, unixepoch()\n             WHERE (SELECT COUNT(*) FROM inbound_feedback_attempts) < ?4\n               AND unixepoch() >= (SELECT created_at_floor FROM inbound_feedback_retention WHERE singleton = 1)\n             ON CONFLICT (source, subject, event_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "04d2693b1b12a97cf489907c9081fd6a32c03cdbbda55def93f550c06a1daa96"
+}

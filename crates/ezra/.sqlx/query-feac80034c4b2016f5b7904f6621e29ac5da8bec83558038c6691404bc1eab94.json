@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH newest_history AS (\n                   SELECT received_at, length(CAST(message AS BLOB)) + COALESCE(length(CAST(initial_context AS BLOB)), 0) AS message_bytes\n                   FROM inbound_events\n                   WHERE delivery_state IN ('delivered', 'uncertain', 'failed', 'expired') AND received_at >= ?1\n                   ORDER BY received_at DESC LIMIT ?2 + 1\n               ), ranked_history AS (\n                   SELECT received_at,\n                          ROW_NUMBER() OVER newest_first AS event_rank,\n                          SUM(message_bytes) OVER newest_first AS message_bytes\n                   FROM newest_history\n                   WINDOW newest_first AS (\n                       ORDER BY received_at DESC ROWS UNBOUNDED PRECEDING\n                   )\n               )\n               SELECT MAX(received_at) AS \"expired_through?: i64\" FROM ranked_history\n               WHERE event_rank > ?2 OR message_bytes > ?3",
+  "describe": {
+    "columns": [
+      {
+        "name": "expired_through?: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "feac80034c4b2016f5b7904f6621e29ac5da8bec83558038c6691404bc1eab94"
+}

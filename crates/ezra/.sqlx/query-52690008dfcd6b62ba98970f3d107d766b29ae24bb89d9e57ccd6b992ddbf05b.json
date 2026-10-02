@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET attempted_at = NULL\n             WHERE source = ?1 AND subject = ?2 AND event_id = ?3 AND delivery_state = 'delivering'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "52690008dfcd6b62ba98970f3d107d766b29ae24bb89d9e57ccd6b992ddbf05b"
+}
