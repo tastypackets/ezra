@@ -1,10 +1,18 @@
 mod admission;
+mod alias;
+mod binding;
 mod delivery;
 mod expiry;
 mod identity;
+#[path = "store/route-claim.rs"]
+mod route_claim;
+mod routing;
 
 pub use admission::{InsertOutcome, QueueLimits};
+pub use alias::AliasOutcome;
+pub use binding::{BindOutcome, InvalidBinding, SessionTarget};
 pub use delivery::{DeliveryOutcome, DeliveryScope, DeliveryState};
+pub use routing::RoutingOutcome;
 
 use std::path::Path;
 use std::time::Duration;
@@ -31,6 +39,8 @@ pub enum StoreError {
     Migration(#[from] sqlx::migrate::MigrateError),
     #[error(transparent)]
     InvalidEvent(#[from] InvalidEvent),
+    #[error(transparent)]
+    InvalidBinding(#[from] InvalidBinding),
 }
 
 impl EventStore {

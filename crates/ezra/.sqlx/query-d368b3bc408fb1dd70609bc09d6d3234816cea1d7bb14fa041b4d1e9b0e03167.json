@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace\n             FROM inbound_conversations AS conversations\n             JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id\n             WHERE conversations.source = ?1 AND conversations.subject = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "host_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "host_id"
+          }
+        }
+      },
+      {
+        "name": "agent",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "chat_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "chat_id"
+          }
+        }
+      },
+      {
+        "name": "workspace",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_sessions",
+            "name": "workspace"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d368b3bc408fb1dd70609bc09d6d3234816cea1d7bb14fa041b4d1e9b0e03167"
+}

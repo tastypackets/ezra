@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_sessions SET last_used_at = MAX(last_used_at, unixepoch())\n                     WHERE host_id = ?1 AND agent = ?2 AND chat_id = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "7441087f44aac57246244549dbbd62b60cb3459a2959674f2c4e848405231d12"
+}

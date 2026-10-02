@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM inbound_sessions WHERE NOT EXISTS (\n                SELECT 1 FROM inbound_conversations WHERE session_id = inbound_sessions.id\n            )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "3c881485c6bfd3016ae8c244f2b339e53e524da2d046bc77692d9856e6c2b30a"
+}

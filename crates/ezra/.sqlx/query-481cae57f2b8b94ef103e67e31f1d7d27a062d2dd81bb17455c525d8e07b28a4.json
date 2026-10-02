@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET delivery_state = 'delivering'\n             WHERE source = ?1 AND subject = ?2 AND event_id = ?3 AND delivery_state = 'pending'\n               AND NOT EXISTS (\n                   SELECT 1 FROM inbound_conversations WHERE source = ?1 AND subject = ?2\n               )\n               AND NOT EXISTS (\n                   SELECT 1 FROM inbound_events AS unresolved\n                   WHERE unresolved.source = ?1 AND unresolved.subject = ?2\n                     AND unresolved.delivery_state = 'delivering'\n               )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "481cae57f2b8b94ef103e67e31f1d7d27a062d2dd81bb17455c525d8e07b28a4"
+}

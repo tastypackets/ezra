@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET delivery_state = 'pending', new_chat_applied = new_chat\n             WHERE source = ?1 AND subject = ?2 AND event_id = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2e72c358df9dcfe816dca361d7c9b871d2c9d80d956f12d3b7b49fbbea1fec26"
+}
