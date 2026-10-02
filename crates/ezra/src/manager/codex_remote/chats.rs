@@ -128,8 +128,9 @@ impl Chats {
             .loaded
             .values()
             .filter(|chat| {
-                chat.status
-                    .is_none_or(|status| status == ThreadStatusWire::Active)
+                chat.status.is_none_or(|status| {
+                    matches!(status, ThreadStatusWire::Active | ThreadStatusWire::Unknown)
+                })
             })
             .count();
         u32::try_from(running).unwrap_or(u32::MAX)
