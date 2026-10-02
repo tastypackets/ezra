@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT host_id FROM manager_identity WHERE singleton = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "host_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "manager_identity",
+            "name": "host_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d410e09b208af3c78b5d448b9cd2312a5a3e92370154f33a18b4d81d53b6fccc"
+}

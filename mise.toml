@@ -52,3 +52,31 @@ run = "pnpm lint"
 description = "Run the Playwright tests against the ezra:dev image"
 dir = "web"
 run = "pnpm test:e2e"
+
+[tasks."sqlx:install"]
+description = "Install the SQLx CLI used to check queries"
+run = "cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite"
+
+[tasks."sqlx:prepare"]
+description = "Regenerate offline query metadata against the migrations"
+depends = ["sqlx:install"]
+dir = "crates/ezra"
+usage = 'flag "--check" "Check metadata without updating it"'
+run = """
+set -eu
+database_directory="$(mktemp --directory)"
+trap 'rm --recursive --force "$database_directory"' EXIT
+export DATABASE_URL="sqlite://${database_directory}/queries.db"
+export SQLX_OFFLINE=false
+cargo sqlx database create --no-dotenv
+cargo sqlx migrate run --no-dotenv
+set --
+if [ "${usage_check:-false}" = true ]; then
+  set -- --check
+fi
+cargo sqlx prepare --no-dotenv "$@" -- --locked --all-targets
+"""
+
+[tasks."sqlx:check"]
+description = "Check offline query metadata against the migrations"
+run = "mise run sqlx:prepare --check"
