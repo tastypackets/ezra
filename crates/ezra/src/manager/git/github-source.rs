@@ -300,3 +300,287 @@ impl GitTools {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use ezra::inbound::github::CommentStatus;
+
+    use super::*;
+
+    struct StatusFixture {
+        _directory: tempfile::TempDir,
+        tools: GitTools,
+    }
+
+    impl StatusFixture {
+        fn new(body: &str) -> Self {
+            let directory = tempfile::tempdir().expect("fixture");
+            let mut tools = GitTools::under(directory.path());
+            std::fs::create_dir_all(&tools.gh_config_directory).expect("GitHub configuration");
+            let executable = directory.path().join("fake-gh");
+            std::fs::write(
+                &executable,
+                r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$GH_CONFIG_DIR/requests"
+case "$*" in
+  *" /user "*) printf '{"id":1,"login":"author","future":true}' ;;
+  *"--method GET"*)
+    if [ -f "$GH_CONFIG_DIR/read-error" ]; then exit 1; fi
+    if [ -f "$GH_CONFIG_DIR/read-delay" ]; then exec sleep 10; fi
+    cat "$GH_CONFIG_DIR/comment.json" ;;
+  *"--method PATCH"*)
+    cat > "$GH_CONFIG_DIR/payload.json"
+    if [ -f "$GH_CONFIG_DIR/write-delay" ]; then exec sleep 10; fi
+    if [ -f "$GH_CONFIG_DIR/write-error" ]; then exit 1; fi
+    printf '{"future":{"result":true}}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            )
+            .expect("fake executable");
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+                .expect("executable permissions");
+            tools.github_executable = Some(executable);
+            let fixture = Self {
+                _directory: directory,
+                tools,
+            };
+            fixture.set_comment(serde_json::json!({
+                "id": 10, "body": body, "user": {"id": 1, "login": "author"}, "future": [true]
+            }));
+            fixture
+        }
+
+        fn set_comment(&self, comment: serde_json::Value) {
+            std::fs::write(
+                self.tools.gh_config_directory.join("comment.json"),
+                serde_json::to_vec(&comment).expect("comment JSON"),
+            )
+            .expect("comment response");
+        }
+
+        fn reference(&self) -> CommentReference<'_> {
+            CommentReference {
+                repository: "owner/repo",
+                comment_id: NonZeroU64::new(10).expect("comment"),
+                author_id: NonZeroU64::new(1).expect("author"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn every_status_attempt_reads_the_latest_body_before_writing() {
+        let fixture = StatusFixture::new("/ezra original");
+        let failed_write = fixture.tools.gh_config_directory.join("write-error");
+        std::fs::write(&failed_write, "").expect("failed PATCH");
+        let footer = StatusFooter {
+            status: CommentStatus::Delivered,
+            chat_name: Some("owner/repo#42: Fix the crash"),
+        };
+        assert!(
+            fixture
+                .tools
+                .update_comment_status(fixture.reference(), &footer)
+                .await
+                .is_err()
+        );
+        std::fs::remove_file(failed_write).expect("allow PATCH");
+        fixture.set_comment(serde_json::json!({
+            "id": 10, "body": "/ezra latest user edit", "user": {"id":1,"login":"renamed"}
+        }));
+        fixture
+            .tools
+            .update_comment_status(fixture.reference(), &footer)
+            .await
+            .expect("fresh attempt");
+        let payload: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(fixture.tools.gh_config_directory.join("payload.json"))
+                .expect("payload"),
+        )
+        .expect("payload JSON");
+        assert_eq!(payload["body"], footer.apply("/ezra latest user edit"));
+        let requests = std::fs::read_to_string(fixture.tools.gh_config_directory.join("requests"))
+            .expect("requests");
+        let comment_methods: Vec<_> = requests
+            .lines()
+            .filter(|line| !line.contains(" /user "))
+            .map(|line| {
+                if line.contains("--method GET") {
+                    "GET"
+                } else {
+                    "PATCH"
+                }
+            })
+            .collect();
+        assert_eq!(comment_methods, ["GET", "PATCH", "GET", "PATCH"]);
+    }
+
+    #[tokio::test]
+    async fn unchanged_status_reads_but_does_not_patch() {
+        let footer = StatusFooter {
+            status: CommentStatus::Received,
+            chat_name: None,
+        };
+        let fixture = StatusFixture::new(&footer.apply("/ezra"));
+        fixture
+            .tools
+            .update_comment_status(fixture.reference(), &footer)
+            .await
+            .expect("no-op");
+        assert!(
+            !fixture
+                .tools
+                .gh_config_directory
+                .join("payload.json")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_reads_and_mismatched_comments_cannot_write() {
+        for comment in [
+            serde_json::json!({"id":11,"body":"/ezra","user":{"id":1,"login":"author"}}),
+            serde_json::json!({"id":10,"body":"/ezra","user":{"id":2,"login":"other"}}),
+            serde_json::json!({"id":10,"body":"/ezra","user":null}),
+            serde_json::json!({"id":10,"body":null,"user":{"id":1,"login":"author"}}),
+        ] {
+            let fixture = StatusFixture::new("/ezra");
+            fixture.set_comment(comment);
+            assert!(
+                fixture
+                    .tools
+                    .update_comment_status(
+                        fixture.reference(),
+                        &StatusFooter {
+                            status: CommentStatus::Delivered,
+                            chat_name: None,
+                        }
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !fixture
+                    .tools
+                    .gh_config_directory
+                    .join("payload.json")
+                    .exists()
+            );
+        }
+        let fixture = StatusFixture::new("/ezra");
+        std::fs::write(fixture.tools.gh_config_directory.join("read-error"), "")
+            .expect("failed GET");
+        assert!(
+            fixture
+                .tools
+                .update_comment_status(
+                    fixture.reference(),
+                    &StatusFooter {
+                        status: CommentStatus::Delivered,
+                        chat_name: None,
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !fixture
+                .tools
+                .gh_config_directory
+                .join("payload.json")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn another_signed_in_account_cannot_read_or_update_the_status_comment() {
+        let fixture = StatusFixture::new("/ezra");
+        let reference = CommentReference {
+            author_id: NonZeroU64::new(2).expect("another account"),
+            ..fixture.reference()
+        };
+        assert!(
+            fixture
+                .tools
+                .react(reference, CommentStatus::Delivered)
+                .await
+                .is_err()
+        );
+        assert!(
+            fixture
+                .tools
+                .update_comment_status(
+                    reference,
+                    &StatusFooter {
+                        status: CommentStatus::Delivered,
+                        chat_name: None,
+                    }
+                )
+                .await
+                .is_err()
+        );
+        let requests = std::fs::read_to_string(fixture.tools.gh_config_directory.join("requests"))
+            .expect("requests");
+        assert!(requests.lines().all(|line| line.contains(" /user ")));
+        assert!(
+            !fixture
+                .tools
+                .gh_config_directory
+                .join("payload.json")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn status_update_has_an_overall_five_second_timeout() {
+        for delayed_phase in ["read-delay", "write-delay"] {
+            let fixture = StatusFixture::new("/ezra");
+            std::fs::write(fixture.tools.gh_config_directory.join(delayed_phase), "")
+                .expect("slow request");
+            let error = fixture
+                .tools
+                .update_comment_status(
+                    fixture.reference(),
+                    &StatusFooter {
+                        status: CommentStatus::Delivered,
+                        chat_name: None,
+                    },
+                )
+                .await
+                .expect_err("overall timeout");
+            assert!(
+                matches!(error, GitError::Io(error) if error.kind() == std::io::ErrorKind::TimedOut)
+            );
+            assert_eq!(
+                fixture
+                    .tools
+                    .gh_config_directory
+                    .join("payload.json")
+                    .exists(),
+                delayed_phase == "write-delay"
+            );
+        }
+    }
+
+    #[test]
+    fn source_requests_use_the_configured_host_and_explicit_get() {
+        let directory = tempfile::tempdir().expect("configuration directory");
+        let tools = GitTools::under(directory.path());
+        let command = tools.source_command("/repos/owner/repository");
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            [
+                "api",
+                "--hostname=github.com",
+                "/repos/owner/repository",
+                "--method",
+                "GET",
+                "--header",
+                "Accept: application/vnd.github.raw+json",
+            ]
+        );
+    }
+}

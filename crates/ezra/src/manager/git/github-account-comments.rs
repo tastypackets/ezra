@@ -257,3 +257,58 @@ impl AccountCommentSource for GitTools {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn response() -> serde_json::Value {
+        json!({"data":{"viewer":{"databaseId":1,"login":"author","future":true,
+            "issueComments":{"nodes":[{"fullDatabaseId":"4294967297","body":"/ezra fix",
+                "createdAt":"2026-10-01T10:00:00Z","updatedAt":"2026-10-01T11:00:00Z",
+                "repository":{"databaseId":7,"nameWithOwner":"owner/repo"},
+                "issue":{"number":42,"url":"https://github.com/owner/repo/pull/42","title":"Fix","body":"Description"},
+                "pullRequest":{"number":42,"url":"https://github.com/owner/repo/pull/42","title":"Fix","body":"Description"},
+                "future":{"unknown":true}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}})
+    }
+
+    #[test]
+    fn pull_request_comments_accept_both_parent_fields_and_large_string_ids() {
+        let parsed: Response = serde_json::from_value(response()).expect("response");
+        let page = parsed.into_page(OffsetDateTime::UNIX_EPOCH).expect("page");
+        assert_eq!(page.comments[0].comment.id.get(), 4294967297);
+        assert_eq!(
+            page.comments[0].issue.html_url,
+            "https://github.com/owner/repo/pull/42"
+        );
+        assert_eq!(page.author.id.get(), 1);
+        assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn partial_errors_missing_cursors_and_inconsistent_parents_reject_entire_page() {
+        for failure in ["errors", "cursor", "parent"] {
+            let mut payload = response();
+            match failure {
+                "errors" => {
+                    payload["errors"] = json!([{"message":"private repository unavailable"}])
+                }
+                "cursor" => {
+                    payload["data"]["viewer"]["issueComments"]["pageInfo"]["hasNextPage"] =
+                        json!(true)
+                }
+                "parent" => {
+                    payload["data"]["viewer"]["issueComments"]["nodes"][0]["pullRequest"]["number"] =
+                        json!(43)
+                }
+                _ => unreachable!("known fixture"),
+            }
+            let parsed: Response = serde_json::from_value(payload).expect("response");
+            assert!(
+                parsed.into_page(OffsetDateTime::UNIX_EPOCH).is_err(),
+                "{failure}"
+            );
+        }
+    }
+}

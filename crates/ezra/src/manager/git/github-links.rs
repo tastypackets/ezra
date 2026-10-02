@@ -179,3 +179,7 @@ impl GitTools {
         response.into_page(repository_id, number)
     }
 }
+
+#[cfg(test)]
+#[path = "github-links-tests.rs"]
+mod tests;
