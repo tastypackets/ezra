@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{InvalidEvent, MAX_IDENTIFIER_BYTES};
+use super::{InboundSettings, InvalidEvent, MAX_IDENTIFIER_BYTES};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(default)]
@@ -83,5 +83,32 @@ impl Shortcut {
             prompt.replace_range(offset..offset.saturating_add(trigger.len()), "");
         }
         prompt.trim().to_owned()
+    }
+}
+
+impl InboundSettings {
+    pub fn match_shortcut(
+        &self,
+        message: &str,
+    ) -> Result<Option<(&str, &Shortcut)>, ShortcutError> {
+        let mut matched = None;
+        for (trigger, shortcut) in &self.shortcuts {
+            if trigger.is_empty()
+                || trigger.len() > 128
+                || trigger
+                    .chars()
+                    .any(|character| character.is_whitespace() || character.is_control())
+            {
+                return Err(ShortcutError::InvalidTrigger(trigger.clone()));
+            }
+            let found = message.trigger_offsets(trigger).next().is_some();
+            if found {
+                if matched.is_some() {
+                    return Err(ShortcutError::Ambiguous);
+                }
+                matched = Some((trigger.as_str(), shortcut));
+            }
+        }
+        Ok(matched)
     }
 }
