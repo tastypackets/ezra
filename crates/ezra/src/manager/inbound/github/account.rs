@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use ezra::inbound::github::{AccountCommentSource, AccountCommentsPage};
 use ezra::inbound::store::{DeliveryScope, DeliveryState, DispatchOutcome};
+#[cfg(test)]
+use futures_util::stream;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
 use super::*;
@@ -216,6 +218,46 @@ impl InboundRuntime {
             result
         }.await;
         (key, result)
+    }
+
+    #[cfg(test)]
+    pub(super) async fn route_saved_github(
+        &self,
+        source: &(impl GitHubSource<Error = crate::manager::git::GitError> + Sync),
+        host: &str,
+        sender: &impl MessageSender,
+        settings: &InboundSettings,
+        workspaces: &BTreeMap<String, PathBuf>,
+    ) -> Result<(), PollError> {
+        let author = source.authenticated_user().await?;
+        let events = self
+            .store
+            .pending_routing(&format!("github:{}", host.to_ascii_lowercase()), "")
+            .await?;
+        stream::iter(events).for_each_concurrent(8, |event| {
+            let author = &author;
+            async move {
+                if event.actor != author.id.to_string() { return; }
+                let Some(feedback) = GitHubFeedback::from_event(&event, host) else { return; };
+                let Some((repository_id, number)) = event.key.conversation.subject.split_once('/') else { return; };
+                let (Ok(repository_id), Ok(number)) = (repository_id.parse(), number.parse()) else { return; };
+                let workspace = workspaces.get(&feedback.repository.to_ascii_lowercase()).and_then(|path| path.to_str()).unwrap_or("/home/dev");
+                let result = self.admit_github_event(source, sender, settings, &event, GitHubDiscussion {
+                    repository: &feedback.repository, repository_id, number, workspace,
+                }).await;
+                match result {
+                    Ok(Admission::Accepted) => {},
+                    Ok(Admission::Uncertain) => {
+                        let mut feedback = feedback;
+                        feedback.status = CommentStatus::Unconfirmed;
+                        self.queue_github_feedback(feedback).await;
+                    }
+                    Ok(_) => {},
+                    Err(error) => tracing::debug!(delivery_id = %event.key.delivery_id(), %error, "GitHub request routing will retry"),
+                }
+            }
+        }).await;
+        Ok(())
     }
 
     pub(super) async fn scan_account(

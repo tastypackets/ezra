@@ -61,3 +61,59 @@ pub async fn update_settings(
         .publish(crate::manager::events::Topic::InboundSettings);
     Ok(Json(settings))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::{ResponseExt, TestManager};
+    use super::*;
+    use axum::http::StatusCode;
+
+    const PATH: &str = "/api/v1/inbound/settings";
+
+    #[tokio::test]
+    async fn trigger_settings_require_sign_in_and_persist_values_and_global_scope() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        assert_eq!(
+            manager.get(PATH, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            manager.put(PATH, "{}", None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let defaults: InboundSettings = manager.get(PATH, Some(&cookie)).await.json().await;
+        assert!(defaults.github.only_added_repositories);
+        assert_eq!(defaults.waiting_expiry_hours.get(), 24);
+        let saved: InboundSettings = manager.put(PATH,
+            r#"{"github":{"only_added_repositories":false,"edit_comment_status":true,"react_on_status":false,"poll_interval_seconds":10},"shortcuts":{"/custom":{"model":"future-model","effort":"future-effort"}},"retention_days":120,"waiting_expiry_hours":48}"#,
+            Some(&cookie)).await.json().await;
+        assert!(!saved.github.only_added_repositories);
+        assert_eq!(saved.retention_days, 120);
+        assert_eq!(saved.waiting_expiry_hours.get(), 48);
+        assert_eq!(saved.github.poll_interval_seconds.get(), 10);
+        assert!(saved.github.edit_comment_status);
+        assert!(!saved.github.react_on_status);
+        let loaded = crate::manager::settings::Settings::load(&manager.settings_path)
+            .expect("settings load");
+        assert_eq!(loaded.inbound, saved);
+    }
+
+    #[tokio::test]
+    async fn invalid_trigger_configuration_does_not_replace_saved_settings() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        for body in [
+            r#"{"shortcuts":{"has space":{}}}"#,
+            r#"{"shortcuts":{"/custom":{"model":""}}}"#,
+            r#"{"shortcuts":{"/custom":{"agent":"unsupported"}}}"#,
+        ] {
+            assert_eq!(
+                manager.put(PATH, body, Some(&cookie)).await.status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let saved: InboundSettings = manager.get(PATH, Some(&cookie)).await.json().await;
+        assert_eq!(saved, InboundSettings::default());
+    }
+}

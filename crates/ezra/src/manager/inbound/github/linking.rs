@@ -9,7 +9,85 @@ pub(super) struct GitHubDiscussion<'a> {
     pub workspace: &'a str,
 }
 
+#[cfg(test)]
+pub(super) struct RoutingRetries {
+    pub keys: std::collections::HashSet<EventKey>,
+    pub incomplete: bool,
+    pub deferred: bool,
+}
+
 impl InboundRuntime {
+    #[cfg(test)]
+    pub(super) async fn retry_github_routing(
+        &self,
+        source: &(impl GitHubSource<Error = crate::manager::git::GitError> + Sync),
+        sender: &impl MessageSender,
+        settings: &InboundSettings,
+        repository: &ezra::inbound::github::Repository,
+        host: &str,
+        workspace: &str,
+    ) -> Result<RoutingRetries, PollError> {
+        let source_id = format!("github:{}", host.to_ascii_lowercase());
+        let actor = source.authenticated_user().await?.id.to_string();
+        let events = self
+            .store
+            .pending_routing(&source_id, &format!("{}/", repository.id))
+            .await?;
+        let mut retries = RoutingRetries {
+            keys: Default::default(),
+            incomplete: false,
+            deferred: false,
+        };
+        for event in events {
+            if event.actor != actor {
+                continue;
+            }
+            let Some(number) = event
+                .key
+                .conversation
+                .subject
+                .rsplit_once('/')
+                .and_then(|(_, number)| number.parse().ok())
+            else {
+                tracing::warn!(delivery_id = %event.key.delivery_id(), "saved GitHub request has an invalid discussion number");
+                continue;
+            };
+            let outcome = self
+                .admit_github_event(
+                    source,
+                    sender,
+                    settings,
+                    &event,
+                    GitHubDiscussion {
+                        repository: &repository.full_name,
+                        repository_id: repository.id,
+                        number,
+                        workspace,
+                    },
+                )
+                .await;
+            if let Some(mut feedback) = GitHubFeedback::from_event(&event, host) {
+                feedback.status = if matches!(outcome, Ok(Admission::Uncertain)) {
+                    CommentStatus::Unconfirmed
+                } else {
+                    CommentStatus::Received
+                };
+                self.queue_github_feedback(feedback).await;
+            }
+            retries.keys.insert(event.key);
+            match outcome {
+                Ok(Admission::Deferred) => retries.deferred = true,
+                Err(PollError::Git(error)) => {
+                    retries.incomplete = true;
+                    tracing::warn!(%number, %error, "could not retry saved GitHub routing");
+                }
+                Err(error) => return Err(error),
+                Ok(_) => {}
+            }
+        }
+        Ok(retries)
+    }
+
     pub(super) async fn admit_github_event(
         &self,
         source: &(impl GitHubSource<Error = crate::manager::git::GitError> + Sync),

@@ -376,3 +376,156 @@ test("GitHub sign-in steps take focus and hand it back when they close", async (
   await expect(steps).toBeHidden();
   await expect(box.getByRole("button", { name: "Sign out" })).toBeFocused();
 });
+
+test("GitHub trigger settings persist and reject duplicate shortcuts", async ({
+  page,
+  request,
+}) => {
+  const path = "/api/v1/inbound/settings";
+  try {
+    await page.goto("./settings");
+    const triggers = card(page, "GitHub triggers");
+    await expect(
+      triggers.getByRole("switch", { name: "Only repositories added to Ezra" }),
+    ).toBeChecked();
+    await triggers.getByRole("switch", { name: "Only repositories added to Ezra" }).uncheck();
+    await triggers.getByLabel("Command", { exact: true }).fill("/ezra-fast");
+    await triggers.getByLabel("Chat model", { exact: true }).fill("future-model");
+    await triggers.getByLabel("Chat effort", { exact: true }).fill("high");
+    await triggers.getByLabel("History retention in days").fill("120");
+    await expect(triggers.getByLabel("Waiting request expiry in hours")).toHaveValue("24");
+    await triggers.getByLabel("Waiting request expiry in hours").fill("48");
+    await expect(triggers.getByLabel("Polling interval in seconds")).toHaveValue("30");
+    await triggers.getByLabel("Polling interval in seconds").fill("10");
+    await triggers.getByRole("radio", { name: "Edit a status footer into my comment" }).check();
+    await triggers.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(
+      page.getByText("GitHub trigger settings saved", { exact: true }).last(),
+    ).toBeVisible();
+    await page.reload();
+
+    await expect(
+      triggers.getByRole("switch", { name: "Only repositories added to Ezra" }),
+    ).not.toBeChecked();
+    await expect(triggers.getByLabel("Command", { exact: true })).toHaveValue("/ezra-fast");
+    await expect(triggers.getByLabel("Chat effort", { exact: true })).toHaveValue("high");
+    await expect(triggers.getByLabel("History retention in days")).toHaveValue("120");
+    await expect(triggers.getByLabel("Waiting request expiry in hours")).toHaveValue("48");
+    await expect(triggers.getByLabel("Polling interval in seconds")).toHaveValue("10");
+    await expect(
+      triggers.getByRole("radio", { name: "Edit a status footer into my comment" }),
+    ).toBeChecked();
+    for (const choice of ["Off", "Reactions", "Edit a status footer into my comment"]) {
+      await triggers.getByRole("radio", { name: choice, exact: true }).check();
+      await triggers.getByRole("button", { name: "Save", exact: true }).click();
+      await expect(
+        page.getByText("GitHub trigger settings saved", { exact: true }).last(),
+      ).toBeVisible();
+      await page.reload();
+      await expect(triggers.getByRole("radio", { name: choice, exact: true })).toBeChecked();
+    }
+
+    await triggers.getByLabel("History retention in days").fill("");
+    await triggers.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(triggers.getByRole("alert")).toHaveText(
+      "Retention must be a whole number of days from 0 to 4294967295.",
+    );
+    await triggers.getByLabel("History retention in days").fill("120");
+
+    await triggers.getByLabel("Waiting request expiry in hours").fill("");
+    await triggers.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(triggers.getByRole("alert")).toHaveText(
+      "Waiting expiry must be a whole number of hours from 1 to 4294967295.",
+    );
+    await triggers.getByLabel("Waiting request expiry in hours").fill("48");
+
+    await triggers.getByRole("button", { name: "Add shortcut" }).click();
+    await triggers.getByLabel("Command", { exact: true }).last().fill("/ezra-fast");
+    await triggers.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(triggers.getByRole("alert")).toHaveText("Each shortcut command must be unique.");
+  } finally {
+    await request.put(path, { data: {} });
+  }
+});
+
+test("shortcut model and effort suggestions follow the selected model and accept custom values", async ({
+  page,
+  request,
+}) => {
+  await page.route("**/api/v1/agents/codex/models", (route) =>
+    route.fulfill({
+      json: [
+        {
+          model: "first-model",
+          display_name: "First",
+          supported_reasoning_efforts: [{ reasoning_effort: "low" }, { reasoning_effort: "high" }],
+        },
+        {
+          model: "second-model",
+          display_name: "Second",
+          supported_reasoning_efforts: [{ reasoning_effort: "future-effort" }],
+        },
+      ],
+    }),
+  );
+  try {
+    await page.goto("./settings");
+    const triggers = card(page, "GitHub triggers");
+    const model = triggers.getByRole("combobox", { name: "Chat model", exact: true });
+    const effort = triggers.getByRole("combobox", { name: "Chat effort", exact: true });
+    await triggers.getByRole("button", { name: "Show Codex models", exact: true }).click();
+    await page.getByRole("option", { name: "first-model First", exact: true }).click();
+    await expect(model).toHaveValue("first-model");
+    await triggers.getByRole("button", { name: "Show Codex effort levels", exact: true }).click();
+    await expect(page.getByRole("option", { name: "future-effort", exact: true })).toHaveCount(0);
+    await page.getByRole("option", { name: "high", exact: true }).click();
+    await expect(effort).toHaveValue("high");
+    await model.fill("second-model");
+    await page.keyboard.press("Escape");
+    await effort.fill("");
+    await page.keyboard.press("Escape");
+    await triggers.getByRole("button", { name: "Show Codex effort levels", exact: true }).click();
+    await expect(page.getByRole("option", { name: "high", exact: true })).toHaveCount(0);
+    await page.getByRole("option", { name: "future-effort", exact: true }).click();
+    await model.fill("custom-model");
+    await effort.fill("custom-effort");
+    await triggers.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(
+      page.getByText("GitHub trigger settings saved", { exact: true }).last(),
+    ).toBeVisible();
+    await page.reload();
+    await expect(model).toHaveValue("custom-model");
+    await expect(effort).toHaveValue("custom-effort");
+  } finally {
+    await request.put("api/v1/inbound/settings", { data: {} });
+  }
+});
+
+test("manual shortcut values remain usable when Codex model discovery fails", async ({
+  page,
+  request,
+}) => {
+  await page.route("**/api/v1/agents/codex/models", (route) =>
+    route.fulfill({ status: 502, json: { error: "Unsupported catalog" } }),
+  );
+  try {
+    await page.goto("./settings");
+    const triggers = card(page, "GitHub triggers");
+    await expect(
+      triggers.getByText(
+        "Codex suggestions are unavailable. You can still type model and effort values.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await triggers.getByRole("combobox", { name: "Chat model", exact: true }).fill("manual-model");
+    await triggers
+      .getByRole("combobox", { name: "Chat effort", exact: true })
+      .fill("manual-effort");
+    await triggers.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(
+      page.getByText("GitHub trigger settings saved", { exact: true }).last(),
+    ).toBeVisible();
+  } finally {
+    await request.put("api/v1/inbound/settings", { data: {} });
+  }
+});
