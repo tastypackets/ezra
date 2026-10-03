@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::State;
+use ezra::agent::Agent;
 use ezra::inbound::InboundSettings;
 
 use super::{ApiError, AppState, ErrorBody, Session};
@@ -37,14 +38,10 @@ pub async fn update_settings(
     for shortcut in settings.shortcuts.values() {
         shortcut.validate().map_err(|_| {
             ApiError::BadRequest(
-                "Agent, model and effort must be nonempty identifiers of at most 512 bytes",
+                "Model and effort must be nonempty identifiers of at most 512 bytes",
             )
         })?;
-        if shortcut
-            .agent
-            .as_deref()
-            .is_some_and(|agent| agent != "codex")
-        {
+        if shortcut.agent != Agent::Codex {
             return Err(ApiError::BadRequest(
                 "GitHub triggers currently support Codex",
             ));
@@ -106,13 +103,23 @@ mod tests {
         for body in [
             r#"{"shortcuts":{"has space":{}}}"#,
             r#"{"shortcuts":{"/custom":{"model":""}}}"#,
-            r#"{"shortcuts":{"/custom":{"agent":"unsupported"}}}"#,
         ] {
             assert_eq!(
                 manager.put(PATH, body, Some(&cookie)).await.status(),
                 StatusCode::BAD_REQUEST
             );
         }
+        assert_eq!(
+            manager
+                .put(
+                    PATH,
+                    r#"{"shortcuts":{"/custom":{"agent":"unsupported"}}}"#,
+                    Some(&cookie)
+                )
+                .await
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
         let saved: InboundSettings = manager.get(PATH, Some(&cookie)).await.json().await;
         assert_eq!(saved, InboundSettings::default());
     }

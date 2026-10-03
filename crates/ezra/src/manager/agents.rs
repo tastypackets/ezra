@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -30,46 +29,18 @@ const CODEX_PACKAGE: &str = "codex-package-aarch64-unknown-linux-musl.tar.gz";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A command-line coding agent the manager can install and run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Agent {
-    Claude,
-    Codex,
+pub use ezra::agent::Agent;
+
+pub trait AgentExt {
+    fn latest_version(
+        self,
+        channel: ReleaseChannel,
+        tls_verification: TlsVerification,
+    ) -> impl Future<Output = Result<String, InstallError>> + Send;
 }
 
-impl fmt::Display for Agent {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.command_name())
-    }
-}
-
-impl Agent {
-    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
-
-    pub fn command_name(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
-    }
-
-    /// Where a release unpacked at `version_path` keeps the command.
-    pub fn command_in(self, version_path: &Path) -> PathBuf {
-        match self {
-            Self::Claude => version_path.to_path_buf(),
-            Self::Codex => version_path.join("bin/codex"),
-        }
-    }
-
-    pub fn config_directory_variable(self) -> &'static str {
-        match self {
-            Self::Claude => "CLAUDE_CONFIG_DIR",
-            Self::Codex => "CODEX_HOME",
-        }
-    }
-
-    pub async fn latest_version(
+impl AgentExt for Agent {
+    async fn latest_version(
         self,
         channel: ReleaseChannel,
         tls_verification: TlsVerification,

@@ -3043,7 +3043,9 @@
           "shortcuts": {
             "type": "object",
             "default": {
-              "/ezra": {}
+              "/ezra": {
+                "agent": "codex"
+              }
             },
             "additionalProperties": {
               "$ref": "#/components/schemas/Shortcut"
@@ -3616,13 +3618,14 @@
       },
       "Shortcut": {
         "type": "object",
+        "required": [
+          "agent"
+        ],
         "properties": {
           "agent": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "default": null
+            "$ref": "#/components/schemas/Agent",
+            "description": "Shortcuts saved without an agent use Codex.",
+            "default": "codex"
           },
           "effort": {
             "type": [

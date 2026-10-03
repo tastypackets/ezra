@@ -7,6 +7,7 @@ use tokio::sync::{Mutex, watch};
 use super::agents::{Agent, InstallPaths, InstallProgress, TlsVerification};
 use super::auth::Sessions;
 use super::checks::AgentChecks;
+use super::claude_remote::ClaudeRemote;
 use super::clones::Clones;
 use super::codex_remote::{CodexRemote, ExpectedPeer, ServerBudget};
 use super::environment::EnvironmentSettings;
@@ -51,6 +52,11 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
+    #[expect(
+        dead_code,
+        reason = "inbound routing reads it once it routes per agent"
+    )]
+    pub claude_remote: Arc<ClaudeRemote>,
     pub codex_remote: Arc<CodexRemote>,
     pub clones: Arc<Clones>,
     pub events: Events,
@@ -77,6 +83,7 @@ impl AppState {
             .map_or_else(PathBuf::new, Path::to_path_buf)
             .join("remote-control");
         Self {
+            claude_remote: Arc::new(ClaudeRemote::new()),
             codex_remote: Arc::new(CodexRemote::new(
                 events.clone(),
                 ServerLog(remote_control_logs.join("codex")),

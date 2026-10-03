@@ -1,20 +1,34 @@
+import type { Agent } from "@ezra/client";
+
 export const INBOUND_COPY = {
   title: "GitHub triggers",
-  description: "Trigger Codex from your own GitHub issue and pull request conversation comments.",
+  description:
+    "Trigger an agent from your own GitHub issue and pull request conversation comments.",
   onlyAddedRepositories: "Only repositories added to Ezra",
   onlyAddedRepositoriesHint:
-    "Turn off to accept commands from any repository. New chats use your home folder when no local checkout exists.",
+    "Turn off to accept commands from any repository. Without a local checkout, Codex chats start in your home folder and Claude Code sessions in ~/projects.",
   shortcuts: "Shortcuts",
   shortcutHint:
-    "Shortcuts match anywhere in a comment, including quotes and code. Add --new immediately after the command to start a new chat for that discussion. Model and effort change the chat defaults for subsequent turns. Leave them blank to keep the current defaults.",
+    "Shortcuts match anywhere in a comment, including quotes and code. Add --new immediately after the command to start a new chat for that discussion. Model and effort change a Codex chat's defaults for subsequent turns and apply to a Claude Code session when it starts. Leave them blank to keep the current defaults.",
+  agent: "Agent",
   trigger: "Command",
   model: "Chat model",
   effort: "Chat effort",
-  showModels: "Show Codex models",
-  showEfforts: "Show Codex effort levels",
+  showModels: {
+    claude: "Show Claude models",
+    codex: "Show Codex models",
+  } satisfies Record<Agent, string>,
+  showEfforts: {
+    claude: "Show Claude effort levels",
+    codex: "Show Codex effort levels",
+  } satisfies Record<Agent, string>,
   currentDefault: "Keep current default",
-  noSuggestions:
-    "Codex suggestions appear once Codex is running. You can still type model and effort values.",
+  noSuggestions: {
+    claude:
+      "Claude Code suggestions appear once its ~/projects server is running. You can still type model and effort values.",
+    codex:
+      "Codex suggestions appear once Codex is running. You can still type model and effort values.",
+  } satisfies Record<Agent, string>,
   add: "Add shortcut",
   remove: "Remove shortcut",
   retention: "History retention in days",

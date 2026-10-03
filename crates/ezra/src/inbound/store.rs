@@ -33,7 +33,8 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use time::OffsetDateTime;
 
-use super::{EventKey, InboundEvent, InvalidEvent};
+use super::{EventKey, InboundEvent, InvalidEvent, Shortcut};
+use crate::agent::{Agent, UnknownAgent};
 
 pub struct EventStore {
     pool: SqlitePool,
@@ -53,6 +54,23 @@ pub enum StoreError {
     InvalidEvent(#[from] InvalidEvent),
     #[error(transparent)]
     InvalidBinding(#[from] InvalidBinding),
+    #[error(transparent)]
+    UnknownAgent(#[from] UnknownAgent),
+}
+
+impl Shortcut {
+    /// Requests saved before shortcuts selected an agent have none and use Codex.
+    fn stored(
+        agent: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<Self, UnknownAgent> {
+        Ok(Self {
+            agent: agent.as_deref().map_or(Ok(Agent::Codex), str::parse)?,
+            model,
+            effort,
+        })
+    }
 }
 
 impl EventStore {
@@ -80,21 +98,39 @@ impl EventStore {
         )
         .fetch_optional(&self.pool)
         .await?;
-        Ok(record.map(|record| InboundEvent {
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        Ok(Some(InboundEvent {
             key: key.clone(),
             new_chat: record.new_chat,
             chat_name: record.chat_name,
             source_url: record.source_url,
-            options: crate::inbound::Shortcut {
-                agent: record.requested_agent,
-                model: record.requested_model,
-                effort: record.requested_effort,
-            },
+            options: Shortcut::stored(
+                record.requested_agent,
+                record.requested_model,
+                record.requested_effort,
+            )?,
             actor: record.actor,
             created_at: record.created_at,
             message: record.message,
             initial_context: record.initial_context,
         }))
+    }
+
+    /// Run only during exclusive startup, before any delivery workers start.
+    pub async fn fail_unknown_agents(&self) -> Result<u64, StoreError> {
+        let known = serde_json::to_string(&Agent::ALL).expect("agent names serialize");
+        let result = sqlx::query!(
+            "UPDATE inbound_events SET delivery_state = 'failed'
+             WHERE delivery_state IN ('pending', 'delivering') AND attempted_at IS NULL
+               AND requested_agent IS NOT NULL
+               AND requested_agent NOT IN (SELECT value FROM json_each(?1))",
+            known,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }
 
@@ -291,6 +327,74 @@ mod tests {
             .expect("request remains");
         assert!(!event.new_chat);
         assert_eq!(event.message, "Continue");
+        assert_eq!(event.options, Shortcut::default());
+        assert_eq!(event.options.agent, Agent::Codex);
+    }
+
+    #[tokio::test]
+    async fn requests_for_unknown_agents_fail_without_blocking_known_ones() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("database opens");
+        let known = InboundEvent::storage_example();
+        store
+            .insert(&known, TEST_QUEUE_LIMITS)
+            .await
+            .expect("known request inserts");
+        for (event_id, state, attempted_at) in [
+            ("unknown", "pending", None),
+            ("unknown-attempted", "pending", Some(1)),
+            ("unknown-delivered", "delivered", None),
+        ] {
+            sqlx::query(
+                "INSERT INTO inbound_events (source, subject, event_id, actor, created_at, message, requested_agent, delivery_state, attempted_at)
+                 VALUES ('github:github.com', 'unknown/1', ?1, '789', '2026-09-29T10:00:00Z', 'Continue', 'gemini', ?2, ?3)",
+            )
+            .bind(event_id)
+            .bind(state)
+            .bind(attempted_at)
+            .execute(&store.pool)
+            .await
+            .expect("request from a newer version inserts");
+        }
+        let unknown = EventKey {
+            conversation: ConversationKey {
+                source: "github:github.com".to_owned(),
+                subject: "unknown/1".to_owned(),
+            },
+            id: "unknown".to_owned(),
+        };
+        assert!(matches!(
+            store.get(&unknown).await,
+            Err(StoreError::UnknownAgent(agent)) if agent.0 == "gemini"
+        ));
+        assert_eq!(
+            store.fail_unknown_agents().await.expect("sweep succeeds"),
+            1
+        );
+        assert_eq!(
+            store.delivery_state(&unknown).await.expect("state reads"),
+            Some(DeliveryState::Failed)
+        );
+        for (event_id, state) in [
+            ("unknown-attempted", DeliveryState::Pending),
+            ("unknown-delivered", DeliveryState::Delivered),
+        ] {
+            let key = EventKey {
+                id: event_id.to_owned(),
+                ..unknown.clone()
+            };
+            assert_eq!(
+                store.delivery_state(&key).await.expect("state reads"),
+                Some(state)
+            );
+        }
+        assert_eq!(
+            store.delivery_state(&known.key).await.expect("state reads"),
+            Some(DeliveryState::Pending)
+        );
+        assert_eq!(store.fail_unknown_agents().await.expect("sweep repeats"), 0);
     }
 
     #[tokio::test]

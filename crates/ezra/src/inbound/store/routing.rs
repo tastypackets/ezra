@@ -30,30 +30,32 @@ impl EventStore {
                ORDER BY events.rowid"#,
             source, subject_prefix,
         ).fetch_all(&self.pool).await?;
-        Ok(records
+        records
             .into_iter()
-            .map(|record| crate::inbound::InboundEvent {
-                key: EventKey {
-                    conversation: ConversationKey {
-                        source: source.to_owned(),
-                        subject: record.subject,
+            .map(|record| {
+                Ok(crate::inbound::InboundEvent {
+                    key: EventKey {
+                        conversation: ConversationKey {
+                            source: source.to_owned(),
+                            subject: record.subject,
+                        },
+                        id: record.event_id,
                     },
-                    id: record.event_id,
-                },
-                new_chat: record.new_chat,
-                options: crate::inbound::Shortcut {
-                    agent: record.requested_agent,
-                    model: record.requested_model,
-                    effort: record.requested_effort,
-                },
-                actor: record.actor,
-                created_at: record.created_at,
-                message: record.message,
-                initial_context: record.initial_context,
-                chat_name: record.chat_name,
-                source_url: record.source_url,
+                    new_chat: record.new_chat,
+                    options: crate::inbound::Shortcut::stored(
+                        record.requested_agent,
+                        record.requested_model,
+                        record.requested_effort,
+                    )?,
+                    actor: record.actor,
+                    created_at: record.created_at,
+                    message: record.message,
+                    initial_context: record.initial_context,
+                    chat_name: record.chat_name,
+                    source_url: record.source_url,
+                })
             })
-            .collect())
+            .collect()
     }
 
     pub async fn claim_routing(

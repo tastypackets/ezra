@@ -141,7 +141,11 @@ impl EventStore {
                     .map_err(|_| StoreError::DeliveryChanged)?;
                 tracing::info!(%reason, "creating replacement chat for inbound delivery");
                 match sender
-                    .create_chat(&target.workspace, event.chat_name.as_deref())
+                    .create_chat(
+                        &target.workspace,
+                        event.chat_name.as_deref(),
+                        &event.options,
+                    )
                     .await
                 {
                     Ok(chat_id) => {
@@ -253,7 +257,7 @@ mod tests {
 
     use super::*;
     use crate::inbound::store::{DeliveryState, SessionTarget, TEST_QUEUE_LIMITS};
-    use crate::inbound::{ConversationKey, InboundEvent};
+    use crate::inbound::{ConversationKey, InboundEvent, Shortcut};
 
     const SCOPE: DeliveryScope<'_> = DeliveryScope {
         host_id: "host-a",
@@ -278,6 +282,7 @@ mod tests {
             &self,
             _workspace: &str,
             _chat_name: Option<&str>,
+            _options: &Shortcut,
         ) -> Result<String, MessageSendError> {
             panic!("these cases must not create chats")
         }
@@ -371,9 +376,11 @@ mod tests {
             &self,
             workspace: &str,
             chat_name: Option<&str>,
+            options: &Shortcut,
         ) -> Result<String, MessageSendError> {
             assert_eq!(workspace, "/home/dev/projects/repository");
             assert_eq!(chat_name, Some("repository#42: Fix crash"));
+            assert_eq!(options.model.as_deref(), Some("chosen-model"));
             self.calls.lock().expect("calls").push("create".to_owned());
             if self.creation_fails {
                 Err(MessageSendError::Uncertain("creation timed out".to_owned()))
@@ -429,6 +436,7 @@ mod tests {
             let mut event = InboundEvent::dispatch_example("issue-1");
             event.chat_name = Some("repository#42: Fix crash".to_owned());
             event.initial_context = Some("\n\nOriginal description".to_owned());
+            event.options.model = Some("chosen-model".to_owned());
             let target = SessionTarget::dispatch_example("host-a", "codex", "old-chat");
             store
                 .bind_conversation(&event.key.conversation, &target)

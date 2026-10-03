@@ -280,12 +280,7 @@ impl InboundRuntime {
                         continue;
                     }
                 };
-                if shortcut
-                    .1
-                    .agent
-                    .as_deref()
-                    .is_some_and(|agent| agent != "codex")
-                {
+                if shortcut.1.agent != ezra::agent::Agent::Codex {
                     tracing::warn!(comment_id = %fetched.comment.id, "GitHub trigger agent is not supported by this adapter");
                     self.queue_github_feedback(feedback).await;
                     continue;
@@ -927,6 +922,7 @@ mod tests {
             &self,
             workspace: &str,
             _chat_name: Option<&str>,
+            _options: &ezra::inbound::Shortcut,
         ) -> Result<String, MessageSendError> {
             assert_eq!(
                 workspace,

@@ -233,6 +233,34 @@ mod tests {
     }
 
     #[test]
+    fn shortcuts_saved_without_an_agent_load_as_codex_and_save_it() {
+        let saved_before_agents: Settings = toml::from_str(
+            "[inbound.shortcuts.\"/ezra\"]\n\n[inbound.shortcuts.\"/ezra-fast\"]\nmodel = \"chosen-model\"\neffort = \"low\"\n",
+        )
+        .expect("0.4.0 shortcuts parse");
+        assert_eq!(
+            saved_before_agents.inbound.shortcuts,
+            std::collections::BTreeMap::from([
+                ("/ezra".to_owned(), ezra::inbound::Shortcut::default()),
+                (
+                    "/ezra-fast".to_owned(),
+                    ezra::inbound::Shortcut {
+                        agent: Agent::Codex,
+                        model: Some("chosen-model".to_owned()),
+                        effort: Some("low".to_owned()),
+                    }
+                ),
+            ])
+        );
+        let saved = toml::to_string_pretty(&saved_before_agents).expect("settings serialize");
+        assert!(saved.contains("[inbound.shortcuts.\"/ezra\"]\nagent = \"codex\"\n"));
+        assert_eq!(
+            toml::from_str::<Settings>(&saved).expect("saved settings parse"),
+            saved_before_agents
+        );
+    }
+
+    #[test]
     fn inbound_settings_survive_saving_other_choices() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("settings.toml");
@@ -251,7 +279,7 @@ mod tests {
         settings.inbound.shortcuts.insert(
             "/ezra-codex".to_owned(),
             ezra::inbound::Shortcut {
-                agent: Some("codex".to_owned()),
+                agent: Agent::Claude,
                 model: Some("chosen-model".to_owned()),
                 effort: Some("high".to_owned()),
             },
