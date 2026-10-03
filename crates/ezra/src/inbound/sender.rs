@@ -33,9 +33,15 @@ pub struct MessageReceipt {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MessageSendError {
-    /// No native send was attempted.
-    #[error("the agent control connection is unavailable")]
-    Unavailable,
+    /// The destination cannot be reached and is not paused. No native send was attempted. The
+    /// text says why.
+    #[error("the agent is unavailable: {0}")]
+    Unavailable(String),
+    /// The destination cannot be reached because ezra paused it on purpose, as for a restart or
+    /// while it is turned off. No native send was attempted, and `resumes` marks when that may
+    /// have ended. The text says which destination.
+    #[error("the agent's destination is paused: {0}")]
+    Paused(String),
     /// The agent confirmed that the destination cannot accept this message.
     #[error("chat needs replacement: {0}")]
     NeedsReplacement(String),
@@ -44,11 +50,8 @@ pub enum MessageSendError {
 }
 
 pub trait MessageSender: Sync {
-    fn control_available(&self) -> bool {
-        true
-    }
-
-    fn control_changes(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+    /// Marked changed whenever a paused destination resumes.
+    fn resumes(&self) -> Option<tokio::sync::watch::Receiver<()>> {
         None
     }
 

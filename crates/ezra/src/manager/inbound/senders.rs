@@ -26,17 +26,10 @@ impl<Claude, Codex> AgentSenders<Claude, Codex> {
 }
 
 impl<Claude: MessageSender, Codex: MessageSender> MessageSender for AgentSender<'_, Claude, Codex> {
-    fn control_available(&self) -> bool {
+    fn resumes(&self) -> Option<watch::Receiver<()>> {
         match self {
-            Self::Claude(sender) => sender.control_available(),
-            Self::Codex(sender) => sender.control_available(),
-        }
-    }
-
-    fn control_changes(&self) -> Option<watch::Receiver<bool>> {
-        match self {
-            Self::Claude(sender) => sender.control_changes(),
-            Self::Codex(sender) => sender.control_changes(),
+            Self::Claude(sender) => sender.resumes(),
+            Self::Codex(sender) => sender.resumes(),
         }
     }
 

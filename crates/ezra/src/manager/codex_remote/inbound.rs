@@ -226,13 +226,22 @@ impl ControlClient {
     }
 }
 
-impl MessageSender for CodexRemote {
-    fn control_available(&self) -> bool {
-        self.client().is_some()
+impl CodexRemote {
+    fn connected_client(&self) -> Result<std::sync::Arc<ControlClient>, MessageSendError> {
+        self.client().ok_or_else(|| {
+            let reason = "ezra is not connected to Codex's remote control server".to_owned();
+            if self.pauses.is_paused(&()) {
+                MessageSendError::Paused(format!("{reason}, which ezra paused"))
+            } else {
+                MessageSendError::Unavailable(reason)
+            }
+        })
     }
+}
 
-    fn control_changes(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
-        Some(self.control_available.subscribe())
+impl MessageSender for CodexRemote {
+    fn resumes(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        Some(self.pauses.resumes())
     }
 
     async fn create_chat(
@@ -241,7 +250,7 @@ impl MessageSender for CodexRemote {
         chat_name: Option<&str>,
         _options: &Shortcut,
     ) -> Result<String, MessageSendError> {
-        let client = self.client().ok_or(MessageSendError::Unavailable)?;
+        let client = self.connected_client()?;
         let project_id = client.project_for_workspace(workspace).await.map_err(|error| {
             tracing::warn!(%error, "could not resolve the Codex project before creating a chat");
             MessageSendError::Uncertain(error.to_string())
@@ -285,7 +294,7 @@ impl MessageSender for CodexRemote {
         chat_id: &str,
         event: &InboundEvent,
     ) -> Result<MessageReceipt, MessageSendError> {
-        let client = self.client().ok_or(MessageSendError::Unavailable)?;
+        let client = self.connected_client()?;
         client
             .deliver_event(chat_id, event, None::<&UntrackedAttempt>)
             .await
@@ -297,7 +306,7 @@ impl MessageSender for CodexRemote {
         event: &InboundEvent,
         attempt: &(impl MessageAttempt + Sync),
     ) -> Result<MessageReceipt, MessageSendError> {
-        let client = self.client().ok_or(MessageSendError::Unavailable)?;
+        let client = self.connected_client()?;
         client.deliver_event(chat_id, event, Some(attempt)).await
     }
 }
@@ -346,7 +355,9 @@ mod tests {
             );
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.reject {
-                Err(MessageSendError::Unavailable)
+                Err(MessageSendError::Unavailable(
+                    "the attempt was refused".to_owned(),
+                ))
             } else {
                 Ok(())
             }
@@ -1212,7 +1223,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_connection_does_not_send() {
+    async fn missing_connection_does_not_send_and_waits_only_while_paused() {
         let fixture = Fixture::connected().await;
         fixture.remote.with_control(|control| control.client = None);
         assert!(matches!(
@@ -1220,7 +1231,22 @@ mod tests {
                 .remote
                 .queue_message("chat-1", &Fixture::event())
                 .await,
-            Err(MessageSendError::Unavailable)
+            Err(MessageSendError::Paused(_))
+        ));
+        fixture.remote.pauses.resume(&());
+        assert!(matches!(
+            fixture
+                .remote
+                .queue_message("chat-1", &Fixture::event())
+                .await,
+            Err(MessageSendError::Unavailable(_))
+        ));
+        assert!(matches!(
+            fixture
+                .remote
+                .create_chat("/workspace", None, &Shortcut::default())
+                .await,
+            Err(MessageSendError::Unavailable(_))
         ));
         assert!(fixture.fake.requests_after_initialize().is_empty());
     }

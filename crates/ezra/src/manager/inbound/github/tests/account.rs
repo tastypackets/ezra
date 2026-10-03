@@ -6,9 +6,11 @@ use ezra::inbound::github::{AccountComment, AccountCommentSource, AccountComment
 
 use super::*;
 use crate::manager::inbound::AgentSenders;
+use crate::manager::supervision::Pauses;
 
 #[tokio::test]
 async fn expired_waiting_requests_report_failure_and_keep_dedupe() {
+    let (logs, _capture) = crate::logging::CapturedLogs::start("warn");
     let directory = tempfile::tempdir().expect("temporary directory");
     let database_path = directory.path().join("ezra.db");
     let runtime = InboundRuntime::open(
@@ -48,6 +50,16 @@ async fn expired_waiting_requests_report_failure_and_keep_dedupe() {
     let feedback = statuses.try_recv().expect("failure status is queued");
     assert_eq!(feedback.key, event.key);
     assert_eq!(feedback.status, CommentStatus::Failed);
+    let [logged] = <[String; 1]>::try_from(logs.lines_with(&event.key.delivery_id()))
+        .expect("the expiry is logged once");
+    for part in [
+        "WARN",
+        "GitHub request expired before it was sent",
+        "agent=codex",
+        "waiting_expiry_hours=24",
+    ] {
+        assert!(logged.contains(part), "{logged}");
+    }
     assert_eq!(
         runtime
             .store
@@ -814,13 +826,11 @@ async fn channel_routing_reuses_freed_slots_without_waiting_for_the_old_batch() 
     assert!(worker.await.expect_err("worker cancelled").is_cancelled());
 }
 
-struct AvailabilitySender(tokio::sync::watch::Sender<bool>);
+#[derive(Default)]
+struct ResumingSender(tokio::sync::watch::Sender<()>);
 
-impl MessageSender for AvailabilitySender {
-    fn control_available(&self) -> bool {
-        *self.0.borrow()
-    }
-    fn control_changes(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+impl MessageSender for ResumingSender {
+    fn resumes(&self) -> Option<tokio::sync::watch::Receiver<()>> {
         Some(self.0.subscribe())
     }
     async fn create_chat(
@@ -841,7 +851,7 @@ impl MessageSender for AvailabilitySender {
 }
 
 #[tokio::test]
-async fn offline_requests_start_once_on_reconnect_and_a_reconnect_during_work_is_not_lost() {
+async fn a_paused_request_starts_once_on_resume_and_a_resume_during_work_is_not_lost() {
     let directory = tempfile::tempdir().expect("directory");
     let runtime = Arc::new(
         InboundRuntime::open(
@@ -853,10 +863,10 @@ async fn offline_requests_start_once_on_reconnect_and_a_reconnect_during_work_is
         .await
         .expect("runtime"),
     );
-    let availability = tokio::sync::watch::Sender::new(false);
+    let resumes = tokio::sync::watch::Sender::new(());
     let senders = AgentSenders {
-        claude: Arc::new(AvailabilitySender(tokio::sync::watch::Sender::new(true))),
-        codex: Arc::new(AvailabilitySender(availability.clone())),
+        claude: Arc::new(ResumingSender::default()),
+        codex: Arc::new(ResumingSender(resumes.clone())),
     };
     let incoming = runtime
         .github_routing_receiver
@@ -890,39 +900,47 @@ async fn offline_requests_start_once_on_reconnect_and_a_reconnect_during_work_is
                     released.as_mut().enable();
                     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                     started.send(attempt).expect("receiver");
-                    if attempt == 0 {
-                        released.await;
-                        (key, Err(PollError::Unavailable))
-                    } else {
-                        (key, Ok(Admission::Accepted))
+                    match attempt {
+                        0 => (key, Err(PollError::Paused("restarting".into()))),
+                        1 => {
+                            released.await;
+                            (key, Err(PollError::Paused("restarting".into())))
+                        }
+                        _ => (key, Ok(Admission::Accepted)),
                     }
                 }
             })
             .await;
     });
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), starts.recv())
+            .await
+            .expect("the request starts")
+            .expect("worker"),
+        0
+    );
     assert!(
         tokio::time::timeout(Duration::from_millis(30), starts.recv())
             .await
             .is_err()
     );
-    availability.send_replace(true);
+    resumes.send_replace(());
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), starts.recv())
             .await
-            .expect("reconnect starts request")
+            .expect("a resume starts the request")
             .expect("worker"),
-        0
+        1
     );
-    availability.send_replace(false);
-    availability.send_replace(true);
+    resumes.send_replace(());
     tokio::task::yield_now().await;
     gate.notify_waiters();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), starts.recv())
             .await
-            .expect("new connection is used")
+            .expect("the resume during work is used")
             .expect("worker"),
-        1
+        2
     );
     assert!(
         tokio::time::timeout(Duration::from_millis(30), starts.recv())
@@ -1032,14 +1050,8 @@ async fn a_late_deferred_result_observes_progress_that_happened_while_it_was_run
     assert!(worker.await.expect_err("cancelled").is_cancelled());
 }
 
-impl AvailabilitySender {
-    fn new(available: bool) -> Self {
-        Self(tokio::sync::watch::Sender::new(available))
-    }
-}
-
 #[tokio::test]
-async fn an_offline_agent_parks_only_its_own_requests() {
+async fn a_paused_agent_parks_only_its_own_requests() {
     let directory = tempfile::tempdir().expect("directory");
     let runtime = Arc::new(
         InboundRuntime::open(
@@ -1051,10 +1063,10 @@ async fn an_offline_agent_parks_only_its_own_requests() {
         .await
         .expect("runtime"),
     );
-    let claude = tokio::sync::watch::Sender::new(false);
+    let claude = tokio::sync::watch::Sender::new(());
     let senders = AgentSenders {
-        claude: Arc::new(AvailabilitySender(claude.clone())),
-        codex: Arc::new(AvailabilitySender::new(true)),
+        claude: Arc::new(ResumingSender(claude.clone())),
+        codex: Arc::new(ResumingSender::default()),
     };
     let incoming = runtime
         .github_routing_receiver
@@ -1069,25 +1081,18 @@ async fn an_offline_agent_parks_only_its_own_requests() {
         },
         id: identifier.into(),
     };
-    let gate = Arc::new(tokio::sync::Notify::new());
     let claude_attempts = Arc::new(AtomicUsize::new(0));
     let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
     let running = Arc::clone(&runtime);
-    let operation_gate = Arc::clone(&gate);
     let worker = tokio::spawn(async move {
         running
             .process_github_events("github.com", &senders, incoming, |key| {
                 let started = started.clone();
-                let gate = Arc::clone(&operation_gate);
                 let claude_attempts = Arc::clone(&claude_attempts);
                 async move {
-                    let released = gate.notified();
-                    tokio::pin!(released);
-                    released.as_mut().enable();
                     started.send(key.id.clone()).expect("receiver");
                     if key.id == "claude" && claude_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        released.await;
-                        return (key, Err(PollError::Unavailable));
+                        return (key, Err(PollError::Paused("restarting".into())));
                     }
                     (key, Ok(Admission::Accepted))
                 }
@@ -1095,49 +1100,25 @@ async fn an_offline_agent_parks_only_its_own_requests() {
             .await;
     });
     runtime.enqueue_github_event(request("claude"), Agent::Claude);
+    assert_eq!(starts.next_start().await, "claude");
     runtime.enqueue_github_event(request("codex"), Agent::Codex);
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), starts.recv())
-            .await
-            .expect("Codex request starts while Claude is offline")
-            .expect("worker"),
-        "codex"
+        starts.next_start().await,
+        "codex",
+        "Codex routes while the Claude request waits"
     );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), starts.recv())
-            .await
-            .is_err()
-    );
-    claude.send_replace(true);
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), starts.recv())
-            .await
-            .expect("Claude request starts once Claude is available")
-            .expect("worker"),
-        "claude"
-    );
-    claude.send_replace(false);
-    gate.notify_waiters();
     runtime.enqueue_github_event(request("later-codex"), Agent::Codex);
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), starts.recv())
-            .await
-            .expect("Codex keeps routing while the Claude request waits")
-            .expect("worker"),
-        "later-codex"
-    );
+    assert_eq!(starts.next_start().await, "later-codex");
     assert!(
         tokio::time::timeout(Duration::from_millis(30), starts.recv())
             .await
             .is_err()
     );
-    claude.send_replace(true);
+    claude.send_replace(());
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), starts.recv())
-            .await
-            .expect("parked Claude request restarts after its change")
-            .expect("worker"),
-        "claude"
+        starts.next_start().await,
+        "claude",
+        "the parked Claude request starts again after a resume"
     );
     assert!(
         tokio::time::timeout(Duration::from_millis(30), starts.recv())
@@ -1149,17 +1130,18 @@ async fn an_offline_agent_parks_only_its_own_requests() {
 }
 
 #[tokio::test]
-async fn an_available_agent_that_refuses_a_request_fails_it() {
+async fn a_request_that_cannot_reach_a_destination_that_is_not_paused_fails() {
+    let (logs, _capture) = crate::logging::CapturedLogs::start("warn");
     let fixture = DeliveryFixture::new().await;
     let runtime = Arc::clone(&fixture.runtime);
     let request = DeliveryFixture::request(42, 10, Agent::Codex);
     fixture.insert(&[&request]).await;
     let (status_sender, mut statuses) = tokio::sync::mpsc::channel(8);
     *runtime.github_feedback_sender.lock().await = Some(status_sender);
-    let codex = tokio::sync::watch::Sender::new(true);
+    let codex = tokio::sync::watch::Sender::new(());
     let senders = AgentSenders {
-        claude: Arc::new(AvailabilitySender::new(true)),
-        codex: Arc::new(AvailabilitySender(codex.clone())),
+        claude: Arc::new(ResumingSender::default()),
+        codex: Arc::new(ResumingSender(codex.clone())),
     };
     let incoming = runtime
         .github_routing_receiver
@@ -1177,7 +1159,7 @@ async fn an_available_agent_that_refuses_a_request_fails_it() {
                 async move {
                     attempts.fetch_add(1, Ordering::SeqCst);
                     tokio::task::yield_now().await;
-                    (key, Err(PollError::Unavailable))
+                    (key, Err(PollError::Unavailable("offline".into())))
                 }
             })
             .await;
@@ -1199,12 +1181,239 @@ async fn an_available_agent_that_refuses_a_request_fails_it() {
             .expect("state"),
         Some(DeliveryState::Failed)
     );
-    codex.send_replace(true);
+    codex.send_replace(());
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     assert!(statuses.try_recv().is_err());
+    let [logged] = <[String; 1]>::try_from(logs.lines_with(&request.key.delivery_id()))
+        .expect("the failure is logged once");
+    for part in [
+        "WARN",
+        "GitHub request failed before submission",
+        "agent=codex",
+        "error=agent is unavailable: offline",
+    ] {
+        assert!(logged.contains(part), "{logged}");
+    }
     worker.abort();
     assert!(worker.await.expect_err("cancelled").is_cancelled());
+}
+
+#[tokio::test]
+async fn a_route_that_fails_after_its_request_was_settled_is_no_second_failure() {
+    let (logs, _capture) = crate::logging::CapturedLogs::start("warn");
+    let fixture = DeliveryFixture::new().await;
+    let runtime = Arc::clone(&fixture.runtime);
+    let request = DeliveryFixture::request(42, 10, Agent::Codex);
+    fixture.insert(&[&request]).await;
+    assert!(
+        runtime
+            .store
+            .fail_waiting_event(&request.key)
+            .await
+            .expect("the request fails elsewhere")
+    );
+    let senders = AgentSenders {
+        claude: Arc::new(ResumingSender::default()),
+        codex: Arc::new(ResumingSender::default()),
+    };
+    let incoming = runtime
+        .github_routing_receiver
+        .lock()
+        .await
+        .take()
+        .expect("receiver");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let running = Arc::clone(&runtime);
+    let operation_attempts = Arc::clone(&attempts);
+    let worker = tokio::spawn(async move {
+        running
+            .process_github_events("github.com", &senders, incoming, |key| {
+                let attempts = Arc::clone(&operation_attempts);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    (key, Err(PollError::Unavailable("offline".into())))
+                }
+            })
+            .await;
+    });
+    runtime.enqueue_github_event(request.key.clone(), Agent::Codex);
+    attempts.reach(1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        runtime
+            .store
+            .delivery_state(&request.key)
+            .await
+            .expect("state"),
+        Some(DeliveryState::Failed)
+    );
+    assert!(
+        logs.lines_with(&request.key.delivery_id()).is_empty(),
+        "{}",
+        logs.text()
+    );
+    worker.abort();
+    assert!(worker.await.expect_err("cancelled").is_cancelled());
+}
+
+#[tokio::test]
+async fn a_paused_destination_waits_for_its_agents_next_resume() {
+    let (logs, _capture) = crate::logging::CapturedLogs::start("warn");
+    let fixture = DeliveryFixture::new().await;
+    let runtime = Arc::clone(&fixture.runtime);
+    let claude = tokio::sync::watch::Sender::new(());
+    let senders = AgentSenders {
+        claude: Arc::new(ResumingSender(claude.clone())),
+        codex: Arc::new(ResumingSender::default()),
+    };
+    let incoming = runtime
+        .github_routing_receiver
+        .lock()
+        .await
+        .take()
+        .expect("receiver");
+    let restarts = Arc::new(AtomicUsize::new(0));
+    let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
+    let running = Arc::clone(&runtime);
+    let operation_restarts = Arc::clone(&restarts);
+    let worker = tokio::spawn(async move {
+        running
+            .process_github_events("github.com", &senders, incoming, |key| {
+                let started = started.clone();
+                let restarts = Arc::clone(&operation_restarts);
+                async move {
+                    started.send(key.id.clone()).expect("receiver");
+                    tokio::task::yield_now().await;
+                    if key.id == "restarting" && restarts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        return (
+                            key,
+                            Err(PollError::Paused(
+                                "Claude Remote Control in /home/dev/projects/a is starting".into(),
+                            )),
+                        );
+                    }
+                    (key, Ok(Admission::Accepted))
+                }
+            })
+            .await;
+    });
+    let request = |identifier: &str| EventKey {
+        conversation: ConversationKey {
+            source: "github:github.com".into(),
+            subject: format!("1/{identifier}"),
+        },
+        id: identifier.into(),
+    };
+    runtime.enqueue_github_event(request("restarting"), Agent::Claude);
+    assert_eq!(starts.next_start().await, "restarting");
+    restarts.reach(1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    runtime.enqueue_github_event(request("restarting"), Agent::Claude);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), starts.recv())
+            .await
+            .is_err(),
+        "a parked request is not tried again without a change"
+    );
+    runtime.enqueue_github_event(request("other-folder"), Agent::Claude);
+    assert_eq!(starts.next_start().await, "other-folder");
+    runtime.enqueue_github_event(request("codex"), Agent::Codex);
+    assert_eq!(starts.next_start().await, "codex");
+
+    claude.send_replace(());
+    assert_eq!(starts.next_start().await, "restarting");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(restarts.load(Ordering::SeqCst), 2);
+    assert!(starts.try_recv().is_err());
+    assert!(
+        logs.lines_with(&request("restarting").delivery_id())
+            .is_empty(),
+        "a request that waits is no failure"
+    );
+    worker.abort();
+    assert!(worker.await.expect_err("cancelled").is_cancelled());
+}
+
+#[tokio::test]
+async fn a_pause_reported_after_a_resume_is_tried_again_at_once() {
+    let fixture = DeliveryFixture::new().await;
+    let runtime = Arc::clone(&fixture.runtime);
+    let claude = tokio::sync::watch::Sender::new(());
+    let senders = AgentSenders {
+        claude: Arc::new(ResumingSender(claude.clone())),
+        codex: Arc::new(ResumingSender::default()),
+    };
+    let incoming = runtime
+        .github_routing_receiver
+        .lock()
+        .await
+        .take()
+        .expect("receiver");
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
+    let running = Arc::clone(&runtime);
+    let operation_gate = Arc::clone(&gate);
+    let worker = tokio::spawn(async move {
+        running
+            .process_github_events("github.com", &senders, incoming, |key| {
+                let started = started.clone();
+                let gate = Arc::clone(&operation_gate);
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    let released = gate.notified();
+                    tokio::pin!(released);
+                    released.as_mut().enable();
+                    started.send(key.id.clone()).expect("receiver");
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        released.await;
+                        return (
+                            key,
+                            Err(PollError::Paused(
+                                "Claude Remote Control in /home/dev/projects/a is starting".into(),
+                            )),
+                        );
+                    }
+                    (key, Ok(Admission::Accepted))
+                }
+            })
+            .await;
+    });
+    runtime.enqueue_github_event(
+        EventKey {
+            conversation: ConversationKey {
+                source: "github:github.com".into(),
+                subject: "1/2".into(),
+            },
+            id: "raced".into(),
+        },
+        Agent::Claude,
+    );
+    assert_eq!(starts.next_start().await, "raced");
+    claude.send_replace(());
+    tokio::task::yield_now().await;
+    gate.notify_waiters();
+    assert_eq!(
+        starts.next_start().await,
+        "raced",
+        "the destination resumed while the request was routed"
+    );
+    worker.abort();
+    assert!(worker.await.expect_err("cancelled").is_cancelled());
+}
+
+trait StartsExt {
+    async fn next_start(&mut self) -> String;
+}
+
+impl StartsExt for tokio::sync::mpsc::UnboundedReceiver<String> {
+    async fn next_start(&mut self) -> String {
+        tokio::time::timeout(Duration::from_secs(2), self.recv())
+            .await
+            .expect("a request starts")
+            .expect("worker")
+    }
 }
 
 type Deliveries = tokio::sync::mpsc::UnboundedReceiver<(Agent, String, EventKey)>;
@@ -1243,18 +1452,27 @@ impl Refusal {
 
 struct DeliverySender {
     agent: Agent,
-    available: tokio::sync::watch::Sender<bool>,
+    pauses: Arc<Pauses<()>>,
     refusal: Arc<Refusal>,
     created: AtomicUsize,
     delivered: tokio::sync::mpsc::UnboundedSender<(Agent, String, EventKey)>,
 }
 
-impl MessageSender for DeliverySender {
-    fn control_available(&self) -> bool {
-        *self.available.borrow()
+impl DeliverySender {
+    fn reach(&self) -> Result<(), MessageSendError> {
+        if self.pauses.is_paused(&()) {
+            return Err(MessageSendError::Paused("paused".into()));
+        }
+        if self.refusal.refuses() {
+            return Err(MessageSendError::Unavailable("offline".into()));
+        }
+        Ok(())
     }
-    fn control_changes(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
-        Some(self.available.subscribe())
+}
+
+impl MessageSender for DeliverySender {
+    fn resumes(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        Some(self.pauses.resumes())
     }
     async fn create_chat(
         &self,
@@ -1263,9 +1481,7 @@ impl MessageSender for DeliverySender {
         options: &ezra::inbound::Shortcut,
     ) -> Result<String, MessageSendError> {
         assert_eq!(options.agent, self.agent);
-        if !self.control_available() || self.refusal.refuses() {
-            return Err(MessageSendError::Unavailable);
-        }
+        self.reach()?;
         let created = self
             .created
             .fetch_add(1, Ordering::SeqCst)
@@ -1278,9 +1494,7 @@ impl MessageSender for DeliverySender {
         event: &InboundEvent,
     ) -> Result<MessageReceipt, MessageSendError> {
         assert_eq!(event.options.agent, self.agent);
-        if !self.control_available() || self.refusal.refuses() {
-            return Err(MessageSendError::Unavailable);
-        }
+        self.reach()?;
         self.delivered
             .send((self.agent, chat_id.to_owned(), event.key.clone()))
             .expect("receiver");
@@ -1367,22 +1581,22 @@ impl DeliveryFixture {
 
     fn route(
         &self,
-        claude: &tokio::sync::watch::Sender<bool>,
-        codex: &tokio::sync::watch::Sender<bool>,
+        claude: &Arc<Pauses<()>>,
+        codex: &Arc<Pauses<()>>,
         claude_refusal: &Arc<Refusal>,
     ) -> (tokio::task::JoinHandle<()>, Deliveries) {
         let (delivered, deliveries) = tokio::sync::mpsc::unbounded_channel();
         let senders = AgentSenders {
             claude: Arc::new(DeliverySender {
                 agent: Agent::Claude,
-                available: claude.clone(),
+                pauses: Arc::clone(claude),
                 refusal: Arc::clone(claude_refusal),
                 created: AtomicUsize::new(0),
                 delivered: delivered.clone(),
             }),
             codex: Arc::new(DeliverySender {
                 agent: Agent::Codex,
-                available: codex.clone(),
+                pauses: Arc::clone(codex),
                 refusal: Arc::default(),
                 created: AtomicUsize::new(0),
                 delivered,
@@ -1438,12 +1652,9 @@ async fn each_request_is_delivered_by_its_agent_and_waits_only_for_it() {
     claude_request.new_chat = true;
     fixture.bind_to_codex(&codex_request, "codex-chat").await;
     fixture.insert(&[&claude_request, &codex_request]).await;
-    let claude = tokio::sync::watch::Sender::new(false);
-    let (worker, mut deliveries) = fixture.route(
-        &claude,
-        &tokio::sync::watch::Sender::new(true),
-        &Arc::default(),
-    );
+    let claude = Arc::new(Pauses::new([()]));
+    let (worker, mut deliveries) =
+        fixture.route(&claude, &Arc::new(Pauses::new([])), &Arc::default());
     assert_eq!(
         DeliveryFixture::next_delivery(&mut deliveries).await,
         (Agent::Codex, "codex-chat".into(), codex_request.key.clone())
@@ -1462,7 +1673,7 @@ async fn each_request_is_delivered_by_its_agent_and_waits_only_for_it() {
             .expect("state"),
         Some(DeliveryState::Pending)
     );
-    claude.send_replace(true);
+    claude.resume(&());
     assert_eq!(
         DeliveryFixture::next_delivery(&mut deliveries).await,
         (
@@ -1491,12 +1702,9 @@ async fn a_waiting_claude_request_does_not_hold_back_codex_in_its_discussion() {
     let codex_request = DeliveryFixture::request(42, 11, Agent::Codex);
     fixture.bind_to_codex(&codex_request, "codex-chat").await;
     fixture.insert(&[&claude_request, &codex_request]).await;
-    let claude = tokio::sync::watch::Sender::new(false);
-    let (worker, mut deliveries) = fixture.route(
-        &claude,
-        &tokio::sync::watch::Sender::new(true),
-        &Arc::default(),
-    );
+    let claude = Arc::new(Pauses::new([()]));
+    let (worker, mut deliveries) =
+        fixture.route(&claude, &Arc::new(Pauses::new([])), &Arc::default());
     assert_eq!(
         DeliveryFixture::next_delivery(&mut deliveries).await,
         (Agent::Codex, "codex-chat".into(), codex_request.key.clone())
@@ -1515,7 +1723,7 @@ async fn a_waiting_claude_request_does_not_hold_back_codex_in_its_discussion() {
             .expect("state"),
         Some(DeliveryState::Pending)
     );
-    claude.send_replace(true);
+    claude.resume(&());
     assert_eq!(
         DeliveryFixture::next_delivery(&mut deliveries).await,
         (
@@ -1546,8 +1754,8 @@ async fn alternating_agents_on_a_discussion_reuse_each_agents_chat() {
     let second_codex = DeliveryFixture::request(42, 13, Agent::Codex);
     fixture.bind_to_codex(&first_claude, "codex-chat").await;
     fixture.insert(&[&first_claude, &first_codex]).await;
-    let available = tokio::sync::watch::Sender::new(true);
-    let (worker, mut deliveries) = fixture.route(&available, &available, &Arc::default());
+    let running = Arc::new(Pauses::new([]));
+    let (worker, mut deliveries) = fixture.route(&running, &running, &Arc::default());
     let mut delivered = Vec::new();
     for _ in 0..2 {
         delivered.push(DeliveryFixture::next_delivery(&mut deliveries).await);
@@ -1629,100 +1837,6 @@ async fn store_work_in_the_routing_loop_keeps_routes_moving() {
 }
 
 #[tokio::test]
-async fn a_silent_disconnect_parks_requests_until_the_next_connection() {
-    let directory = tempfile::tempdir().expect("directory");
-    let runtime = Arc::new(
-        InboundRuntime::open(
-            &directory.path().join("ezra.db"),
-            Arc::new(tokio::sync::Mutex::new(
-                crate::manager::settings::Settings::default(),
-            )),
-        )
-        .await
-        .expect("runtime"),
-    );
-    let claude = tokio::sync::watch::Sender::new(true);
-    let senders = AgentSenders {
-        claude: Arc::new(AvailabilitySender(claude.clone())),
-        codex: Arc::new(AvailabilitySender::new(true)),
-    };
-    let incoming = runtime
-        .github_routing_receiver
-        .lock()
-        .await
-        .take()
-        .expect("receiver");
-    let gate = Arc::new(tokio::sync::Notify::new());
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
-    let running = Arc::clone(&runtime);
-    let operation_gate = Arc::clone(&gate);
-    let worker = tokio::spawn(async move {
-        running
-            .process_github_events("github.com", &senders, incoming, |key| {
-                let started = started.clone();
-                let gate = Arc::clone(&operation_gate);
-                let attempts = Arc::clone(&attempts);
-                async move {
-                    let released = gate.notified();
-                    tokio::pin!(released);
-                    released.as_mut().enable();
-                    started.send(key.id.clone()).expect("receiver");
-                    if key.id == "claude" && attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        released.await;
-                        return (key, Err(PollError::Unavailable));
-                    }
-                    (key, Ok(Admission::Accepted))
-                }
-            })
-            .await;
-    });
-    let request = |identifier: &str| EventKey {
-        conversation: ConversationKey {
-            source: "github:github.com".into(),
-            subject: format!("1/{identifier}"),
-        },
-        id: identifier.into(),
-    };
-    runtime.enqueue_github_event(request("claude"), Agent::Claude);
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), starts.recv())
-            .await
-            .expect("Claude request starts")
-            .expect("worker"),
-        "claude"
-    );
-    claude.send_if_modified(|available| {
-        *available = false;
-        false
-    });
-    gate.notify_waiters();
-    runtime.enqueue_github_event(request("codex"), Agent::Codex);
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), starts.recv())
-            .await
-            .expect("Codex request starts")
-            .expect("worker"),
-        "codex"
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), starts.recv())
-            .await
-            .is_err()
-    );
-    claude.send_replace(true);
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), starts.recv())
-            .await
-            .expect("Claude request restarts on the next connection")
-            .expect("worker"),
-        "claude"
-    );
-    worker.abort();
-    assert!(worker.await.expect_err("cancelled").is_cancelled());
-}
-
-#[tokio::test]
 async fn a_full_claude_budget_does_not_hold_back_codex() {
     let directory = tempfile::tempdir().expect("directory");
     let runtime = Arc::new(
@@ -1736,8 +1850,8 @@ async fn a_full_claude_budget_does_not_hold_back_codex() {
         .expect("runtime"),
     );
     let senders = AgentSenders {
-        claude: Arc::new(AvailabilitySender::new(true)),
-        codex: Arc::new(AvailabilitySender::new(true)),
+        claude: Arc::new(ResumingSender::default()),
+        codex: Arc::new(ResumingSender::default()),
     };
     let incoming = runtime
         .github_routing_receiver

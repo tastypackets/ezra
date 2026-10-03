@@ -166,13 +166,20 @@ impl InboundRuntime {
                     .await?;
                 tracing::info!(delivery_id = %event.key.delivery_id(), new_chat = event.new_chat, "GitHub trigger attached to a new chat");
             }
-            Err(MessageSendError::Unavailable) => {
+            Err(MessageSendError::Unavailable(reason)) => {
                 self.store
                     .finish_delivery(&event.key, DeliveryOutcome::Pending, None)
                     .await?;
-                return Err(PollError::Unavailable);
+                return Err(PollError::Unavailable(reason));
+            }
+            Err(MessageSendError::Paused(reason)) => {
+                self.store
+                    .finish_delivery(&event.key, DeliveryOutcome::Pending, None)
+                    .await?;
+                return Err(PollError::Paused(reason));
             }
             Err(error) => {
+                tracing::warn!(delivery_id = %event.key.delivery_id(), agent = %event.options.agent, %error, "GitHub chat creation failed before submission");
                 self.store
                     .finish_delivery(&event.key, DeliveryOutcome::Failed, None)
                     .await?;
@@ -182,7 +189,6 @@ impl InboundRuntime {
                     feedback.status = CommentStatus::Failed;
                     self.queue_github_feedback(feedback).await;
                 }
-                tracing::warn!(delivery_id = %event.key.delivery_id(), %error, "GitHub chat creation failed before submission");
                 return Ok(Admission::Failed);
             }
         }

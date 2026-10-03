@@ -143,6 +143,7 @@ impl AppState {
         match self.install_paths.link_kept_version(agent) {
             Ok(Some(version)) => {
                 tracing::info!("{agent} {version} is linked from /cache");
+                self.agent_checks.refresh(agent).await;
                 self.reconsider_remote(agent);
                 self.events.publish(Topic::Agents);
             }
@@ -562,6 +563,41 @@ mod tests {
                 Some("1.0.0")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn startup_checks_the_sign_in_of_a_version_it_links_from_the_cache() {
+        let manager = TestManager::new();
+        manager.install_fake_version(
+            Agent::Claude,
+            "1.0.0",
+            "case \"$1\" in\n  auth) echo '{\"loggedIn\":true}' ;;\nesac",
+        );
+        manager
+            .state
+            .install_paths
+            .command(Agent::Claude)
+            .remove_if_present()
+            .expect("link is removed");
+        manager
+            .state
+            .settings
+            .lock()
+            .await
+            .agent_mut(Agent::Claude)
+            .configured = true;
+        manager.state.agent_checks.refresh(Agent::Claude).await;
+        let signed_in = || {
+            manager
+                .state
+                .agent_checks
+                .sign_in(Agent::Claude)
+                .map(|sign_in| sign_in.logged_in)
+        };
+        assert_eq!(signed_in(), Some(false));
+
+        manager.state.clone().reinstall_configured_agents().await;
+        assert_eq!(signed_in(), Some(true));
     }
 
     #[tokio::test]

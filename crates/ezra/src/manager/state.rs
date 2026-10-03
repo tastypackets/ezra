@@ -78,11 +78,12 @@ impl AppState {
             .parent()
             .map_or_else(PathBuf::new, Path::to_path_buf)
             .join("remote-control");
+        let projects = ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY));
         let remote_control = Arc::new(RemoteControl::new(
             events.clone(),
             remote_control_logs.clone(),
+            &projects.0,
         ));
-        let projects = ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY));
         Self {
             claude_remote: Arc::new(ClaudeRemote::new(
                 Arc::clone(&remote_control),

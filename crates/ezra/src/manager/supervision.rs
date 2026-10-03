@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -137,7 +137,8 @@ impl FlagExt for watch::Receiver<bool> {
     }
 }
 
-/// What should be running right now. `Unknown` until the agent first answers a sign-in check.
+/// What should be running right now. `Unknown` while that cannot be told yet, as until the agent
+/// first answers a sign-in check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Wanted<L, W> {
     Off,
@@ -253,6 +254,56 @@ impl Failures {
         FIRST_RETRY_DELAY
             .saturating_mul(2_u32.saturating_pow(doublings))
             .min(LONGEST_RETRY_DELAY)
+    }
+}
+
+/// The destinations of an agent that ezra took down on purpose, as for a restart, an update, a
+/// sign-in, the manager's start or while turned off. A request that cannot reach a paused
+/// destination waits until it resumes, and one that cannot reach any other fails.
+#[derive(Debug)]
+pub struct Pauses<D> {
+    paused: SyncMutex<BTreeSet<D>>,
+    resumes: watch::Sender<()>,
+}
+
+impl<D: Ord> Pauses<D> {
+    /// Starts with `paused` paused, as they are while the manager starts.
+    pub fn new(paused: impl IntoIterator<Item = D>) -> Self {
+        Self {
+            paused: SyncMutex::new(paused.into_iter().collect()),
+            resumes: watch::Sender::new(()),
+        }
+    }
+
+    pub fn pause(&self, destination: D) {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(destination);
+    }
+
+    /// Marks `resumes` when `destination` was paused.
+    pub fn resume(&self, destination: &D) {
+        let resumed = self
+            .paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(destination);
+        if resumed {
+            self.resumes.send_replace(());
+        }
+    }
+
+    pub fn is_paused(&self, destination: &D) -> bool {
+        self.paused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(destination)
+    }
+
+    /// Marked changed whenever a destination resumes.
+    pub fn resumes(&self) -> watch::Receiver<()> {
+        self.resumes.subscribe()
     }
 }
 
@@ -772,6 +823,25 @@ mod tests {
         assert_eq!(overdue.wakes_at(), None);
         assert_eq!(overdue.pending().version, "2.1.290");
         assert!(overdue.pending().restart_by > OffsetDateTime::now_utc());
+    }
+
+    #[test]
+    fn a_destination_resumes_once_and_only_a_resume_is_marked() {
+        let pauses = Pauses::new(["projects"]);
+        let mut resumes = pauses.resumes();
+        assert!(pauses.is_paused(&"projects"));
+        assert!(!pauses.is_paused(&"folder"));
+
+        pauses.pause("folder");
+        pauses.resume(&"other");
+        assert!(!resumes.has_changed().expect("the registry is alive"));
+        pauses.resume(&"folder");
+        assert!(resumes.has_changed().expect("the registry is alive"));
+        resumes.mark_unchanged();
+        pauses.resume(&"folder");
+        assert!(!resumes.has_changed().expect("the registry is alive"));
+        assert!(!pauses.is_paused(&"folder"));
+        assert!(pauses.is_paused(&"projects"));
     }
 
     #[test]

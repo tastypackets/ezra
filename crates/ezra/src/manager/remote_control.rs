@@ -16,7 +16,6 @@ use time::Time;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
 use tokio::process::{Child, Command};
-use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, timeout};
 use utoipa::ToSchema;
@@ -29,8 +28,8 @@ use super::login::AgentCli;
 use super::processes::ProcessFamily;
 use super::state::AppState;
 use super::supervision::{
-    Failure, Failures, FlagExt, LineWatcher, OUTPUT_DRAIN_TIMEOUT, PendingUpdate, Published,
-    RECHECK_INTERVAL, RunEnd, ServerLog, ServerOutput, Signals, Supervision,
+    Failure, Failures, FlagExt, LineWatcher, OUTPUT_DRAIN_TIMEOUT, Pauses, PendingUpdate,
+    Published, RECHECK_INTERVAL, RunEnd, ServerLog, ServerOutput, Signals, Supervision,
     UPDATE_RESTART_DEADLINE, USAGE_INTERVAL, UpdateWait, Verdict, Wake, Wanted,
 };
 use crate::path_ext::PathExt;
@@ -264,6 +263,39 @@ impl RemoteControlStatus {
         self.environment_id()
             .filter(|_| self.state == ServerState::Running)
     }
+
+    /// What the server means for a request that needs it. A start after an unexpected stop
+    /// keeps `last_error` until the server connects.
+    pub fn route(&self) -> Route {
+        if let Some(environment) = self.connected_environment() {
+            return Route::Connected(environment.to_owned());
+        }
+        let after_unexpected_stop = self.last_error.is_some();
+        match self.state {
+            ServerState::Starting if !after_unexpected_stop => Route::Down("is starting"),
+            ServerState::Stopping if !after_unexpected_stop => Route::Down("is stopping"),
+            ServerState::Starting | ServerState::Stopping => {
+                Route::Down("has not connected since it stopped unexpectedly")
+            }
+            ServerState::Retrying => Route::Down("stopped unexpectedly"),
+            ServerState::Waiting => {
+                Route::Down("waits for Claude Code to be installed and signed in")
+            }
+            ServerState::Off => Route::Down("is turned off"),
+            ServerState::Running => Route::Down(
+                "shows a session link instead of an environment, as it does with Sessions per folder 1",
+            ),
+        }
+    }
+}
+
+/// What a server means for a request that needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Route {
+    /// Connected in this environment.
+    Connected(String),
+    /// Not connected. The text says why.
+    Down(&'static str),
 }
 
 /// A known reason a server stopped.
@@ -374,7 +406,8 @@ pub struct RemoteControlOverview {
 pub struct RemoteControl {
     device: Option<String>,
     servers: Published<BTreeMap<PathBuf, RemoteControlStatus>>,
-    environment_changes: watch::Sender<bool>,
+    /// The directories of servers stopped or held off on purpose, until they connect.
+    pub pauses: Pauses<PathBuf>,
     logs: PathBuf,
     pub supervision: Supervision,
 }
@@ -383,14 +416,15 @@ impl RemoteControl {
     /// How long the supervisor may take to stop its servers.
     pub const LONGEST_STOP: Duration = STOP_GRACE_PERIOD.saturating_add(OUTPUT_DRAIN_TIMEOUT);
 
-    /// Publishes every status change to `events` and keeps each server's logs under `logs`.
-    pub fn new(events: Events, logs: PathBuf) -> Self {
+    /// Publishes every status change to `events` and keeps each server's logs under `logs`. The
+    /// server for `projects` is paused until its supervisor decides.
+    pub fn new(events: Events, logs: PathBuf, projects: &Path) -> Self {
         Self {
             device: gethostname()
                 .ok()
                 .and_then(|hostname| hostname.into_string().ok()),
             servers: Published::new(BTreeMap::new(), events, Topic::RemoteControl),
-            environment_changes: watch::Sender::new(false),
+            pauses: Pauses::new([projects.to_path_buf()]),
             logs,
             supervision: Supervision::default(),
         }
@@ -398,14 +432,11 @@ impl RemoteControl {
 
     /// Whether a server is connected in an environment that sessions can be created in.
     pub fn has_environment(&self) -> bool {
-        *self.environment_changes.borrow()
-    }
-
-    /// Marked changed when a change can let a waiting session request through: a server
-    /// connects in an environment or moves to another, or a server goes away so that the
-    /// projects server takes its folder. Always holds `has_environment`.
-    pub fn environment_changes(&self) -> watch::Receiver<bool> {
-        self.environment_changes.subscribe()
+        self.servers.read(|servers| {
+            servers
+                .values()
+                .any(|status| status.connected_environment().is_some())
+        })
     }
 
     /// The directory of the server connected in `environment`.
@@ -467,30 +498,8 @@ impl RemoteControl {
     }
 
     fn update(&self, directory: &Path, change: impl FnOnce(&mut RemoteControlStatus)) {
-        self.servers.update(|servers| {
-            let before = servers.route_of(directory);
-            change(servers.entry(directory.to_path_buf()).or_default());
-            self.note_route(before, servers, directory);
-        });
-    }
-
-    fn note_route(
-        &self,
-        before: Option<Option<String>>,
-        servers: &BTreeMap<PathBuf, RemoteControlStatus>,
-        directory: &Path,
-    ) {
-        let after = servers.route_of(directory);
-        let can_help = match (&before, &after) {
-            (Some(_), None) => true,
-            (_, Some(Some(_))) => after != before,
-            _ => false,
-        };
-        let available = servers.has_environment();
-        self.environment_changes.send_if_modified(|current| {
-            *current = available;
-            can_help
-        });
+        self.servers
+            .update(|servers| change(servers.entry(directory.to_path_buf()).or_default()));
     }
 
     /// Removes the logs of folders that are not in the projects directory any more.
@@ -506,31 +515,10 @@ impl RemoteControl {
         Ok(())
     }
 
+    /// Removes the server for `directory`, so that the projects server takes its requests.
     fn forget(&self, directory: &Path) {
-        self.servers.update(|servers| {
-            let before = servers.route_of(directory);
-            servers.remove(directory);
-            self.note_route(before, servers, directory);
-        });
-    }
-}
-
-trait ServersExt {
-    /// Whether `directory` has a server, and its environment while it is connected.
-    fn route_of(&self, directory: &Path) -> Option<Option<String>>;
-
-    fn has_environment(&self) -> bool;
-}
-
-impl ServersExt for BTreeMap<PathBuf, RemoteControlStatus> {
-    fn route_of(&self, directory: &Path) -> Option<Option<String>> {
-        self.get(directory)
-            .map(|status| status.connected_environment().map(str::to_owned))
-    }
-
-    fn has_environment(&self) -> bool {
-        self.values()
-            .any(|status| status.connected_environment().is_some())
+        self.servers.update(|servers| servers.remove(directory));
+        self.pauses.resume(&directory.to_path_buf());
     }
 }
 
@@ -744,7 +732,9 @@ impl AppState {
             .remote_control
             .supervision
             .signals(self.agent_checks.watch_sign_in(Agent::Claude));
+        self.remote_control.pauses.pause(directory.clone());
         let mut failures = Failures::default();
+        let mut after_failure = false;
         loop {
             if signals.is_shutting_down() {
                 return;
@@ -763,20 +753,30 @@ impl AppState {
                     return;
                 }
                 Wanted::Off => {
+                    self.remote_control.pauses.pause(directory.clone());
                     self.idle_server(&directory, ServerState::Off, &mut signals)
                         .await
                 }
-                Wanted::Waiting(()) | Wanted::Unknown => {
+                Wanted::Waiting(()) => {
+                    self.remote_control.pauses.resume(&directory);
+                    self.idle_server(&directory, ServerState::Waiting, &mut signals)
+                        .await
+                }
+                Wanted::Unknown => {
                     self.idle_server(&directory, ServerState::Waiting, &mut signals)
                         .await
                 }
                 Wanted::Server(launch) => {
+                    if !after_failure {
+                        self.remote_control.pauses.pause(directory.clone());
+                    }
                     let started = Instant::now();
                     let end = self.run_server(&served, &launch, &mut signals).await;
                     failures.forget_after_healthy_run(started);
                     end
                 }
             };
+            after_failure = matches!(run, RunEnd::Failed(_));
             match run {
                 RunEnd::Reconsidered => {}
                 RunEnd::ShutDown => return,
@@ -792,6 +792,7 @@ impl AppState {
                         status.problem = problem;
                         status.restarts = status.restarts.saturating_add(1);
                     });
+                    self.remote_control.pauses.resume(&directory);
                     if signals.wait_for_change(failures.retry_delay()).await == Wake::ShutDown {
                         return;
                     }
@@ -822,11 +823,12 @@ impl AppState {
                 None => return Wanted::Off,
             },
         };
-        let (settings, choice) = {
+        let (settings, configured, choice) = {
             let settings = self.settings.lock().await;
             let claude = &settings.agents.claude;
             (
                 claude.remote_control.clone(),
+                claude.agent.configured,
                 folder.map(|folder| (claude.folder_choice(&folder), folder.git.is_some())),
             )
         };
@@ -835,13 +837,20 @@ impl AppState {
         if !settings.enabled || choice.as_ref().is_some_and(|choice| !choice.serve) {
             return Wanted::Off;
         }
+        let Some(sign_in) = self.agent_checks.sign_in(Agent::Claude) else {
+            return Wanted::Unknown;
+        };
         if AgentCli::installed(Agent::Claude, &self.install_paths).is_err() {
-            return Wanted::Waiting(());
+            let reinstalling =
+                configured && self.install_locks.get(Agent::Claude).try_lock().is_err();
+            return if reinstalling {
+                Wanted::Unknown
+            } else {
+                Wanted::Waiting(())
+            };
         }
-        match self.agent_checks.sign_in(Agent::Claude) {
-            Some(sign_in) if sign_in.logged_in => {}
-            Some(_) => return Wanted::Waiting(()),
-            None => return Wanted::Unknown,
+        if !sign_in.logged_in {
+            return Wanted::Waiting(());
         }
         let options = choice.map(|choice| choice.options).unwrap_or_default();
         Wanted::Server(Launch {
@@ -983,6 +992,7 @@ impl AppState {
     }
 
     async fn stop_server(&self, server: ServerRun, launch: &Launch) -> RunEnd<ServerProblem> {
+        self.remote_control.pauses.pause(launch.directory.clone());
         self.remote_control.update(&launch.directory, |status| {
             status.enter(ServerState::Stopping);
         });
@@ -1138,6 +1148,7 @@ impl LineWatcher for ClaudeLines {
                     self.directory.display()
                 );
             }
+            self.remote_control.pauses.resume(&self.directory);
         }
         true
     }
@@ -1297,6 +1308,12 @@ mod tests {
         let supervisor = tokio::spawn(state.clone().supervise_remote_control());
 
         let running = wait_for(&state, ServerState::Running).await;
+        wait_until(
+            WAIT,
+            || state.remote_control.pauses.is_paused(&state.projects.0),
+            |paused| !paused,
+        )
+        .await;
         assert_eq!(
             running.url.as_deref(),
             Some("https://claude.ai/code?environment=env_test")
@@ -1311,6 +1328,10 @@ mod tests {
             .expect("settings save");
         state.remote_control.supervision.reconsider();
         wait_for(&state, ServerState::Off).await;
+        assert!(
+            state.remote_control.pauses.is_paused(&state.projects.0),
+            "a server turned off keeps its requests waiting"
+        );
 
         state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
@@ -1370,6 +1391,12 @@ mod tests {
                 .is_some_and(|error| error.ends_with("Workspace not trusted")),
             "{retrying:?}"
         );
+        wait_until(
+            WAIT,
+            || state.remote_control.pauses.is_paused(&state.projects.0),
+            |paused| !paused,
+        )
+        .await;
 
         state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
@@ -1928,69 +1955,91 @@ mod tests {
     }
 
     #[test]
-    fn environment_changes_follow_which_servers_are_connected_and_where() {
-        let remote_control = RemoteControl::new(Events::default(), PathBuf::new());
+    fn requests_find_the_servers_that_are_connected_and_where() {
+        let remote_control =
+            RemoteControl::new(Events::default(), PathBuf::new(), Path::new("/projects"));
         let (projects, folder) = (Path::new("/projects"), Path::new("/projects/folder"));
-        let mut changes = remote_control.environment_changes();
         let link = |environment: &str| format!("https://claude.ai/code?environment={environment}");
-        let mut changed = || {
-            let changed = changes.has_changed().expect("the sender is alive");
-            changes.mark_unchanged();
-            changed
-        };
 
         remote_control.update(projects, |status| status.enter(ServerState::Starting));
-        assert!(!changed(), "a starting server cannot take requests");
         assert!(!remote_control.has_environment());
-        remote_control.update(projects, |status| status.enter(ServerState::Retrying));
-        assert!(!changed());
-
         remote_control.update(projects, |status| status.connect(link("env_projects")));
-        assert!(changed());
         assert!(remote_control.has_environment());
-        remote_control.update(projects, |status| {
-            status.usage = Some(ServerUsage {
-                sessions: 1,
-                capacity: None,
-                memory_bytes: 1,
-            });
-            status.restarts = 3;
-        });
-        assert!(!changed(), "usage leaves the environments alone");
-
-        remote_control.update(folder, |status| status.enter(ServerState::Starting));
-        assert!(!changed());
         remote_control.update(folder, |status| status.connect(link("env_folder")));
-        assert!(
-            changed(),
-            "a folder connected while the projects server stayed"
-        );
-        assert!(remote_control.has_environment());
         assert_eq!(
             remote_control.serving("env_folder").as_deref(),
             Some(folder)
         );
         remote_control.update(folder, |status| status.connect(link("env_other")));
-        assert!(changed());
         assert_eq!(remote_control.serving("env_folder"), None);
 
+        remote_control.pauses.pause(folder.to_path_buf());
         remote_control.forget(folder);
-        assert!(changed());
-        remote_control.forget(folder);
-        assert!(!changed());
-
-        remote_control.update(projects, |status| status.enter(ServerState::Stopping));
         assert!(
-            !changed(),
-            "a server going down cannot let a request through"
+            !remote_control.pauses.is_paused(&folder.to_path_buf()),
+            "a server that is gone leaves its requests to the projects server"
         );
+        remote_control.update(projects, |status| status.enter(ServerState::Stopping));
         assert!(!remote_control.has_environment());
         assert_eq!(remote_control.serving("env_projects"), None);
+    }
 
-        remote_control.update(projects, |status| status.connect(link("env_projects")));
-        assert!(changed(), "the server is back in its environment");
-        remote_control.update(projects, |status| status.connect(link("env_projects")));
-        assert!(!changed(), "the same link again");
+    #[test]
+    fn a_server_that_is_not_connected_says_why() {
+        let status = |state: ServerState, last_error: Option<&str>, url: Option<&str>| {
+            RemoteControlStatus {
+                state,
+                url: url.map(str::to_owned),
+                last_error: last_error.map(str::to_owned),
+                ..RemoteControlStatus::default()
+            }
+            .route()
+        };
+        let crash = Some("exit status: 1");
+        assert_eq!(
+            status(
+                ServerState::Running,
+                None,
+                Some("https://claude.ai/code?environment=env_01AB")
+            ),
+            Route::Connected("env_01AB".to_owned())
+        );
+        for (state, last_error, url, why) in [
+            (ServerState::Starting, None, None, "is starting"),
+            (ServerState::Stopping, None, None, "is stopping"),
+            (ServerState::Off, crash, None, "is turned off"),
+            (
+                ServerState::Starting,
+                crash,
+                None,
+                "has not connected since it stopped unexpectedly",
+            ),
+            (
+                ServerState::Stopping,
+                crash,
+                None,
+                "has not connected since it stopped unexpectedly",
+            ),
+            (ServerState::Retrying, crash, None, "stopped unexpectedly"),
+            (
+                ServerState::Waiting,
+                None,
+                None,
+                "waits for Claude Code to be installed and signed in",
+            ),
+            (
+                ServerState::Running,
+                None,
+                Some("https://claude.ai/code/session_01AB"),
+                "shows a session link instead of an environment, as it does with Sessions per folder 1",
+            ),
+        ] {
+            assert_eq!(
+                status(state, last_error, url),
+                Route::Down(why),
+                "{state:?}"
+            );
+        }
     }
 
     #[test]
@@ -2238,6 +2287,122 @@ mod tests {
 
         state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_start_on_purpose_is_paused_until_it_connects_and_a_retry_is_not() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let crashed = directory.path().join("crashed");
+        let connects = directory.path().join("connects");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            &format!(
+                "if [ -f {crashed} ]; then while [ ! -f {connects} ]; do sleep 0.05; done; echo 'https://claude.ai/code?environment=env_test'; exec sleep 60; else touch {crashed}; exit 1; fi",
+                crashed = crashed.display(),
+                connects = connects.display()
+            ),
+        );
+        let projects = state.projects.0.clone();
+        let paused = || state.remote_control.pauses.is_paused(&projects);
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Retrying).await;
+        wait_until(WAIT, paused, |paused| !paused).await;
+
+        state.remote_control.supervision.reconsider();
+        wait_for(&state, ServerState::Starting).await;
+        assert!(!paused(), "a start after a crash keeps failing requests");
+
+        state.remote_control.supervision.restart();
+        wait_until(WAIT, paused, |paused| *paused).await;
+        wait_for(&state, ServerState::Starting).await;
+        assert!(paused(), "a restart keeps requests waiting");
+
+        fs::write(&connects, "").expect("marker is written");
+        wait_for(&state, ServerState::Running).await;
+        wait_until(WAIT, paused, |paused| !paused).await;
+
+        state.remote_control.supervision.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn a_server_stays_paused_until_claude_code_answers_a_sign_in_check() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let marker = directory.path().join("answer");
+        let state = fake_claude(&manager, directory.path(), "");
+        manager.install_fake_cli(
+            Agent::Claude,
+            &format!(
+                "case \"$1\" in\n  auth) while [ ! -f {marker} ]; do sleep 0.05; done; echo '{{\"loggedIn\":false}}' ;;\nesac",
+                marker = marker.display()
+            ),
+        );
+        let projects = state.projects.0.clone();
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_until(
+            WAIT,
+            || state.remote_control.status_of(&projects),
+            |status| status.as_ref().map(|status| status.state) == Some(ServerState::Waiting),
+        )
+        .await;
+        assert_eq!(state.agent_checks.sign_in(Agent::Claude), None);
+        assert!(state.remote_control.pauses.is_paused(&projects));
+
+        fs::write(&marker, "").expect("marker is written");
+        wait_until(
+            WAIT,
+            || state.remote_control.pauses.is_paused(&projects),
+            |paused| !paused,
+        )
+        .await;
+        assert_eq!(
+            state
+                .remote_control
+                .status_of(&projects)
+                .map(|status| status.route()),
+            Some(Route::Down(
+                "waits for Claude Code to be installed and signed in"
+            ))
+        );
+
+        state.remote_control.supervision.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn only_a_set_up_claude_code_that_is_installed_again_leaves_the_server_unknown() {
+        let manager = TestManager::new();
+        let state = manager.state.clone();
+        let projects = state.projects.0.clone();
+        let set_up = |configured| {
+            state.update_settings(move |settings| {
+                settings.agents.claude.agent.configured = configured;
+                Ok::<(), crate::manager::settings::SettingsError>(())
+            })
+        };
+        state.agent_checks.refresh(Agent::Claude).await;
+        set_up(true).await.expect("settings save");
+        let install = state.install_locks.get(Agent::Claude).lock().await;
+        assert!(matches!(
+            state.wanted_server(&Served::Projects, &projects).await,
+            Wanted::Unknown
+        ));
+
+        drop(install);
+        assert!(matches!(
+            state.wanted_server(&Served::Projects, &projects).await,
+            Wanted::Waiting(())
+        ));
+
+        set_up(false).await.expect("settings save");
+        let _uninstall = state.install_locks.get(Agent::Claude).lock().await;
+        assert!(matches!(
+            state.wanted_server(&Served::Projects, &projects).await,
+            Wanted::Waiting(())
+        ));
     }
 
     /// A `claude` signed in once `marker` exists, which `auth login` creates.
