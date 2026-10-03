@@ -96,6 +96,8 @@ Successful scans save the timestamp from GitHub's first response, and the next s
 
 Each discussion keeps one chat per agent. A request goes to the discussion's chat for its shortcut's agent, so Codex and Claude Code requests on the same discussion reach separate chats that later requests of each agent reuse. Requests in a discussion wait for older requests of the same agent, not for the other agent's requests.
 
+A request waits while Ezra has its agent's server stopped or starting on purpose, such as while Ezra starts, after a settings change, an update or a sign-in through Ezra, or while the server is turned off. Otherwise a request that cannot reach its agent fails right away, such as when the server stopped unexpectedly or the agent is not installed or not signed in. A request that waits longer than the waiting request expiry fails.
+
 When a discussion has no chat for the requested agent, Ezra reads GitHub's direct issue and pull request links, including closed and merged pull requests. Multiple links can reuse one distinct mapped chat of the requested agent on the same Ezra host, including chats in another checkout. Ezra starts a separate chat when no linked discussion has a mapping for that agent or the mappings point to different chats. Failed lookups and unfinished linked routing stay pending. Existing discussion mappings keep their chat when GitHub links change.
 
 Add `--new` immediately after the command, such as `/ezra --new fix this`, to start a fresh chat of the shortcut's agent for that discussion. Older requests for that agent are delivered first. The discussion's chat for the other agent stays mapped, and other discussions sharing the old chat keep their route. A saved request still runs if its comment is edited or deleted. Edits do not change its original routing instruction.
@@ -112,7 +114,7 @@ Archived Codex chats are restored automatically when possible. A definitively mi
 
 A shortcut set to Claude Code creates a Claude Code session in the Remote Control environment of the served folder that holds the repository's checkout, so the Claude app lists it with that folder's other sessions. A repository whose folder is not served, or that has no unique checkout, gets a session from the `/home/dev/projects` server. Each session counts against the server's Sessions per folder, and in worktree mode Remote Control gives it a worktree of its own.
 
-Requests wait while the server they need is not connected, until it connects or the request expires. A server whose Sessions per folder is 1 shows a session link instead of its environment, so requests that need it wait.
+Each Claude Code server pauses on its own, so while one restarts, requests for other served folders go through. A request also fails right away when its server cannot take sessions, such as a server whose Sessions per folder is 1 and so shows a session link instead of its environment.
 
 Ezra queues each request in the session with `claude -p --cloud <session>`, and delivered means that command reported the message as queued. Model and effort apply when Ezra creates the session, and later requests keep the session's model and effort.
 

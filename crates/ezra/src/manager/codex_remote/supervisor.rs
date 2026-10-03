@@ -43,6 +43,7 @@ impl AppState {
             .signals(self.agent_checks.watch_sign_in(Agent::Codex));
         let mut failures = Failures::default();
         let mut look_for_foreign = true;
+        let mut after_failure = false;
         let mut older = None;
         if let Some(codex_home) = self.install_paths.config_directory(Agent::Codex) {
             DaemonLeftovers::of(codex_home).remove_when_unused().await;
@@ -59,6 +60,7 @@ impl AppState {
             };
             let run = match wanted {
                 Wanted::Off => {
+                    codex_remote.pauses.pause(());
                     self.idle_codex_server(
                         |status| status.idle(ServerState::Off, None),
                         &mut signals,
@@ -66,6 +68,9 @@ impl AppState {
                     .await
                 }
                 Wanted::Waiting(problem) => {
+                    if !codex_remote.is_held() {
+                        codex_remote.pauses.resume(&());
+                    }
                     self.idle_codex_server(
                         |status| status.idle(ServerState::Waiting, problem),
                         &mut signals,
@@ -89,6 +94,9 @@ impl AppState {
                     }
                 }
                 Wanted::Server(launch) => {
+                    if !after_failure {
+                        codex_remote.pauses.pause(());
+                    }
                     let started = Instant::now();
                     let end = self
                         .run_codex_server(&launch, &mut signals, &mut older)
@@ -104,6 +112,7 @@ impl AppState {
                     end
                 }
             };
+            after_failure = matches!(run, RunEnd::Failed(_));
             match run {
                 RunEnd::Reconsidered => {}
                 RunEnd::ShutDown => break,
@@ -112,6 +121,7 @@ impl AppState {
                     failures.add_one();
                     tracing::warn!("Codex remote control stopped: {}", failure.message);
                     codex_remote.status.update(|status| status.fail(failure));
+                    codex_remote.pauses.resume(&());
                     if signals.wait_for_change(failures.retry_delay()).await == Wake::ShutDown {
                         break;
                     }
@@ -134,23 +144,35 @@ impl AppState {
     }
 
     async fn wanted_codex_server(&self) -> Wanted<CodexLaunch, Option<CodexProblem>> {
-        let settings = self.settings.lock().await.agents.codex.remote_control;
+        let (settings, configured) = {
+            let settings = self.settings.lock().await;
+            let codex = &settings.agents.codex;
+            (codex.remote_control, codex.agent.configured)
+        };
         if !settings.enabled {
             return Wanted::Off;
         }
+        let Some(sign_in) = self.agent_checks.sign_in(Agent::Codex) else {
+            return Wanted::Unknown;
+        };
         let installed = self.install_paths.installed_command(Agent::Codex);
         let codex_home = self.install_paths.config_directory(Agent::Codex);
         let (Some((codex, version)), Some(codex_home)) = (installed, codex_home) else {
-            return Wanted::Waiting(None);
+            let reinstalling =
+                configured && self.install_locks.get(Agent::Codex).try_lock().is_err();
+            return if reinstalling {
+                Wanted::Unknown
+            } else {
+                Wanted::Waiting(None)
+            };
         };
         if self.codex_remote.is_held() {
             return Wanted::Waiting(None);
         }
-        let sign_in = match self.agent_checks.sign_in(Agent::Codex) {
-            None => return Wanted::Unknown,
-            Some(sign_in) if !sign_in.logged_in => return Wanted::Waiting(None),
-            Some(sign_in) => sign_in.method,
-        };
+        if !sign_in.logged_in {
+            return Wanted::Waiting(None);
+        }
+        let sign_in = sign_in.method;
         if sign_in.is_some_and(|method| !method.uses_codex_backend()) {
             return Wanted::Waiting(Some(CodexProblem::NotChatGpt));
         }
@@ -386,6 +408,7 @@ impl AppState {
     }
 
     async fn stop_codex_server(&self, server: CodexServerRun) {
+        self.codex_remote.pauses.pause(());
         self.codex_remote
             .with_control(|control| control.client = None);
         self.codex_remote
@@ -440,6 +463,7 @@ impl CodexRun {
         }
         tracing::info!("Codex remote control answers as {}", relay.server_name);
         codex_remote.with_control(|control| control.client = Some(Arc::clone(&client)));
+        codex_remote.pauses.resume(&());
         self.chats = Chats::default();
         let usage = self.usage();
         codex_remote.status.update(|status| {
@@ -1250,11 +1274,21 @@ mod tests {
         let manager = manager(BUDGET);
         let cookie = manager.logged_in().await;
         let mut events = Box::pin(manager.state.events.stream());
+        assert!(
+            manager.state.codex_remote.pauses.is_paused(&()),
+            "requests wait while the manager starts Codex"
+        );
         let supervisor = supervise(&manager);
         wait_until(
             WAIT,
             || manager.state.agent_checks.sign_in(Agent::Codex),
             Option::is_some,
+        )
+        .await;
+        wait_until(
+            WAIT,
+            || manager.state.codex_remote.pauses.is_paused(&()),
+            |paused| !paused,
         )
         .await;
 
@@ -1264,6 +1298,7 @@ mod tests {
         let _fake = serve_control(&manager, "connected").await;
 
         let running = status_until(&manager, connected).await;
+        assert!(!manager.state.codex_remote.pauses.is_paused(&()));
         assert_eq!(running.server_name.as_deref(), Some("ezra-dev"));
         assert_eq!(running.server_version.as_deref(), Some("0.157.1"));
         assert_eq!((running.problem, running.restarts), (None, 0));
@@ -1360,11 +1395,16 @@ mod tests {
             (stopped.relay, stopped.server_version, stopped.restarts),
             (None, None, 0)
         );
+        assert!(
+            manager.state.codex_remote.pauses.is_paused(&()),
+            "requests wait while Codex is turned off"
+        );
         first.wait_until_gone().await;
 
         save(&manager, &cookie, CodexRemoteSettings::default()).await;
         servers_started(&manager, 2).await;
         status_until(&manager, connected).await;
+        assert!(!manager.state.codex_remote.pauses.is_paused(&()));
 
         shut_down(&manager, supervisor).await;
     }
@@ -2461,6 +2501,12 @@ mod tests {
         let supervisor = supervise(&manager);
 
         let retrying = status_until(&manager, |status| status.state == ServerState::Retrying).await;
+        wait_until(
+            WAIT,
+            || manager.state.codex_remote.pauses.is_paused(&()),
+            |paused| !paused,
+        )
+        .await;
         assert_eq!(retrying.restarts, 1);
         assert_eq!(retrying.problem, Some(CodexProblem::NotAllowed));
         assert!(
@@ -3652,11 +3698,21 @@ mod tests {
                 ["start", "stop", "logout", "check"]
             );
             assert!(manager.state.codex_remote.is_held());
+            assert!(
+                manager.state.codex_remote.pauses.is_paused(&()),
+                "requests wait while ezra signs Codex out"
+            );
             assert_eq!(servers(&manager).len(), 1);
             fs::remove_file(&checking).expect("the sign-in check goes on");
         });
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        wait_until(
+            WAIT,
+            || manager.state.codex_remote.pauses.is_paused(&()),
+            |paused| !paused,
+        )
+        .await;
         let waiting = status_until(&manager, |status| status.state == ServerState::Waiting).await;
         assert_eq!((waiting.problem, waiting.restarts), (None, 0));
         sleep(Duration::from_millis(300)).await;

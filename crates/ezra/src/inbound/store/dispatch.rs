@@ -54,6 +54,12 @@ pub enum DispatchOutcome {
     },
     Unavailable {
         event: EventKey,
+        reason: String,
+    },
+    /// The destination is down on purpose, and the request stays pending.
+    Paused {
+        event: EventKey,
+        reason: String,
     },
     Uncertain {
         event: EventKey,
@@ -83,6 +89,11 @@ impl EventStore {
             .await
     }
 
+    #[tracing::instrument(
+        level = "warn",
+        skip_all,
+        fields(host_id = %scope.host_id, agent = %scope.agent, delivery_id = tracing::field::Empty)
+    )]
     pub async fn dispatch_event(
         &self,
         key: &EventKey,
@@ -111,7 +122,7 @@ impl EventStore {
             ),
         };
         let delivery_id = event.key.delivery_id();
-        tracing::Span::current().record("delivery_id", delivery_id.as_str());
+        tracing::Span::current().record("delivery_id", tracing::field::display(&delivery_id));
         let target = self
             .find_binding(&event.key.conversation, event.options.agent)
             .await?
@@ -139,7 +150,6 @@ impl EventStore {
                     .mark_rejected(&event.key)
                     .await
                     .map_err(|_| StoreError::DeliveryChanged)?;
-                tracing::info!(%reason, "creating replacement chat for inbound delivery");
                 match sender
                     .create_chat(
                         &target.workspace,
@@ -149,6 +159,7 @@ impl EventStore {
                     .await
                 {
                     Ok(chat_id) => {
+                        tracing::info!(%reason, "replacing the chat for an inbound delivery");
                         self.replace_chat_for_delivery(&event.key, &target, &chat_id)
                             .await?;
                         sender
@@ -193,13 +204,21 @@ impl EventStore {
                     reason: "agent receipt does not match the message".to_owned(),
                 },
             ),
-            Err(MessageSendError::Unavailable) if !attempted => (
+            Err(MessageSendError::Unavailable(reason)) if !attempted => (
                 DeliveryOutcome::Pending,
                 DispatchOutcome::Unavailable {
                     event: event.key.clone(),
+                    reason,
                 },
             ),
-            Err(MessageSendError::Unavailable) => (
+            Err(MessageSendError::Paused(reason)) if !attempted => (
+                DeliveryOutcome::Pending,
+                DispatchOutcome::Paused {
+                    event: event.key.clone(),
+                    reason,
+                },
+            ),
+            Err(MessageSendError::Unavailable(_) | MessageSendError::Paused(_)) => (
                 DeliveryOutcome::Uncertain,
                 DispatchOutcome::Uncertain {
                     event: event.key.clone(),
@@ -236,8 +255,11 @@ impl EventStore {
             DispatchOutcome::Delivered { receipt, .. } => {
                 tracing::info!(native_message_id = %receipt.native_message_id, "inbound message delivered");
             }
-            DispatchOutcome::Unavailable { .. } => {
-                tracing::debug!("inbound message deferred because the agent is unavailable");
+            DispatchOutcome::Unavailable { reason, .. } => {
+                tracing::debug!(%reason, "inbound message deferred because the agent is unavailable");
+            }
+            DispatchOutcome::Paused { reason, .. } => {
+                tracing::debug!(%reason, "inbound message deferred while its destination is paused");
             }
             DispatchOutcome::Uncertain { reason, .. } => {
                 tracing::warn!(%reason, "inbound submission could not be confirmed");
@@ -268,6 +290,7 @@ mod tests {
     enum Reply {
         Accepted,
         Unavailable,
+        PausedAfterAttempt,
         Uncertain,
         Mismatched,
     }
@@ -319,7 +342,12 @@ mod tests {
                     native_message_id: "native-1".to_owned(),
                     delivery_id: event.key.delivery_id(),
                 }),
-                Reply::Unavailable => Err(MessageSendError::Unavailable),
+                Reply::Unavailable => Err(MessageSendError::Unavailable(
+                    "control connection closed".to_owned(),
+                )),
+                Reply::PausedAfterAttempt => {
+                    Err(MessageSendError::Paused("server restarts".to_owned()))
+                }
                 Reply::Uncertain => {
                     Err(MessageSendError::Uncertain("connection closed".to_owned()))
                 }
@@ -568,6 +596,7 @@ mod tests {
         for (reply, expected_state) in [
             (Reply::Accepted, DeliveryState::Delivered),
             (Reply::Unavailable, DeliveryState::Pending),
+            (Reply::PausedAfterAttempt, DeliveryState::Uncertain),
             (Reply::Uncertain, DeliveryState::Uncertain),
             (Reply::Mismatched, DeliveryState::Uncertain),
         ] {
@@ -703,7 +732,7 @@ mod tests {
                 messages: Mutex::default(),
             };
             match outcome {
-                DispatchOutcome::Unavailable { .. } => {
+                DispatchOutcome::Unavailable { .. } | DispatchOutcome::Paused { .. } => {
                     assert!(matches!(
                         store.dispatch_next(SCOPE, &accepted).await.expect("retry"),
                         DispatchOutcome::Delivered { .. }
