@@ -1090,7 +1090,7 @@ mod tests {
             Some(DeliveryState::Delivered)
         );
         let binding = store
-            .find_binding(&event.key.conversation)
+            .find_binding(&event.key.conversation, Agent::Claude)
             .await
             .expect("binding is read")
             .expect("still bound");

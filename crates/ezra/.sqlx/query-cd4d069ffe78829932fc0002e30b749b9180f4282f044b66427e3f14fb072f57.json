@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT EXISTS (\n                   SELECT 1 FROM inbound_conversations WHERE source = ?1 AND subject = ?2\n               ) AS \"already_bound!: bool\"",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?3\n               ) AS \"already_bound!: bool\"",
   "describe": {
     "columns": [
       {
@@ -11,11 +11,11 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 3
     },
     "nullable": [
       false
     ]
   },
-  "hash": "5eda2772084ae7b423ba6e6237c3b0a2d43eaabd86aae5279c4c25b5e41d6e7d"
+  "hash": "cd4d069ffe78829932fc0002e30b749b9180f4282f044b66427e3f14fb072f57"
 }

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::{EventStore, StoreError};
+use crate::agent::Agent;
 use crate::inbound::{ConversationKey, MAX_IDENTIFIER_BYTES};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,10 +83,11 @@ impl EventStore {
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let already_bound = sqlx::query_scalar!(
             r#"SELECT EXISTS (
-                   SELECT 1 FROM inbound_conversations WHERE source = ?1 AND subject = ?2
+                   SELECT 1 FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?3
                ) AS "already_bound!: bool""#,
             conversation.source,
             conversation.subject,
+            target.agent,
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -104,9 +106,10 @@ impl EventStore {
         .fetch_one(&mut *transaction)
         .await?;
         sqlx::query!(
-            "INSERT INTO inbound_conversations (source, subject, session_id) VALUES (?1, ?2, ?3)",
+            "INSERT INTO inbound_conversations (source, subject, agent, session_id) VALUES (?1, ?2, ?3, ?4)",
             conversation.source,
             conversation.subject,
+            target.agent,
             session_id,
         )
         .execute(&mut *transaction)
@@ -118,15 +121,18 @@ impl EventStore {
     pub async fn find_binding(
         &self,
         conversation: &ConversationKey,
+        agent: Agent,
     ) -> Result<Option<SessionTarget>, StoreError> {
+        let agent = agent.command_name();
         let target = sqlx::query_as!(
             SessionTarget,
             "SELECT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace
              FROM inbound_conversations AS conversations
              JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id
-             WHERE conversations.source = ?1 AND conversations.subject = ?2",
+             WHERE conversations.source = ?1 AND conversations.subject = ?2 AND conversations.agent = ?3",
             conversation.source,
             conversation.subject,
+            agent,
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -161,7 +167,7 @@ mod tests {
         let store = EventStore::open(&path).await.expect("store opens");
         assert_eq!(
             store
-                .find_binding(&conversation)
+                .find_binding(&conversation, Agent::Codex)
                 .await
                 .expect("missing lookup"),
             None
@@ -176,7 +182,7 @@ mod tests {
         store.pool.close().await;
 
         let store = EventStore::open(&path).await.expect("store reopens");
-        let mut replacement = SessionTarget::binding_example("host-b", "claude");
+        let mut replacement = SessionTarget::binding_example("host-b", "codex");
         replacement.chat_id = "different-chat".to_owned();
         replacement.workspace = "/home/dev/projects/other".to_owned();
         for target in [&original_target, &replacement] {
@@ -188,12 +194,30 @@ mod tests {
                 BindOutcome::AlreadyBound
             );
         }
+        let claude_target = SessionTarget {
+            agent: "claude".to_owned(),
+            ..replacement
+        };
         assert_eq!(
             store
-                .find_binding(&conversation)
+                .bind_conversation(&conversation, &claude_target)
+                .await
+                .expect("another agent binds separately"),
+            BindOutcome::Created
+        );
+        assert_eq!(
+            store
+                .find_binding(&conversation, Agent::Codex)
                 .await
                 .expect("binding lookup"),
             Some(original_target)
+        );
+        assert_eq!(
+            store
+                .find_binding(&conversation, Agent::Claude)
+                .await
+                .expect("other agent lookup"),
+            Some(claude_target)
         );
     }
 
@@ -208,7 +232,7 @@ mod tests {
             subject: "repo/issue-1".to_owned(),
         };
         let first_target = SessionTarget::binding_example("host-a", "codex");
-        let second_target = SessionTarget::binding_example("host-b", "claude");
+        let second_target = SessionTarget::binding_example("host-b", "codex");
         let (first_result, second_result) = tokio::join!(
             first_store.bind_conversation(&conversation, &first_target),
             second_store.bind_conversation(&conversation, &second_target)
@@ -222,14 +246,14 @@ mod tests {
         };
         assert_eq!(
             first_store
-                .find_binding(&conversation)
+                .find_binding(&conversation, Agent::Codex)
                 .await
                 .expect("first lookup"),
             Some(expected_target.clone())
         );
         assert_eq!(
             second_store
-                .find_binding(&conversation)
+                .find_binding(&conversation, Agent::Codex)
                 .await
                 .expect("second lookup"),
             Some(expected_target)
@@ -272,7 +296,7 @@ mod tests {
             );
             assert_eq!(
                 store
-                    .find_binding(&conversation)
+                    .find_binding(&conversation, agent.parse().expect("known agent"))
                     .await
                     .expect("binding lookup"),
                 Some(target)
@@ -318,7 +342,7 @@ mod tests {
             ));
             assert_eq!(
                 store
-                    .find_binding(&conversation)
+                    .find_binding(&conversation, Agent::Codex)
                     .await
                     .expect("invalid binding lookup"),
                 None
