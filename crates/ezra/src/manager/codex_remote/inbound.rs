@@ -7,7 +7,7 @@ use ezra::inbound::codex::{
     UnarchiveChat, UpdateChatSettings,
 };
 use ezra::inbound::{
-    MessageAttempt, MessageReceipt, MessageSendError, MessageSender, UntrackedAttempt,
+    MessageAttempt, MessageReceipt, MessageSendError, MessageSender, Shortcut, UntrackedAttempt,
 };
 
 use super::CodexRemote;
@@ -239,6 +239,7 @@ impl MessageSender for CodexRemote {
         &self,
         workspace: &str,
         chat_name: Option<&str>,
+        _options: &Shortcut,
     ) -> Result<String, MessageSendError> {
         let client = self.client().ok_or(MessageSendError::Unavailable)?;
         let project_id = client.project_for_workspace(workspace).await.map_err(|error| {
@@ -1025,7 +1026,11 @@ mod tests {
                 .reply("project/list", [Reply::Result(json!({"data": []}))]);
             fixture.fake.reply("thread/start", [reply]);
             assert_eq!(
-                fixture.remote.create_chat("/workspace", None).await.is_ok(),
+                fixture
+                    .remote
+                    .create_chat("/workspace", None, &Shortcut::default())
+                    .await
+                    .is_ok(),
                 succeeds
             );
             assert_eq!(fixture.fake.requests_after_initialize().len(), 2);
@@ -1056,7 +1061,11 @@ mod tests {
         assert_eq!(
             fixture
                 .remote
-                .create_chat("/home/dev/projects/repo/worktree", None)
+                .create_chat(
+                    "/home/dev/projects/repo/worktree",
+                    None,
+                    &Shortcut::default()
+                )
                 .await
                 .expect("created"),
             "new-chat"
@@ -1093,7 +1102,15 @@ mod tests {
             assert_eq!(
                 fixture
                     .remote
-                    .create_chat("/workspace", Some("owner/repo#42: Fix crash"))
+                    .create_chat(
+                        "/workspace",
+                        Some("owner/repo#42: Fix crash"),
+                        &Shortcut {
+                            model: Some("chosen-model".into()),
+                            effort: Some("high".into()),
+                            ..Shortcut::default()
+                        }
+                    )
                     .await
                     .expect("chat survives naming failure"),
                 "new-chat"
@@ -1124,7 +1141,13 @@ mod tests {
                 "thread": {"id": "new-chat", "status": {"type": "idle"}}, "cwd": "/workspace"
             }))],
         );
-        assert!(fixture.remote.create_chat("/workspace", None).await.is_ok());
+        assert!(
+            fixture
+                .remote
+                .create_chat("/workspace", None, &Shortcut::default())
+                .await
+                .is_ok()
+        );
         let requests = fixture.fake.requests_after_initialize();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].1["cwd"], "/workspace");
@@ -1142,7 +1165,13 @@ mod tests {
                 "thread": {"id": "new-chat", "status": {"type": "idle"}}, "cwd": "/workspace"
             }))],
         );
-        assert!(fixture.remote.create_chat("/workspace", None).await.is_ok());
+        assert!(
+            fixture
+                .remote
+                .create_chat("/workspace", None, &Shortcut::default())
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1156,7 +1185,10 @@ mod tests {
             ],
         );
         assert!(matches!(
-            fixture.remote.create_chat("/workspace", None).await,
+            fixture
+                .remote
+                .create_chat("/workspace", None, &Shortcut::default())
+                .await,
             Err(MessageSendError::Uncertain(_))
         ));
         assert_eq!(fixture.fake.requests_after_initialize().len(), 2);
@@ -1170,7 +1202,10 @@ mod tests {
             "thread": {"id": "new-chat", "projectId": "wrong", "status": {"type": "idle"}}, "cwd": "/workspace"
         }))]);
         assert!(matches!(
-            fixture.remote.create_chat("/workspace", None).await,
+            fixture
+                .remote
+                .create_chat("/workspace", None, &Shortcut::default())
+                .await,
             Err(MessageSendError::Uncertain(_))
         ));
         assert_eq!(fixture.fake.requests_after_initialize().len(), 4);

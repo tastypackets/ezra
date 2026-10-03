@@ -149,7 +149,7 @@ impl InboundRuntime {
             RoutingOutcome::Create { workspace } => workspace,
         };
         match sender
-            .create_chat(&workspace, event.chat_name.as_deref())
+            .create_chat(&workspace, event.chat_name.as_deref(), &event.options)
             .await
         {
             Ok(chat_id) => {
