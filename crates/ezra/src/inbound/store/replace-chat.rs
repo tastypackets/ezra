@@ -1,4 +1,5 @@
 use super::{EventStore, SessionTarget, StoreError};
+use crate::agent::Agent;
 use crate::inbound::EventKey;
 
 impl EventStore {
@@ -14,6 +15,7 @@ impl EventStore {
             ..expected.clone()
         };
         replacement.validate_binding(&event.conversation)?;
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let result = sqlx::query!(
             "UPDATE inbound_sessions
              SET chat_id = ?1, last_used_at = MAX(last_used_at, unixepoch()), initial_context_pending = 1
@@ -22,6 +24,7 @@ impl EventStore {
                    SELECT conversation.session_id FROM inbound_conversations AS conversation
                    JOIN inbound_events AS event
                      ON event.source = conversation.source AND event.subject = conversation.subject
+                    AND COALESCE(event.requested_agent, ?9) = conversation.agent
                    WHERE event.source = ?6 AND event.subject = ?7 AND event.event_id = ?8
                      AND event.delivery_state = 'delivering'
                )
@@ -29,6 +32,7 @@ impl EventStore {
                    SELECT 1 FROM inbound_conversations AS related
                    JOIN inbound_events AS unresolved
                      ON unresolved.source = related.source AND unresolved.subject = related.subject
+                    AND COALESCE(unresolved.requested_agent, ?9) = related.agent
                    WHERE related.session_id = inbound_sessions.id
                      AND unresolved.delivery_state = 'delivering'
                      AND NOT (unresolved.source = ?6 AND unresolved.subject = ?7 AND unresolved.event_id = ?8)
@@ -41,6 +45,7 @@ impl EventStore {
             event.conversation.source,
             event.conversation.subject,
             event.id,
+            unrecorded_agent,
         )
         .execute(&self.pool)
         .await?;
@@ -118,7 +123,11 @@ mod tests {
             followup.key.conversation.subject = "pr-2".to_owned();
             fixture
                 .store
-                .link_conversation(&followup.key.conversation, &fixture.event.key.conversation)
+                .link_conversation(
+                    &followup.key.conversation,
+                    &fixture.event.key.conversation,
+                    Agent::Codex,
+                )
                 .await
                 .expect("PR shares chat");
             fixture
@@ -149,7 +158,10 @@ mod tests {
             };
             for conversation in [&fixture.event.key.conversation, &followup.key.conversation] {
                 assert_eq!(
-                    reopened.find_binding(conversation).await.expect("binding"),
+                    reopened
+                        .find_binding(conversation, Agent::Codex)
+                        .await
+                        .expect("binding"),
                     Some(replacement.clone())
                 );
             }
@@ -230,7 +242,11 @@ mod tests {
         followup.key.id = "comment-2".to_owned();
         fixture
             .store
-            .link_conversation(&followup.key.conversation, &fixture.event.key.conversation)
+            .link_conversation(
+                &followup.key.conversation,
+                &fixture.event.key.conversation,
+                Agent::Codex,
+            )
             .await
             .expect("shared chat");
         fixture
@@ -265,7 +281,7 @@ mod tests {
             assert_eq!(
                 fixture
                     .store
-                    .find_binding(conversation)
+                    .find_binding(conversation, Agent::Codex)
                     .await
                     .expect("binding")
                     .expect("shared replacement")
@@ -357,7 +373,7 @@ mod tests {
         assert_eq!(
             fixture
                 .store
-                .find_binding(&fixture.event.key.conversation)
+                .find_binding(&fixture.event.key.conversation, Agent::Codex)
                 .await
                 .expect("unchanged binding"),
             Some(fixture.target)
@@ -391,7 +407,7 @@ mod tests {
         assert_eq!(
             fixture
                 .store
-                .find_binding(&fixture.event.key.conversation)
+                .find_binding(&fixture.event.key.conversation, Agent::Codex)
                 .await
                 .expect("binding")
                 .expect("bound")
@@ -427,7 +443,7 @@ mod tests {
         assert_eq!(
             fixture
                 .store
-                .find_binding(&fixture.event.key.conversation)
+                .find_binding(&fixture.event.key.conversation, Agent::Codex)
                 .await
                 .expect("original binding"),
             Some(fixture.target)
@@ -435,10 +451,49 @@ mod tests {
         assert_eq!(
             fixture
                 .store
-                .find_binding(&unrelated)
+                .find_binding(&unrelated, Agent::Codex)
                 .await
                 .expect("unrelated binding"),
             Some(occupied)
         );
+    }
+
+    #[tokio::test]
+    async fn replacement_changes_only_the_requesting_agents_chat() {
+        let fixture = Fixture::new().await;
+        let claude_target = SessionTarget {
+            agent: "claude".to_owned(),
+            chat_id: "claude-chat".to_owned(),
+            ..fixture.target.clone()
+        };
+        fixture
+            .store
+            .bind_conversation(&fixture.event.key.conversation, &claude_target)
+            .await
+            .expect("Claude chat binds");
+        fixture.store.claim_next(None).await.expect("claim");
+        assert!(matches!(
+            fixture
+                .store
+                .replace_chat_for_delivery(&fixture.event.key, &claude_target, "new-chat")
+                .await,
+            Err(StoreError::DeliveryChanged)
+        ));
+        fixture
+            .store
+            .replace_chat_for_delivery(&fixture.event.key, &fixture.target, "new-chat")
+            .await
+            .expect("Codex chat is replaced");
+        for (agent, chat_id) in [(Agent::Codex, "new-chat"), (Agent::Claude, "claude-chat")] {
+            assert_eq!(
+                fixture
+                    .store
+                    .find_binding(&fixture.event.key.conversation, agent)
+                    .await
+                    .expect("binding reads")
+                    .map(|target| target.chat_id),
+                Some(chat_id.to_owned())
+            );
+        }
     }
 }

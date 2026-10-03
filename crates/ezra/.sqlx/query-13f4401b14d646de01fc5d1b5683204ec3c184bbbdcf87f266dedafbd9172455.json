@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH idle_sessions AS (\n                 SELECT sessions.id, sessions.last_used_at,\n                        (SELECT COUNT(*) FROM inbound_conversations\n                         WHERE session_id = sessions.id) AS conversation_count\n                 FROM inbound_sessions AS sessions\n                 WHERE NOT EXISTS (\n                     SELECT 1 FROM inbound_conversations AS conversations\n                     JOIN inbound_events AS events\n                       ON events.source = conversations.source\n                      AND events.subject = conversations.subject\n                      AND COALESCE(events.requested_agent, ?3) = conversations.agent\n                     WHERE conversations.session_id = sessions.id\n                       AND events.delivery_state IN ('pending', 'delivering')\n                 )\n             ), ranked_sessions AS (\n                 SELECT id, last_used_at,\n                        SUM(conversation_count) OVER (\n                            ORDER BY last_used_at DESC, id DESC ROWS UNBOUNDED PRECEDING\n                        ) AS conversation_count\n                 FROM idle_sessions\n             )\n             DELETE FROM inbound_sessions WHERE id IN (\n                 SELECT id FROM ranked_sessions\n                 WHERE last_used_at < ?1 OR conversation_count > ?2\n             )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "13f4401b14d646de01fc5d1b5683204ec3c184bbbdcf87f266dedafbd9172455"
+}

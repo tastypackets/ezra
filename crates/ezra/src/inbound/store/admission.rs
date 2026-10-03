@@ -77,10 +77,11 @@ impl EventStore {
         sqlx::query!(
             "UPDATE inbound_sessions SET last_used_at = MAX(last_used_at, unixepoch())
              WHERE id = (
-                 SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2
+                 SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?3
              )",
             event.key.conversation.source,
             event.key.conversation.subject,
+            requested_agent,
         )
         .execute(&mut *transaction)
         .await?;

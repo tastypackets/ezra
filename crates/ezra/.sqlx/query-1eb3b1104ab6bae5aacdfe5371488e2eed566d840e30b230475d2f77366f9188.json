@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                SELECT 1 FROM inbound_events AS older\n                WHERE older.source = ?1 AND older.subject = ?2 AND older.rowid < ?3\n                  AND older.delivery_state IN ('pending', 'delivering')\n                  AND COALESCE(older.requested_agent, ?5) = ?4\n            ) AS \"blocked!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "blocked!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1eb3b1104ab6bae5aacdfe5371488e2eed566d840e30b230475d2f77366f9188"
+}

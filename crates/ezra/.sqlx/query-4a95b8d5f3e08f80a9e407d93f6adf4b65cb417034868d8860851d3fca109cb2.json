@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events AS claimed SET delivery_state = 'delivering'\n             WHERE claimed.source = ?1 AND claimed.subject = ?2 AND claimed.event_id = ?3\n               AND claimed.delivery_state = 'pending'\n               AND NOT EXISTS (\n                   SELECT 1 FROM inbound_conversations AS conversations\n                   WHERE conversations.source = ?1 AND conversations.subject = ?2\n                     AND conversations.agent = COALESCE(claimed.requested_agent, ?4)\n               )\n               AND NOT EXISTS (\n                   SELECT 1 FROM inbound_events AS unresolved\n                   WHERE unresolved.source = ?1 AND unresolved.subject = ?2\n                     AND unresolved.delivery_state = 'delivering'\n                     AND COALESCE(unresolved.requested_agent, ?4) = COALESCE(claimed.requested_agent, ?4)\n               )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "4a95b8d5f3e08f80a9e407d93f6adf4b65cb417034868d8860851d3fca109cb2"
+}

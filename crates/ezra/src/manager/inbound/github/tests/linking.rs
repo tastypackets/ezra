@@ -1,4 +1,5 @@
 use super::*;
+use ezra::agent::Agent;
 use ezra::inbound::store::{DispatchOutcome, SessionTarget};
 
 struct Fixture {
@@ -122,7 +123,11 @@ async fn a_pull_request_with_multiple_links_reuses_the_issue_chat_and_stays_stic
     fixture
         .runtime
         .store
-        .link_conversation(&Fixture::conversation(13), &Fixture::conversation(12))
+        .link_conversation(
+            &Fixture::conversation(13),
+            &Fixture::conversation(12),
+            Agent::Codex,
+        )
         .await
         .expect("second issue shares chat");
     fixture.source.links.lock().expect("links").insert(
@@ -137,7 +142,7 @@ async fn a_pull_request_with_multiple_links_reuses_the_issue_chat_and_stays_stic
         fixture
             .runtime
             .store
-            .find_binding(&Fixture::conversation(42))
+            .find_binding(&Fixture::conversation(42), Agent::Codex)
             .await
             .expect("pull route"),
         Some(target)
@@ -265,7 +270,7 @@ async fn account_changes_do_not_cancel_an_already_accepted_request() {
         fixture
             .runtime
             .store
-            .find_binding(&Fixture::conversation(42))
+            .find_binding(&Fixture::conversation(42), Agent::Codex)
             .await
             .expect("accepted pull keeps its binding"),
         Some(fixture.target("chat-old"))
@@ -313,7 +318,7 @@ async fn new_chat_drains_older_requests_then_moves_only_this_discussion_once() {
         fixture
             .runtime
             .store
-            .find_binding(&Fixture::conversation(12))
+            .find_binding(&Fixture::conversation(12), Agent::Codex)
             .await
             .expect("issue route")
             .expect("issue binding")
@@ -377,7 +382,7 @@ async fn an_uncertain_fresh_chat_creation_keeps_the_old_route_and_does_not_retry
         fixture
             .runtime
             .store
-            .find_binding(&Fixture::conversation(42))
+            .find_binding(&Fixture::conversation(42), Agent::Codex)
             .await
             .expect("old route")
             .expect("binding")
@@ -452,4 +457,80 @@ async fn a_deleted_comment_after_lookup_failure_still_retries_the_saved_request(
         .expect("durable request retries without comment");
     assert_eq!(fixture.sender.creations.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.drain().await[0].0, "chat-old");
+}
+
+#[tokio::test]
+async fn a_claude_request_reads_links_when_its_discussion_has_only_a_codex_chat() {
+    let fixture = Fixture::new().await;
+    let codex = fixture.target("chat-codex");
+    let claude = SessionTarget {
+        agent: "claude".into(),
+        ..fixture.target("chat-claude")
+    };
+    for (number, target) in [(42, &codex), (12, &claude)] {
+        fixture
+            .runtime
+            .store
+            .bind_conversation(&Fixture::conversation(number), target)
+            .await
+            .expect("discussion binds");
+    }
+    fixture
+        .source
+        .links
+        .lock()
+        .expect("links")
+        .insert(42, vec![Fixture::conversation(12)]);
+    let mut settings = InboundSettings::default();
+    settings.shortcuts.insert(
+        "/ezra-claude".into(),
+        ezra::inbound::Shortcut {
+            agent: Agent::Claude,
+            ..Default::default()
+        },
+    );
+    *fixture.source.comments.lock().expect("comments") =
+        vec![Fixture::comment(42, 10, "/ezra-claude fix this")];
+    fixture
+        .runtime
+        .scan_repository(
+            &fixture.source,
+            "github.com",
+            &fixture.sender,
+            &settings,
+            "owner/repo",
+            "/home/dev/projects/repo",
+        )
+        .await
+        .expect("linked Claude request routes");
+    assert_eq!(fixture.source.link_reads.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.sender.creations.load(Ordering::SeqCst), 0);
+    for (agent, target) in [(Agent::Claude, claude), (Agent::Codex, codex)] {
+        assert_eq!(
+            fixture
+                .runtime
+                .store
+                .find_binding(&Fixture::conversation(42), agent)
+                .await
+                .expect("pull route"),
+            Some(target)
+        );
+    }
+    let outcome = fixture
+        .runtime
+        .store
+        .dispatch_next(
+            DeliveryScope {
+                host_id: &fixture.runtime.host_id,
+                agent: "claude",
+            },
+            &fixture.sender,
+        )
+        .await
+        .expect("dispatch");
+    assert!(matches!(outcome, DispatchOutcome::Delivered { .. }));
+    assert_eq!(
+        fixture.sender.deliveries.lock().expect("deliveries")[0].0,
+        "chat-claude"
+    );
 }

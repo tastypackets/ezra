@@ -718,7 +718,7 @@ async fn newer_comments_wait_for_next_scan_and_unadded_repositories_route_to_hom
     assert_eq!(
         runtime
             .store
-            .find_binding(&pending[0].key.conversation)
+            .find_binding(&pending[0].key.conversation, Agent::Codex)
             .await
             .expect("binding")
             .expect("bound")
@@ -1149,18 +1149,13 @@ async fn an_offline_agent_parks_only_its_own_requests() {
 }
 
 #[tokio::test]
-async fn an_available_agent_that_refuses_work_waits_for_its_next_change() {
-    let directory = tempfile::tempdir().expect("directory");
-    let runtime = Arc::new(
-        InboundRuntime::open(
-            &directory.path().join("ezra.db"),
-            Arc::new(tokio::sync::Mutex::new(
-                crate::manager::settings::Settings::default(),
-            )),
-        )
-        .await
-        .expect("runtime"),
-    );
+async fn an_available_agent_that_refuses_a_request_fails_it() {
+    let fixture = DeliveryFixture::new().await;
+    let runtime = Arc::clone(&fixture.runtime);
+    let request = DeliveryFixture::request(42, 10, Agent::Codex);
+    fixture.insert(&[&request]).await;
+    let (status_sender, mut statuses) = tokio::sync::mpsc::channel(8);
+    *runtime.github_feedback_sender.lock().await = Some(status_sender);
     let codex = tokio::sync::watch::Sender::new(true);
     let senders = AgentSenders {
         claude: Arc::new(AvailabilitySender::new(true)),
@@ -1187,24 +1182,27 @@ async fn an_available_agent_that_refuses_work_waits_for_its_next_change() {
             })
             .await;
     });
-    let request = EventKey {
-        conversation: ConversationKey {
-            source: "github:github.com".into(),
-            subject: "1/2".into(),
-        },
-        id: "1".into(),
-    };
-    runtime.enqueue_github_event(request.clone(), Agent::Codex);
     attempts.reach(1).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    runtime.enqueue_github_event(request, Agent::Codex);
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    let feedback = tokio::time::timeout(Duration::from_secs(2), statuses.recv())
+        .await
+        .expect("the failure is reported")
+        .expect("feedback sender");
+    assert_eq!(
+        (feedback.key, feedback.status),
+        (request.key.clone(), CommentStatus::Failed)
+    );
+    assert_eq!(
+        runtime
+            .store
+            .delivery_state(&request.key)
+            .await
+            .expect("state"),
+        Some(DeliveryState::Failed)
+    );
     codex.send_replace(true);
-    attempts.reach(2).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(statuses.try_recv().is_err());
     worker.abort();
     assert!(worker.await.expect_err("cancelled").is_cancelled());
 }
@@ -1424,7 +1422,7 @@ impl DeliveryFixture {
         let binding = self
             .runtime
             .store
-            .find_binding(&event.key.conversation)
+            .find_binding(&event.key.conversation, event.options.agent)
             .await
             .expect("binding reads")
             .expect("bound");
@@ -1486,14 +1484,38 @@ async fn each_request_is_delivered_by_its_agent_and_waits_only_for_it() {
 }
 
 #[tokio::test]
-async fn switching_agents_on_a_discussion_starts_a_chat_for_each_agent_in_order() {
+async fn a_waiting_claude_request_does_not_hold_back_codex_in_its_discussion() {
     let fixture = DeliveryFixture::new().await;
-    let claude_request = DeliveryFixture::request(42, 10, Agent::Claude);
+    let mut claude_request = DeliveryFixture::request(42, 10, Agent::Claude);
+    claude_request.new_chat = true;
     let codex_request = DeliveryFixture::request(42, 11, Agent::Codex);
-    fixture.bind_to_codex(&claude_request, "codex-chat").await;
+    fixture.bind_to_codex(&codex_request, "codex-chat").await;
     fixture.insert(&[&claude_request, &codex_request]).await;
-    let available = tokio::sync::watch::Sender::new(true);
-    let (worker, mut deliveries) = fixture.route(&available, &available, &Arc::default());
+    let claude = tokio::sync::watch::Sender::new(false);
+    let (worker, mut deliveries) = fixture.route(
+        &claude,
+        &tokio::sync::watch::Sender::new(true),
+        &Arc::default(),
+    );
+    assert_eq!(
+        DeliveryFixture::next_delivery(&mut deliveries).await,
+        (Agent::Codex, "codex-chat".into(), codex_request.key.clone())
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), deliveries.recv())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .store
+            .delivery_state(&claude_request.key)
+            .await
+            .expect("state"),
+        Some(DeliveryState::Pending)
+    );
+    claude.send_replace(true);
     assert_eq!(
         DeliveryFixture::next_delivery(&mut deliveries).await,
         (
@@ -1503,17 +1525,79 @@ async fn switching_agents_on_a_discussion_starts_a_chat_for_each_agent_in_order(
         )
     );
     assert_eq!(
-        DeliveryFixture::next_delivery(&mut deliveries).await,
-        (
-            Agent::Codex,
-            "codex-chat-1".into(),
-            codex_request.key.clone()
-        )
+        fixture.delivered_to(&codex_request).await,
+        ("codex".into(), "codex-chat".into())
     );
     assert_eq!(
-        fixture.delivered_to(&codex_request).await,
-        ("codex".into(), "codex-chat-1".into())
+        fixture.delivered_to(&claude_request).await,
+        ("claude".into(), "claude-chat-1".into())
     );
+    worker.abort();
+    assert!(worker.await.expect_err("cancelled").is_cancelled());
+}
+
+#[tokio::test]
+async fn alternating_agents_on_a_discussion_reuse_each_agents_chat() {
+    let fixture = DeliveryFixture::new().await;
+    let mut first_claude = DeliveryFixture::request(42, 10, Agent::Claude);
+    first_claude.new_chat = true;
+    let first_codex = DeliveryFixture::request(42, 11, Agent::Codex);
+    let second_claude = DeliveryFixture::request(42, 12, Agent::Claude);
+    let second_codex = DeliveryFixture::request(42, 13, Agent::Codex);
+    fixture.bind_to_codex(&first_claude, "codex-chat").await;
+    fixture.insert(&[&first_claude, &first_codex]).await;
+    let available = tokio::sync::watch::Sender::new(true);
+    let (worker, mut deliveries) = fixture.route(&available, &available, &Arc::default());
+    let mut delivered = Vec::new();
+    for _ in 0..2 {
+        delivered.push(DeliveryFixture::next_delivery(&mut deliveries).await);
+    }
+    fixture.insert(&[&second_claude, &second_codex]).await;
+    for request in [&second_claude, &second_codex] {
+        fixture
+            .runtime
+            .enqueue_github_event(request.key.clone(), request.options.agent);
+    }
+    for _ in 0..2 {
+        delivered.push(DeliveryFixture::next_delivery(&mut deliveries).await);
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), deliveries.recv())
+            .await
+            .is_err()
+    );
+    let delivered_by = |agent: Agent| -> Vec<(String, EventKey)> {
+        delivered
+            .iter()
+            .filter(|(delivering_agent, _, _)| *delivering_agent == agent)
+            .map(|(_, chat_id, key)| (chat_id.clone(), key.clone()))
+            .collect()
+    };
+    assert_eq!(
+        delivered_by(Agent::Claude),
+        [
+            ("claude-chat-1".to_owned(), first_claude.key.clone()),
+            ("claude-chat-1".to_owned(), second_claude.key.clone())
+        ]
+    );
+    assert_eq!(
+        delivered_by(Agent::Codex),
+        [
+            ("codex-chat".to_owned(), first_codex.key.clone()),
+            ("codex-chat".to_owned(), second_codex.key.clone())
+        ]
+    );
+    for (request, chat) in [
+        (&first_claude, ("claude", "claude-chat-1")),
+        (&first_codex, ("codex", "codex-chat")),
+        (&second_claude, ("claude", "claude-chat-1")),
+        (&second_codex, ("codex", "codex-chat")),
+    ] {
+        assert_eq!(
+            fixture.delivered_to(request).await,
+            (chat.0.to_owned(), chat.1.to_owned())
+        );
+    }
     worker.abort();
     assert!(worker.await.expect_err("cancelled").is_cancelled());
 }

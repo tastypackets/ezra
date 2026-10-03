@@ -13,6 +13,7 @@ impl EventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::Agent;
     use crate::inbound::ConversationKey;
     use crate::inbound::store::SessionTarget;
 
@@ -46,7 +47,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .find_binding(&conversation)
+                .find_binding(&conversation, Agent::Codex)
                 .await
                 .expect("session lookup"),
             Some(target)

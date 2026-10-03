@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_sessions SET last_used_at = MAX(last_used_at, unixepoch()), initial_context_pending = 0\n                 WHERE id = (\n                     SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?3\n                 )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c6f81beab8602f71136d01057f21c4337be792114fdcb3c5a94e37535c1dd9ed"
+}

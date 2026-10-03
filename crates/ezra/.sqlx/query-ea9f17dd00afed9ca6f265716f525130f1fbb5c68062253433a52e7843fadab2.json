@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM inbound_events\n                   WHERE source = ?1 AND subject = ?2\n                     AND delivery_state IN ('delivering', 'uncertain')\n                     AND COALESCE(requested_agent, ?4) = ?3\n               ) AS \"unresolved!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "unresolved!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ea9f17dd00afed9ca6f265716f525130f1fbb5c68062253433a52e7843fadab2"
+}

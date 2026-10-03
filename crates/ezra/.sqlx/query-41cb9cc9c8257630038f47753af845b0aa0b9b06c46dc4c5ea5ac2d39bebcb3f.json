@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET delivery_state = ?1, delivered_chat_name = ?5\n               WHERE source = ?2 AND subject = ?3 AND event_id = ?4\n                 AND delivery_state = 'delivering'\n               RETURNING COALESCE(requested_agent, ?6) AS \"agent!: String\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "agent!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "41cb9cc9c8257630038f47753af845b0aa0b9b06c46dc4c5ea5ac2d39bebcb3f"
+}

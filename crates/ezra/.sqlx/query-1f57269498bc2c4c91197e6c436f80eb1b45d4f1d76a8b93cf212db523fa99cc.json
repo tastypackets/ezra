@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT events.subject, events.event_id, events.actor,\n                      events.created_at AS \"created_at: time::OffsetDateTime\", events.message, events.initial_context,\n                      events.requested_agent, events.requested_model, events.requested_effort,\n                      events.chat_name, events.source_url, events.new_chat AS \"new_chat!: bool\"\n               FROM inbound_events AS events\n               WHERE events.delivery_state = 'pending' AND events.source = ?1\n                 AND substr(events.subject, 1, length(?2)) = ?2\n                 AND ((events.new_chat = 1 AND events.new_chat_applied = 0) OR NOT EXISTS (\n                     SELECT 1 FROM inbound_conversations AS conversations\n                     WHERE conversations.source = events.source AND conversations.subject = events.subject\n                 ))\n               ORDER BY events.rowid",
+  "query": "SELECT events.subject, events.event_id, events.actor,\n                      events.created_at AS \"created_at: time::OffsetDateTime\", events.message, events.initial_context,\n                      events.requested_agent, events.requested_model, events.requested_effort,\n                      events.chat_name, events.source_url, events.new_chat AS \"new_chat!: bool\"\n               FROM inbound_events AS events\n               WHERE events.delivery_state = 'pending' AND events.source = ?1\n                 AND substr(events.subject, 1, length(?2)) = ?2\n                 AND ((events.new_chat = 1 AND events.new_chat_applied = 0) OR NOT EXISTS (\n                     SELECT 1 FROM inbound_conversations AS conversations\n                     WHERE conversations.source = events.source AND conversations.subject = events.subject\n                       AND conversations.agent = COALESCE(events.requested_agent, ?3)\n                 ))\n               ORDER BY events.rowid",
   "describe": {
     "columns": [
       {
@@ -137,7 +137,7 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 3
     },
     "nullable": [
       false,
@@ -154,5 +154,5 @@
       false
     ]
   },
-  "hash": "efb5d93daa20ecf9ddfc4fd6cec92ed5c6cd3a48fb60027105fb9c5d6ff40d75"
+  "hash": "1f57269498bc2c4c91197e6c436f80eb1b45d4f1d76a8b93cf212db523fa99cc"
 }
