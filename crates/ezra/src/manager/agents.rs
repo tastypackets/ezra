@@ -104,6 +104,7 @@ pub enum InstallError {
 /// sign-in, settings and sessions.
 #[derive(Debug, Clone)]
 pub struct InstallPaths {
+    home: PathBuf,
     bin_directory: PathBuf,
     versions_root: PathBuf,
     claude_config_directory: Option<PathBuf>,
@@ -113,6 +114,7 @@ pub struct InstallPaths {
 impl InstallPaths {
     pub fn under_home(home: &Path) -> Self {
         Self {
+            home: home.to_path_buf(),
             bin_directory: home.join(".local/bin"),
             versions_root: home.join(".local/share"),
             claude_config_directory: None,
@@ -144,6 +146,11 @@ impl InstallPaths {
             codex_config_directory: Some(codex),
             ..self
         }
+    }
+
+    /// The home directory the agents run with.
+    pub fn home(&self) -> &Path {
+        &self.home
     }
 
     pub fn config_directory(&self, agent: Agent) -> Option<&Path> {
