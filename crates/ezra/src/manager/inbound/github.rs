@@ -108,7 +108,11 @@ impl InboundRuntime {
             .await?;
         if !expired.is_empty() {
             for key in &expired {
-                if let Some(event) = self.store.get(key).await?
+                let event = self.store.get(key).await.unwrap_or_else(|error| {
+                    tracing::warn!(delivery_id = %key.delivery_id(), %error, "expired GitHub request has no feedback");
+                    None
+                });
+                if let Some(event) = event
                     && let Some(host) = key.conversation.source.strip_prefix("github:")
                     && let Some(mut feedback) = GitHubFeedback::from_event(&event, host)
                 {
@@ -124,12 +128,7 @@ impl InboundRuntime {
         Ok(())
     }
 
-    pub(super) async fn poll_github(
-        &self,
-        source: &GitTools,
-        projects: &ProjectsDirectory,
-        _sender: &impl MessageSender,
-    ) {
+    pub(super) async fn poll_github(&self, source: &GitTools, projects: &ProjectsDirectory) {
         loop {
             let settings = self.settings.lock().await.inbound.clone();
             match projects
@@ -280,11 +279,6 @@ impl InboundRuntime {
                         continue;
                     }
                 };
-                if shortcut.1.agent != ezra::agent::Agent::Codex {
-                    tracing::warn!(comment_id = %fetched.comment.id, "GitHub trigger agent is not supported by this adapter");
-                    self.queue_github_feedback(feedback).await;
-                    continue;
-                }
                 let issue = match source.issue(repository_name, number).await {
                     Ok(issue) => issue,
                     Err(error) => {

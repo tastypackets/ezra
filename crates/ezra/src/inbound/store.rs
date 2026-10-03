@@ -58,18 +58,28 @@ pub enum StoreError {
     UnknownAgent(#[from] UnknownAgent),
 }
 
+impl Agent {
+    /// Requests saved before shortcuts selected an agent have none.
+    const UNRECORDED: Self = Self::Codex;
+
+    fn stored(agent: Option<&str>) -> Result<Self, UnknownAgent> {
+        agent.map_or(Ok(Self::UNRECORDED), str::parse)
+    }
+}
+
 impl Shortcut {
-    /// Requests saved before shortcuts selected an agent have none and use Codex.
     fn stored(
         agent: Option<String>,
         model: Option<String>,
         effort: Option<String>,
-    ) -> Result<Self, UnknownAgent> {
-        Ok(Self {
-            agent: agent.as_deref().map_or(Ok(Agent::Codex), str::parse)?,
+    ) -> Result<Self, StoreError> {
+        let shortcut = Self {
+            agent: Agent::stored(agent.as_deref())?,
             model,
             effort,
-        })
+        };
+        shortcut.validate()?;
+        Ok(shortcut)
     }
 }
 
@@ -119,18 +129,31 @@ impl EventStore {
     }
 
     /// Run only during exclusive startup, before any delivery workers start.
-    pub async fn fail_unknown_agents(&self) -> Result<u64, StoreError> {
+    pub async fn fail_unknown_agents(&self) -> Result<Vec<(EventKey, UnknownAgent)>, StoreError> {
         let known = serde_json::to_string(&Agent::ALL).expect("agent names serialize");
-        let result = sqlx::query!(
-            "UPDATE inbound_events SET delivery_state = 'failed'
-             WHERE delivery_state IN ('pending', 'delivering') AND attempted_at IS NULL
-               AND requested_agent IS NOT NULL
-               AND requested_agent NOT IN (SELECT value FROM json_each(?1))",
+        let records = sqlx::query!(
+            r#"UPDATE inbound_events SET delivery_state = 'failed'
+               WHERE delivery_state IN ('pending', 'delivering') AND attempted_at IS NULL
+                 AND requested_agent IS NOT NULL
+                 AND requested_agent NOT IN (SELECT value FROM json_each(?1))
+               RETURNING source, subject, event_id, requested_agent AS "requested_agent!""#,
             known,
         )
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(result.rows_affected())
+        Ok(records
+            .into_iter()
+            .map(|record| {
+                let key = EventKey {
+                    conversation: super::ConversationKey {
+                        source: record.source,
+                        subject: record.subject,
+                    },
+                    id: record.event_id,
+                };
+                (key, UnknownAgent(record.requested_agent))
+            })
+            .collect())
     }
 }
 
@@ -320,6 +343,12 @@ mod tests {
         .expect("existing request inserts");
         pool.close().await;
         let store = EventStore::open(&path).await.expect("database reopens");
+        let waiting = store
+            .waiting_events("github:github.com")
+            .await
+            .expect("old request waits");
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].1, Agent::Codex);
         let event = store
             .claim_next(None)
             .await
@@ -329,6 +358,34 @@ mod tests {
         assert_eq!(event.message, "Continue");
         assert_eq!(event.options, Shortcut::default());
         assert_eq!(event.options.agent, Agent::Codex);
+    }
+
+    #[tokio::test]
+    async fn stored_options_are_validated_when_read() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("database opens");
+        sqlx::query(
+            "INSERT INTO inbound_events (source, subject, event_id, actor, created_at, message, requested_agent, requested_model)
+             VALUES ('github:github.com', '1234/87', '456', '789', '2026-09-29T10:00:00Z', 'Continue', 'claude', '--settings=x')",
+        )
+        .execute(&store.pool)
+        .await
+        .expect("tampered request inserts");
+        let key = EventKey {
+            conversation: ConversationKey {
+                source: "github:github.com".to_owned(),
+                subject: "1234/87".to_owned(),
+            },
+            id: "456".to_owned(),
+        };
+        assert!(matches!(
+            store.get(&key).await,
+            Err(StoreError::InvalidEvent(InvalidEvent::LeadingHyphen {
+                field: "model"
+            }))
+        ));
     }
 
     #[tokio::test]
@@ -370,8 +427,15 @@ mod tests {
             Err(StoreError::UnknownAgent(agent)) if agent.0 == "gemini"
         ));
         assert_eq!(
+            store
+                .waiting_events("github:github.com")
+                .await
+                .expect("known requests still load"),
+            [(known.key.clone(), Agent::Codex)]
+        );
+        assert_eq!(
             store.fail_unknown_agents().await.expect("sweep succeeds"),
-            1
+            [(unknown.clone(), UnknownAgent("gemini".to_owned()))]
         );
         assert_eq!(
             store.delivery_state(&unknown).await.expect("state reads"),
@@ -394,7 +458,13 @@ mod tests {
             store.delivery_state(&known.key).await.expect("state reads"),
             Some(DeliveryState::Pending)
         );
-        assert_eq!(store.fail_unknown_agents().await.expect("sweep repeats"), 0);
+        assert!(
+            store
+                .fail_unknown_agents()
+                .await
+                .expect("sweep repeats")
+                .is_empty()
+        );
     }
 
     #[tokio::test]

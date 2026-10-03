@@ -733,3 +733,598 @@ async fn crossed_unbound_backlogs_with_later_resets_can_make_progress() {
         RoutingOutcome::Ready
     );
 }
+
+impl Fixture {
+    fn claude_event(subject: &str, id: &str, new_chat: bool) -> InboundEvent {
+        let mut event = Self::event(subject, id, new_chat);
+        event.options.agent = crate::agent::Agent::Claude;
+        event
+    }
+
+    fn claude_target(&self, chat_id: &str) -> SessionTarget {
+        SessionTarget {
+            agent: "claude".into(),
+            chat_id: chat_id.into(),
+            ..self.target.clone()
+        }
+    }
+
+    fn claude_scope(&self) -> DeliveryScope<'_> {
+        DeliveryScope {
+            host_id: &self.target.host_id,
+            agent: "claude",
+        }
+    }
+
+    async fn sessions(&self, agent: &str) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM inbound_sessions WHERE agent = ?1")
+            .bind(agent)
+            .fetch_one(&self.store.pool)
+            .await
+            .expect("sessions count")
+    }
+}
+
+#[tokio::test]
+async fn a_request_for_another_agent_moves_the_discussion_to_a_new_chat() {
+    let fixture = Fixture::new().await;
+    let switch = Fixture::claude_event("issue", "2", false);
+    let later = Fixture::event("issue", "3", false);
+    fixture
+        .store
+        .bind_conversation(&switch.key.conversation, &fixture.target)
+        .await
+        .expect("discussion binds to Codex");
+    for event in [&switch, &later] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&switch.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("switch routes"),
+        RoutingOutcome::Create {
+            workspace: "/repo".into()
+        }
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_event(&later.key, fixture.scope())
+            .await
+            .expect("later Codex request waits"),
+        None
+    );
+    let claude = fixture.claude_target("claude-chat");
+    fixture
+        .store
+        .finish_routing(&switch.key, &claude)
+        .await
+        .expect("switch commits");
+    assert_eq!(
+        fixture
+            .store
+            .find_binding(&switch.key.conversation)
+            .await
+            .expect("route reads"),
+        Some(claude.clone())
+    );
+    assert_eq!(fixture.sessions("codex").await, 0);
+    assert_eq!(
+        fixture
+            .store
+            .claim_next(Some(fixture.scope()))
+            .await
+            .expect("Codex claim"),
+        None
+    );
+    let claimed = fixture
+        .store
+        .claim_next(Some(fixture.claude_scope()))
+        .await
+        .expect("Claude claim")
+        .expect("switch request");
+    assert_eq!(claimed.key, switch.key);
+    assert!(claimed.new_chat);
+    fixture
+        .store
+        .finish_delivery(&switch.key, DeliveryOutcome::Delivered, None)
+        .await
+        .expect("switch delivers");
+    assert_eq!(
+        fixture
+            .store
+            .claim_event(&later.key, fixture.scope())
+            .await
+            .expect("Codex request no longer matches the route"),
+        None
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&later.key, &[], fixture.scope(), "/repo")
+            .await
+            .expect("Codex request switches back"),
+        RoutingOutcome::Create {
+            workspace: "/repo".into()
+        }
+    );
+}
+
+#[tokio::test]
+async fn same_agent_requests_keep_the_bound_and_linked_chats() {
+    let fixture = Fixture::new().await;
+    let issue = Fixture::event("issue", "1", false);
+    let pull = Fixture::event("pull", "2", false);
+    fixture
+        .store
+        .bind_conversation(&issue.key.conversation, &fixture.target)
+        .await
+        .expect("issue binds");
+    for event in [&issue, &pull] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&issue.key, &[], fixture.scope(), "/changed")
+            .await
+            .expect("bound request routes"),
+        RoutingOutcome::Ready
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(
+                &pull.key,
+                std::slice::from_ref(&issue.key.conversation),
+                fixture.scope(),
+                "/changed"
+            )
+            .await
+            .expect("linked request routes"),
+        RoutingOutcome::Ready
+    );
+    for event in [&issue, &pull] {
+        assert_eq!(
+            fixture.store.get(&event.key).await.expect("event reads"),
+            Some(event.clone())
+        );
+        assert_eq!(
+            fixture
+                .store
+                .find_binding(&event.key.conversation)
+                .await
+                .expect("route reads"),
+            Some(fixture.target.clone())
+        );
+        assert_eq!(
+            fixture
+                .store
+                .delivery_state(&event.key)
+                .await
+                .expect("state"),
+            Some(DeliveryState::Pending)
+        );
+    }
+    assert_eq!(fixture.sessions("codex").await, 1);
+}
+
+#[tokio::test]
+async fn a_new_chat_can_change_agent_but_still_waits_for_another_host() {
+    let fixture = Fixture::new().await;
+    let local = Fixture::claude_event("local", "1", true);
+    let foreign = Fixture::claude_event("foreign", "2", true);
+    fixture
+        .store
+        .bind_conversation(&local.key.conversation, &fixture.target)
+        .await
+        .expect("local discussion binds");
+    fixture
+        .store
+        .bind_conversation(
+            &foreign.key.conversation,
+            &SessionTarget {
+                host_id: "host-b".into(),
+                chat_id: "chat-b".into(),
+                ..fixture.target.clone()
+            },
+        )
+        .await
+        .expect("foreign discussion binds");
+    for event in [&local, &foreign] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&local.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("new chat routes"),
+        RoutingOutcome::Create {
+            workspace: "/repo".into()
+        }
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&foreign.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("foreign new chat routes"),
+        RoutingOutcome::Deferred
+    );
+}
+
+#[tokio::test]
+async fn linked_discussions_share_only_chats_of_the_requested_agent() {
+    let fixture = Fixture::new().await;
+    let codex_issue = Fixture::event("codex-issue", "1", false);
+    let claude_issue = Fixture::event("claude-issue", "2", false);
+    let first_pull = Fixture::claude_event("first-pull", "3", false);
+    let second_pull = Fixture::claude_event("second-pull", "4", false);
+    fixture
+        .store
+        .bind_conversation(&codex_issue.key.conversation, &fixture.target)
+        .await
+        .expect("Codex issue binds");
+    for event in [&first_pull, &second_pull] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(
+                &first_pull.key,
+                std::slice::from_ref(&codex_issue.key.conversation),
+                fixture.claude_scope(),
+                "/repo"
+            )
+            .await
+            .expect("Claude request linked to a Codex chat"),
+        RoutingOutcome::Create {
+            workspace: "/repo".into()
+        }
+    );
+    let claude = fixture.claude_target("claude-chat");
+    fixture
+        .store
+        .bind_conversation(&claude_issue.key.conversation, &claude)
+        .await
+        .expect("Claude issue binds");
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(
+                &second_pull.key,
+                &[
+                    codex_issue.key.conversation.clone(),
+                    claude_issue.key.conversation.clone()
+                ],
+                fixture.claude_scope(),
+                "/repo"
+            )
+            .await
+            .expect("Claude request linked to both agents"),
+        RoutingOutcome::Ready
+    );
+    assert_eq!(
+        fixture
+            .store
+            .find_binding(&second_pull.key.conversation)
+            .await
+            .expect("route reads"),
+        Some(claude)
+    );
+}
+
+#[tokio::test]
+async fn requests_for_another_agent_do_not_hold_back_a_shared_chat() {
+    let fixture = Fixture::new().await;
+    let claude_issue = Fixture::claude_event("issue", "1", false);
+    let codex_pull = Fixture::event("pull", "2", false);
+    let codex_issue = Fixture::event("issue", "3", false);
+    fixture
+        .store
+        .bind_conversation(&claude_issue.key.conversation, &fixture.target)
+        .await
+        .expect("issue binds to Codex");
+    fixture
+        .store
+        .link_conversation(&codex_pull.key.conversation, &claude_issue.key.conversation)
+        .await
+        .expect("pull shares the Codex chat");
+    for event in [&claude_issue, &codex_pull] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert_eq!(
+        fixture
+            .store
+            .claim_next(Some(fixture.scope()))
+            .await
+            .expect("Codex claims"),
+        Some(codex_pull.clone())
+    );
+    fixture
+        .store
+        .finish_delivery(&codex_pull.key, DeliveryOutcome::Delivered, None)
+        .await
+        .expect("pull delivers");
+    fixture
+        .store
+        .insert(&codex_issue, TEST_QUEUE_LIMITS)
+        .await
+        .expect("event inserts");
+    assert_eq!(
+        fixture
+            .store
+            .claim_event(&codex_issue.key, fixture.scope())
+            .await
+            .expect("same discussion keeps its order"),
+        None
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_next(Some(fixture.scope()))
+            .await
+            .expect("Codex scope never claims a Claude request"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_waiting_switch_holds_back_only_linked_requests_for_its_agent() {
+    let fixture = Fixture::new().await;
+    let switch = Fixture::claude_event("issue", "1", false);
+    let codex_pull = Fixture::event("codex-pull", "2", false);
+    let claude_pull = Fixture::claude_event("claude-pull", "3", false);
+    fixture
+        .store
+        .bind_conversation(&switch.key.conversation, &fixture.target)
+        .await
+        .expect("issue binds to Codex");
+    for event in [&switch, &codex_pull, &claude_pull] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert!(matches!(
+        fixture
+            .store
+            .claim_routing(&switch.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("switch routes"),
+        RoutingOutcome::Create { .. }
+    ));
+    fixture
+        .store
+        .finish_delivery(&switch.key, DeliveryOutcome::Pending, None)
+        .await
+        .expect("Claude was unavailable");
+    let links = [switch.key.conversation.clone()];
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&codex_pull.key, &links, fixture.scope(), "/repo")
+            .await
+            .expect("Codex request routes"),
+        RoutingOutcome::Ready
+    );
+    assert_eq!(
+        fixture
+            .store
+            .find_binding(&codex_pull.key.conversation)
+            .await
+            .expect("route reads"),
+        Some(fixture.target.clone())
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&claude_pull.key, &links, fixture.claude_scope(), "/repo")
+            .await
+            .expect("Claude request routes"),
+        RoutingOutcome::Deferred
+    );
+}
+
+#[tokio::test]
+async fn a_switch_survives_an_unavailable_agent_and_a_restart() {
+    let fixture = Fixture::new().await;
+    let switch = Fixture::claude_event("issue", "1", false);
+    fixture
+        .store
+        .bind_conversation(&switch.key.conversation, &fixture.target)
+        .await
+        .expect("issue binds to Codex");
+    fixture
+        .store
+        .insert(&switch, TEST_QUEUE_LIMITS)
+        .await
+        .expect("event inserts");
+    let create = RoutingOutcome::Create {
+        workspace: "/repo".into(),
+    };
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&switch.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("switch routes"),
+        create
+    );
+    fixture
+        .store
+        .finish_delivery(&switch.key, DeliveryOutcome::Pending, None)
+        .await
+        .expect("Claude was unavailable");
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&switch.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("switch routes again"),
+        create
+    );
+    assert_eq!(
+        fixture
+            .store
+            .recover_interrupted()
+            .await
+            .expect("restart recovers"),
+        1
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&switch.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("switch routes after restart"),
+        create
+    );
+    let claude = fixture.claude_target("claude-chat");
+    fixture
+        .store
+        .finish_routing(&switch.key, &claude)
+        .await
+        .expect("switch commits");
+    assert_eq!(
+        fixture
+            .store
+            .find_binding(&switch.key.conversation)
+            .await
+            .expect("route reads"),
+        Some(claude)
+    );
+    assert_eq!(
+        fixture
+            .store
+            .claim_event(&switch.key, fixture.claude_scope())
+            .await
+            .expect("Claude claims")
+            .map(|event| event.key),
+        Some(switch.key)
+    );
+}
+
+#[tokio::test]
+async fn a_shared_chat_waits_while_another_agent_moves_one_of_its_discussions() {
+    let fixture = Fixture::new().await;
+    let switch = Fixture::claude_event("issue", "1", false);
+    let codex_pull = Fixture::event("pull", "2", false);
+    fixture
+        .store
+        .bind_conversation(&switch.key.conversation, &fixture.target)
+        .await
+        .expect("issue binds to Codex");
+    fixture
+        .store
+        .link_conversation(&codex_pull.key.conversation, &switch.key.conversation)
+        .await
+        .expect("pull shares the Codex chat");
+    for event in [&switch, &codex_pull] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert!(matches!(
+        fixture
+            .store
+            .claim_routing(&switch.key, &[], fixture.claude_scope(), "/repo")
+            .await
+            .expect("switch routes"),
+        RoutingOutcome::Create { .. }
+    ));
+    assert_eq!(
+        fixture
+            .store
+            .claim_event(&codex_pull.key, fixture.scope())
+            .await
+            .expect("Codex request waits for the switch"),
+        None
+    );
+    fixture
+        .store
+        .finish_routing(&switch.key, &fixture.claude_target("claude-chat"))
+        .await
+        .expect("switch commits");
+    assert_eq!(
+        fixture
+            .store
+            .claim_event(&codex_pull.key, fixture.scope())
+            .await
+            .expect("Codex request claims")
+            .map(|event| event.key),
+        Some(codex_pull.key.clone())
+    );
+    fixture
+        .store
+        .replace_chat_for_delivery(&codex_pull.key, &fixture.target, "replacement-chat")
+        .await
+        .expect("the shared chat can be replaced");
+}
+
+#[tokio::test]
+async fn linked_requests_wait_only_for_creations_by_their_agent() {
+    let fixture = Fixture::new().await;
+    let codex_issue = Fixture::event("issue", "1", false);
+    let claude_pull = Fixture::claude_event("claude-pull", "2", false);
+    let codex_pull = Fixture::event("codex-pull", "3", false);
+    for event in [&codex_issue, &claude_pull, &codex_pull] {
+        fixture
+            .store
+            .insert(event, TEST_QUEUE_LIMITS)
+            .await
+            .expect("event inserts");
+    }
+    assert!(matches!(
+        fixture
+            .store
+            .claim_routing(&codex_issue.key, &[], fixture.scope(), "/repo")
+            .await
+            .expect("issue routes"),
+        RoutingOutcome::Create { .. }
+    ));
+    let links = [codex_issue.key.conversation.clone()];
+    assert!(matches!(
+        fixture
+            .store
+            .claim_routing(&claude_pull.key, &links, fixture.claude_scope(), "/repo")
+            .await
+            .expect("Claude request routes"),
+        RoutingOutcome::Create { .. }
+    ));
+    assert_eq!(
+        fixture
+            .store
+            .claim_routing(&codex_pull.key, &links, fixture.scope(), "/repo")
+            .await
+            .expect("Codex request routes"),
+        RoutingOutcome::Deferred
+    );
+}

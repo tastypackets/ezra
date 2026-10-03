@@ -1,4 +1,5 @@
 use super::{DeliveryScope, DeliveryState, EventStore, SessionTarget, StoreError};
+use crate::agent::Agent;
 use crate::inbound::{ConversationKey, EventKey};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -102,7 +103,11 @@ impl EventStore {
         )
         .fetch_optional(&mut *transaction)
         .await?;
-        if existing.is_some() && (!event.new_chat || event.new_chat_applied) {
+        let switches_agent = !event.new_chat
+            && existing
+                .as_ref()
+                .is_some_and(|existing| existing.agent != scope.agent);
+        if existing.is_some() && !switches_agent && (!event.new_chat || event.new_chat_applied) {
             transaction.rollback().await?;
             return Ok(RoutingOutcome::Ready);
         }
@@ -122,9 +127,9 @@ impl EventStore {
             transaction.rollback().await?;
             return Ok(RoutingOutcome::Deferred);
         }
-        if event.new_chat {
+        if event.new_chat || switches_agent {
             if let Some(existing) = existing {
-                if existing.host_id != scope.host_id || existing.agent != scope.agent {
+                if existing.host_id != scope.host_id {
                     transaction.rollback().await?;
                     return Ok(RoutingOutcome::Deferred);
                 }
@@ -145,28 +150,32 @@ impl EventStore {
                 }
             }
         } else {
+            let unrecorded_agent = Agent::UNRECORDED.command_name();
             let creating_related = sqlx::query_scalar!(
                 r#"SELECT EXISTS (
                     SELECT 1 FROM inbound_events AS events
                     JOIN json_each(?1) AS related
                       ON events.source = json_extract(related.value, '$.source')
                      AND events.subject = json_extract(related.value, '$.subject')
-                    WHERE (events.delivery_state IN ('pending', 'delivering') AND events.new_chat = 1 AND events.new_chat_applied = 0 AND EXISTS (
+                    WHERE ((events.delivery_state IN ('pending', 'delivering') AND events.new_chat = 1 AND events.new_chat_applied = 0 AND EXISTS (
                           SELECT 1 FROM inbound_conversations AS conversations
                           WHERE conversations.source = events.source AND conversations.subject = events.subject
                       ))
                        OR (events.delivery_state = 'delivering' AND NOT EXISTS (
                           SELECT 1 FROM inbound_conversations AS conversations
                           WHERE conversations.source = events.source AND conversations.subject = events.subject
-                      ))
+                      )))
+                      AND COALESCE(events.requested_agent, ?3) = ?2
                 ) AS "creating!: bool""#,
                 related,
+                scope.agent,
+                unrecorded_agent,
             ).fetch_one(&mut *transaction).await?;
             if creating_related {
                 transaction.rollback().await?;
                 return Ok(RoutingOutcome::Deferred);
             }
-            let candidates = sqlx::query_as!(SessionTarget,
+            let mut candidates = sqlx::query_as!(SessionTarget,
                 "SELECT DISTINCT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace
                  FROM inbound_conversations AS conversations
                  JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id
@@ -175,8 +184,9 @@ impl EventStore {
                   AND conversations.subject = json_extract(related.value, '$.subject')",
                 related,
             ).fetch_all(&mut *transaction).await?;
+            candidates.retain(|candidate| candidate.agent == scope.agent);
             if let [target] = candidates.as_slice() {
-                if target.host_id != scope.host_id || target.agent != scope.agent {
+                if target.host_id != scope.host_id {
                     transaction.rollback().await?;
                     return Ok(RoutingOutcome::Deferred);
                 }
@@ -199,11 +209,12 @@ impl EventStore {
             }
         }
         sqlx::query!(
-            "UPDATE inbound_events SET delivery_state = 'delivering'
+            "UPDATE inbound_events SET delivery_state = 'delivering', new_chat = (new_chat OR ?4)
              WHERE source = ?1 AND subject = ?2 AND event_id = ?3 AND delivery_state = 'pending'",
             key.conversation.source,
             key.conversation.subject,
             key.id,
+            switches_agent,
         )
         .execute(&mut *transaction)
         .await?;

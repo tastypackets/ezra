@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET delivery_state = 'failed'\n               WHERE delivery_state IN ('pending', 'delivering') AND attempted_at IS NULL\n                 AND requested_agent IS NOT NULL\n                 AND requested_agent NOT IN (SELECT value FROM json_each(?1))\n               RETURNING source, subject, event_id, requested_agent AS \"requested_agent!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "source",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "name": "subject",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "name": "event_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "event_id"
+          }
+        }
+      },
+      {
+        "name": "requested_agent!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_agent"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "5aea4135499daf8f9d455a86070c6a3e413111813b143e83d687a7969ec00390"
+}

@@ -1,9 +1,11 @@
 mod github;
+mod senders;
 
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ezra::agent::Agent;
 use ezra::inbound::store::{EventStore, StoreError};
 use ezra::inbound::{EventKey, MessageSender};
 use time::OffsetDateTime;
@@ -12,9 +14,10 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 use github::GitHubFeedback;
 
 use super::settings::Settings;
+pub use senders::AgentSenders;
 
 pub(super) enum RoutingWake {
-    Event(EventKey),
+    Event(EventKey, Agent),
     Sweep,
 }
 
@@ -36,9 +39,8 @@ impl InboundRuntime {
         if recovered > 0 {
             tracing::warn!(recovered, "interrupted inbound operations recovered");
         }
-        let failed = store.fail_unknown_agents().await?;
-        if failed > 0 {
-            tracing::warn!(failed, "inbound requests for unknown agents failed");
+        for (key, error) in store.fail_unknown_agents().await? {
+            tracing::warn!(delivery_id = %key.delivery_id(), %error, "inbound request failed");
         }
         let (github_routing_sender, github_routing_receiver) = mpsc::unbounded_channel();
         let maintenance = Self {
@@ -57,7 +59,7 @@ impl InboundRuntime {
 
     pub async fn run(
         self,
-        sender: Arc<impl MessageSender>,
+        senders: AgentSenders<impl MessageSender, impl MessageSender>,
         source: super::git::GitTools,
         projects: super::folders::ProjectsDirectory,
     ) {
@@ -68,14 +70,17 @@ impl InboundRuntime {
         }
         tokio::join!(
             self.maintain(),
-            self.poll_github(&source, &projects, sender.as_ref()),
-            self.route_github(&source, &projects, sender.as_ref()),
+            self.poll_github(&source, &projects),
+            self.route_github(&source, &projects, &senders),
             self.delivery_feedback(&source, status_receiver),
         );
     }
 
-    pub(super) fn enqueue_github_event(&self, event: EventKey) {
-        if let Err(error) = self.github_routing_sender.send(RoutingWake::Event(event)) {
+    pub(super) fn enqueue_github_event(&self, event: EventKey, agent: Agent) {
+        if let Err(error) = self
+            .github_routing_sender
+            .send(RoutingWake::Event(event, agent))
+        {
             tracing::error!(%error, "GitHub routing receiver is closed");
         }
     }

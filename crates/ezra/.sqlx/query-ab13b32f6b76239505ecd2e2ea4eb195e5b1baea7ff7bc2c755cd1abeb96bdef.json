@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                    SELECT 1 FROM inbound_events AS events\n                    JOIN json_each(?1) AS related\n                      ON events.source = json_extract(related.value, '$.source')\n                     AND events.subject = json_extract(related.value, '$.subject')\n                    WHERE ((events.delivery_state IN ('pending', 'delivering') AND events.new_chat = 1 AND events.new_chat_applied = 0 AND EXISTS (\n                          SELECT 1 FROM inbound_conversations AS conversations\n                          WHERE conversations.source = events.source AND conversations.subject = events.subject\n                      ))\n                       OR (events.delivery_state = 'delivering' AND NOT EXISTS (\n                          SELECT 1 FROM inbound_conversations AS conversations\n                          WHERE conversations.source = events.source AND conversations.subject = events.subject\n                      )))\n                      AND COALESCE(events.requested_agent, ?3) = ?2\n                ) AS \"creating!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "creating!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ab13b32f6b76239505ecd2e2ea4eb195e5b1baea7ff7bc2c755cd1abeb96bdef"
+}
