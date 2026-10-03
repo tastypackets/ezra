@@ -137,7 +137,7 @@ impl InboundRuntime {
                 &related,
                 DeliveryScope {
                     host_id: &self.host_id,
-                    agent: "codex",
+                    agent: event.options.agent.command_name(),
                 },
                 discussion.workspace,
             )
@@ -158,7 +158,7 @@ impl InboundRuntime {
                         &event.key,
                         &SessionTarget {
                             host_id: self.host_id.clone(),
-                            agent: "codex".to_owned(),
+                            agent: event.options.agent.command_name().to_owned(),
                             chat_id,
                             workspace,
                         },

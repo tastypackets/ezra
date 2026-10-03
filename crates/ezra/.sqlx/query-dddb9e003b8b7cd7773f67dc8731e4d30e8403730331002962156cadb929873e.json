@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT subject, event_id FROM inbound_events\n             WHERE source = ?1 AND delivery_state = 'pending' AND attempted_at IS NULL ORDER BY rowid",
+  "query": "SELECT subject, event_id, requested_agent FROM inbound_events\n             WHERE source = ?1 AND delivery_state IN ('pending', 'delivering')\n               AND delivery_state = 'pending' AND attempted_at IS NULL ORDER BY rowid",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "event_id"
           }
         }
+      },
+      {
+        "name": "requested_agent",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "requested_agent"
+          }
+        }
       }
     ],
     "parameters": {
@@ -31,8 +42,9 @@
     },
     "nullable": [
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "4a529c1a44dc8baa760a5be4544ed79c85185088b66352cd3f5c3c85e00357f2"
+  "hash": "dddb9e003b8b7cd7773f67dc8731e4d30e8403730331002962156cadb929873e"
 }

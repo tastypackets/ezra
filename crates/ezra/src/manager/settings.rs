@@ -277,7 +277,7 @@ mod tests {
             ..Settings::default()
         };
         settings.inbound.shortcuts.insert(
-            "/ezra-codex".to_owned(),
+            "/ezra-claude".to_owned(),
             ezra::inbound::Shortcut {
                 agent: Agent::Claude,
                 model: Some("chosen-model".to_owned()),

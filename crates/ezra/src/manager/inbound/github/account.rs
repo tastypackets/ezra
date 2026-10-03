@@ -1,27 +1,138 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
+use ezra::agent::Agent;
 use ezra::inbound::github::{AccountCommentSource, AccountCommentsPage};
 use ezra::inbound::store::{DeliveryScope, DeliveryState, DispatchOutcome};
 #[cfg(test)]
 use futures_util::stream;
 use futures_util::{StreamExt, stream::FuturesUnordered};
+use tokio::sync::watch;
 
 use super::*;
-use crate::manager::inbound::RoutingWake;
+use crate::manager::inbound::{AgentSenders, RoutingWake};
+
+const ROUTES_PER_AGENT: usize = 8;
+
+struct AgentQueue {
+    changes: Option<watch::Receiver<bool>>,
+    generation: u64,
+    waiting: VecDeque<EventKey>,
+    offline: VecDeque<EventKey>,
+    active: usize,
+}
+
+impl AgentQueue {
+    fn watching(changes: Option<watch::Receiver<bool>>) -> Self {
+        Self {
+            changes,
+            generation: 0,
+            waiting: VecDeque::new(),
+            offline: VecDeque::new(),
+            active: 0,
+        }
+    }
+
+    async fn changed(&mut self) -> Result<(), watch::error::RecvError> {
+        match self.changes.as_mut() {
+            Some(changes) => changes.changed().await,
+            None => std::future::pending().await,
+        }
+    }
+
+    fn resume(&mut self) {
+        let offline = std::mem::take(&mut self.offline);
+        self.waiting.extend(offline);
+    }
+
+    fn changed_since(&self, generation: u64) -> bool {
+        generation != self.generation
+            || self
+                .changes
+                .as_ref()
+                .is_some_and(|changes| changes.has_changed().unwrap_or(false))
+    }
+}
+
+struct AgentQueues {
+    claude: AgentQueue,
+    codex: AgentQueue,
+}
+
+impl AgentQueues {
+    fn watching(senders: &AgentSenders<impl MessageSender, impl MessageSender>) -> Self {
+        Self {
+            claude: AgentQueue::watching(senders.claude.control_changes()),
+            codex: AgentQueue::watching(senders.codex.control_changes()),
+        }
+    }
+
+    fn get_mut(&mut self, agent: Agent) -> &mut AgentQueue {
+        match agent {
+            Agent::Claude => &mut self.claude,
+            Agent::Codex => &mut self.codex,
+        }
+    }
+
+    async fn next_change(&mut self) -> (Agent, Result<(), watch::error::RecvError>) {
+        tokio::select! {
+            changed = self.claude.changed() => (Agent::Claude, changed),
+            changed = self.codex.changed() => (Agent::Codex, changed),
+        }
+    }
+
+    fn requeue(&mut self, keys: impl IntoIterator<Item = (EventKey, Agent)>) {
+        for (key, agent) in keys {
+            self.get_mut(agent).waiting.push_back(key);
+        }
+    }
+
+    fn retain(&mut self, retained: &HashSet<EventKey>) {
+        for queue in [&mut self.claude, &mut self.codex] {
+            queue.waiting.retain(|key| retained.contains(key));
+            queue.offline.retain(|key| retained.contains(key));
+        }
+    }
+}
+
+pub(super) trait RoutesExt<Route: std::future::Future> {
+    /// Keeps polling routes while `work` runs, because a suspended route can hold the store's
+    /// only connection that `work` waits for.
+    async fn draining<Output>(
+        &mut self,
+        work: impl std::future::Future<Output = Output>,
+        finished: &mut VecDeque<Route::Output>,
+    ) -> Output;
+}
+
+impl<Route: std::future::Future> RoutesExt<Route> for FuturesUnordered<Route> {
+    async fn draining<Output>(
+        &mut self,
+        work: impl std::future::Future<Output = Output>,
+        finished: &mut VecDeque<Route::Output>,
+    ) -> Output {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                output = &mut work => return output,
+                Some(result) = self.next(), if !self.is_empty() => finished.push_back(result),
+            }
+        }
+    }
+}
 
 impl InboundRuntime {
     pub(in crate::manager::inbound) async fn route_github(
         &self,
         source: &GitTools,
         projects: &ProjectsDirectory,
-        sender: &impl MessageSender,
+        senders: &AgentSenders<impl MessageSender, impl MessageSender>,
     ) {
         let Some(incoming) = self.github_routing_receiver.lock().await.take() else {
             return;
         };
-        self.process_github_events(source.host().as_str(), sender, incoming, |key| {
-            self.route_github_key(source, projects, sender, key)
+        self.process_github_events(source.host().as_str(), senders, incoming, |key| {
+            self.route_github_key(source, projects, senders, key)
         })
         .await;
     }
@@ -29,103 +140,128 @@ impl InboundRuntime {
     pub(in crate::manager::inbound) async fn process_github_events<RouteFuture>(
         &self,
         host: &str,
-        sender: &impl MessageSender,
+        senders: &AgentSenders<impl MessageSender, impl MessageSender>,
         mut incoming: tokio::sync::mpsc::UnboundedReceiver<RoutingWake>,
         route: impl Fn(EventKey) -> RouteFuture,
     ) where
         RouteFuture: std::future::Future<Output = (EventKey, Result<Admission, PollError>)>,
     {
-        let mut control_changes = sender.control_changes();
+        let mut agents = AgentQueues::watching(senders);
         self.load_github_routes(host).await;
         let mut queued = HashSet::new();
-        let mut waiting: VecDeque<EventKey> = VecDeque::new();
         let mut deferred = Vec::new();
-        let mut offline = Vec::new();
         let mut active = FuturesUnordered::new();
         let mut active_keys = HashSet::new();
-        let mut availability_generation = 0u64;
+        let mut finished = VecDeque::new();
         let mut progress_generation = 0u64;
         loop {
-            while sender.control_available() && active.len() < 8 {
-                let Some(key) = waiting.pop_front() else {
-                    break;
-                };
-                active_keys.insert(key.clone());
-                let operation = route(key);
-                let generation = availability_generation;
-                let started_progress = progress_generation;
-                active.push(async move {
-                    let (key, result) = operation.await;
-                    (key, result, generation, started_progress)
-                });
+            while let Some((key, agent, result, generation, started_progress)) =
+                finished.pop_front()
+            {
+                active_keys.remove(&key);
+                let queue = agents.get_mut(agent);
+                queue.active = queue.active.saturating_sub(1);
+                match result {
+                    Ok(
+                        Admission::Accepted
+                        | Admission::Failed
+                        | Admission::Uncertain
+                        | Admission::Expired,
+                    ) => {
+                        queued.remove(&key);
+                        progress_generation = progress_generation.wrapping_add(1);
+                        agents.requeue(deferred.drain(..));
+                    }
+                    Ok(Admission::Deferred) if started_progress != progress_generation => {
+                        queue.waiting.push_back(key);
+                    }
+                    Ok(Admission::Deferred) => deferred.push((key, agent)),
+                    Err(PollError::Unavailable)
+                        if senders.for_agent(agent).control_available()
+                            && queue.changed_since(generation) =>
+                    {
+                        queue.waiting.push_back(key);
+                    }
+                    Err(PollError::Unavailable) => queue.offline.push_back(key),
+                    Err(error) => {
+                        let recorded = async {
+                            if let Err(storage_error) = self.store.fail_waiting_event(&key).await {
+                                tracing::error!(%storage_error, "could not record failed GitHub request");
+                            }
+                            if let Ok(Some(event)) = self.store.get(&key).await
+                                && let Some(mut feedback) = GitHubFeedback::from_event(&event, host)
+                            {
+                                feedback.status = CommentStatus::Failed;
+                                self.queue_github_feedback(feedback).await;
+                            }
+                        };
+                        active.draining(recorded, &mut finished).await;
+                        tracing::warn!(%error, "GitHub request failed before submission");
+                        queued.remove(&key);
+                        progress_generation = progress_generation.wrapping_add(1);
+                        agents.requeue(deferred.drain(..));
+                    }
+                }
+            }
+            for agent in Agent::ALL {
+                let queue = agents.get_mut(agent);
+                while senders.for_agent(agent).control_available()
+                    && queue.active < ROUTES_PER_AGENT
+                {
+                    let Some(key) = queue.waiting.pop_front() else {
+                        break;
+                    };
+                    queue.active = queue.active.saturating_add(1);
+                    active_keys.insert(key.clone());
+                    let operation = route(key);
+                    let generation = queue.generation;
+                    let started_progress = progress_generation;
+                    active.push(async move {
+                        let (key, result) = operation.await;
+                        (key, agent, result, generation, started_progress)
+                    });
+                }
             }
             tokio::select! {
                 Some(message) = incoming.recv() => {
                     match message {
-                        RoutingWake::Event(key) => {
+                        RoutingWake::Event(key, agent) => {
                             if queued.insert(key.clone()) {
-                                waiting.push_back(key);
+                                agents.get_mut(agent).waiting.push_back(key);
                             }
                         }
                         RoutingWake::Sweep => {
-                            match self.store.waiting_events(&format!("github:{}", host.to_ascii_lowercase())).await {
+                            let source = format!("github:{}", host.to_ascii_lowercase());
+                            match active.draining(self.store.waiting_events(&source), &mut finished).await {
                                 Ok(events) => {
-                                    let retained: HashSet<_> = events.into_iter().collect();
-                                    waiting.retain(|key| retained.contains(key));
-                                    deferred.retain(|key| retained.contains(key));
-                                    offline.retain(|key| retained.contains(key));
+                                    let retained: HashSet<_> = events.into_iter().map(|(key, _)| key).collect();
+                                    agents.retain(&retained);
+                                    deferred.retain(|(key, _)| retained.contains(key));
                                     queued.retain(|key| retained.contains(key) || active_keys.contains(key));
                                     progress_generation = progress_generation.wrapping_add(1);
-                                    waiting.extend(deferred.drain(..));
+                                    agents.requeue(deferred.drain(..));
                                 }
                                 Err(error) => tracing::error!(%error, "could not trim expired GitHub requests"),
                             }
                         }
                     }
                 }
-                Some((key, result, generation, started_progress)) = active.next(), if !active.is_empty() => {
-                    active_keys.remove(&key);
-                    match result {
-                        Ok(Admission::Accepted | Admission::Failed | Admission::Uncertain | Admission::Expired) => {
-                            queued.remove(&key);
-                            progress_generation = progress_generation.wrapping_add(1);
-                            waiting.extend(deferred.drain(..));
-                        }
-                        Ok(Admission::Deferred) if started_progress != progress_generation => waiting.push_back(key),
-                        Ok(Admission::Deferred) => deferred.push(key),
-                        Err(PollError::Unavailable) if sender.control_available()
-                            && (generation != availability_generation || control_changes.as_ref().is_some_and(|changes| changes.has_changed().unwrap_or(false))) => waiting.push_back(key),
-                        Err(PollError::Unavailable) if !sender.control_available() => offline.push(key),
-                        Err(error) => {
-                            if let Err(storage_error) = self.store.fail_waiting_event(&key).await {
-                                tracing::error!(%storage_error, "could not record failed GitHub request");
-                            }
-                            if let Ok(Some(event)) = self.store.get(&key).await
-                                && let Some(mut feedback) = GitHubFeedback::from_event(&event, host) {
-                                feedback.status = CommentStatus::Failed;
-                                self.queue_github_feedback(feedback).await;
-                            }
-                            tracing::warn!(%error, "GitHub request failed before submission");
-                            queued.remove(&key);
-                            progress_generation = progress_generation.wrapping_add(1);
-                            waiting.extend(deferred.drain(..));
-                        }
-                    }
-                }
-                changed = async {
-                    match control_changes.as_mut() {
-                        Some(changes) => changes.changed().await,
-                        None => std::future::pending().await,
-                    }
-                } => {
+                Some(result) = active.next(), if !active.is_empty() => finished.push_back(result),
+                (agent, changed) = agents.next_change() => {
+                    let queue = agents.get_mut(agent);
                     if changed.is_err() {
-                        control_changes = None;
+                        tracing::warn!(%agent, "agent availability changes stopped");
+                        queue.changes = None;
                     } else {
-                        availability_generation = availability_generation.wrapping_add(1);
-                        if !sender.control_available() { continue; }
-                        waiting.extend(offline.drain(..));
-                        waiting.extend(deferred.drain(..));
-                        self.load_github_routes(host).await;
+                        queue.generation = queue.generation.wrapping_add(1);
+                        if !senders.for_agent(agent).control_available() { continue; }
+                        queue.resume();
+                        let (resumed, others) = deferred
+                            .drain(..)
+                            .partition::<Vec<_>, _>(|(_, deferred_agent)| *deferred_agent == agent);
+                        deferred = others;
+                        agents.requeue(resumed);
+                        active.draining(self.load_github_routes(host), &mut finished).await;
                     }
                 }
             }
@@ -139,8 +275,8 @@ impl InboundRuntime {
             .await
         {
             Ok(events) => {
-                for event in events {
-                    self.enqueue_github_event(event);
+                for (event, agent) in events {
+                    self.enqueue_github_event(event, agent);
                 }
             }
             Err(error) => tracing::error!(%error, "could not restore waiting GitHub requests"),
@@ -151,7 +287,7 @@ impl InboundRuntime {
         &self,
         source: &GitTools,
         projects: &ProjectsDirectory,
-        sender: &impl MessageSender,
+        senders: &AgentSenders<impl MessageSender, impl MessageSender>,
         key: EventKey,
     ) -> (EventKey, Result<Admission, PollError>) {
         let result = async {
@@ -175,12 +311,14 @@ impl InboundRuntime {
             let workspaces = projects.github_workspaces(source.host().as_str(), &settings.github).await.map_err(crate::manager::git::GitError::Io)?;
             let workspace = workspaces.get(&feedback.repository.to_ascii_lowercase())
                 .and_then(|path| path.to_str()).unwrap_or("/home/dev");
-            let result = self.admit_github_event(source, sender, &settings, &event, GitHubDiscussion {
+            let sender = senders.for_agent(event.options.agent);
+            let result = self.admit_github_event(source, &sender, &settings, &event, GitHubDiscussion {
                 repository: &feedback.repository, repository_id, number, workspace,
             }).await;
             let result = match result {
                 Ok(Admission::Accepted) => {
-                    match self.store.dispatch_event(&event.key, DeliveryScope { host_id: &self.host_id, agent: "codex" }, sender, settings.waiting_cutoff(OffsetDateTime::now_utc())).await? {
+                    let scope = DeliveryScope { host_id: &self.host_id, agent: event.options.agent.command_name() };
+                    match self.store.dispatch_event(&event.key, scope, &sender, settings.waiting_cutoff(OffsetDateTime::now_utc())).await? {
                         DispatchOutcome::Delivered { .. } => {
                             let mut feedback = feedback.clone();
                             feedback.status = CommentStatus::Delivered;
@@ -212,6 +350,7 @@ impl InboundRuntime {
                     feedback.status = CommentStatus::Unconfirmed;
                     self.queue_github_feedback(feedback).await;
                 }
+                Err(PollError::Unavailable) => tracing::debug!(delivery_id = %event.key.delivery_id(), "GitHub request waits for its agent"),
                 Err(error) => tracing::warn!(delivery_id = %event.key.delivery_id(), %error, "GitHub request routing failed"),
                 _ => {},
             }
@@ -334,7 +473,8 @@ impl InboundRuntime {
                     continue;
                 }
             };
-            if shortcut.1.agent != ezra::agent::Agent::Codex {
+            if let Err(error) = shortcut.1.validate() {
+                tracing::warn!(trigger = %shortcut.0, %error, "invalid GitHub shortcut configuration");
                 feedback.status = CommentStatus::Failed;
                 self.queue_github_feedback(feedback).await;
                 continue;
@@ -364,7 +504,7 @@ impl InboundRuntime {
                 }
                 InsertOutcome::Expired => continue,
                 InsertOutcome::Inserted => {
-                    self.enqueue_github_event(event.key.clone());
+                    self.enqueue_github_event(event.key.clone(), event.options.agent);
                     self.queue_github_feedback(feedback).await;
                 }
                 InsertOutcome::Duplicate => {}

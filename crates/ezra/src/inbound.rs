@@ -61,6 +61,8 @@ pub enum InvalidEvent {
     TooLong { field: &'static str, limit: usize },
     #[error("{field} contains whitespace or control characters")]
     InvalidIdentifier { field: &'static str },
+    #[error("{field} starts with a hyphen")]
+    LeadingHyphen { field: &'static str },
 }
 
 impl InboundEvent {
