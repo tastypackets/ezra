@@ -83,18 +83,18 @@ After pairing, in the ChatGPT app:
 2. Change This computer to the hostname of your ezra instance.
 3. Click Add, open `projects`, and select your repository.
 
-### Trigger Codex from GitHub
+### Trigger an agent from GitHub
 
-1. Sign in to GitHub under Settings and install, sign in to, and start Codex under Agents.
+1. Sign in to GitHub under Settings, and install and sign in to the agent your shortcut uses under Agents. Start Codex under Agents. Claude Code needs Serve to the Claude app on under Settings.
 2. Clone the repository into `~/projects`. Its `origin` must match the configured GitHub host and repository.
 3. Post `/ezra fix this` in an issue or pull request conversation comment from your signed-in GitHub account. A bare `/ezra` asks the agent to act on that issue or pull request, and `/ezra --new fix this` starts a new chat for it.
 
-Ezra polls GitHub with the `gh` sign-in, so it needs no GitHub App or webhook. Follow the work in the ChatGPT app.
+Ezra polls GitHub with the `gh` sign-in, so it needs no GitHub App or webhook. Follow the work in the ChatGPT or Claude app.
 
 | Setting under GitHub triggers | Does |
 |---|---|
 | Only repositories added to Ezra | Off accepts commands from any repository |
-| Shortcuts | Map commands such as `/ezra-fast` to a model and effort |
+| Shortcuts | Map commands such as `/ezra-fast` to an agent, a model and an effort |
 | Status feedback | Reactions, a status footer edited into your comment, or off |
 | Polling interval | Seconds between scans, 30 by default |
 | Waiting request expiry | Hours a request waits to be sent, 24 by default |

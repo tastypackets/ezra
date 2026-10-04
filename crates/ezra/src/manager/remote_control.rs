@@ -16,6 +16,7 @@ use time::Time;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
 use tokio::process::{Child, Command};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, timeout};
 use utoipa::ToSchema;
@@ -52,10 +53,12 @@ const PERMISSION_MODES: [&str; 7] = [
     "plan",
 ];
 const SESSION_ARGUMENT: &str = "--sdk-url";
+/// How the link Claude Code prints for a server starts, before its query.
+const SERVER_LINK: &str = "https://claude.ai/code?";
 const UNKNOWN_PERMISSION_MODE: &str = "Claude Code has no permission mode by that name";
 /// Variables that make `claude remote-control` refuse to start. Ones set in a settings.json
 /// `env` block still can.
-const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 15] = [
+pub(super) const VARIABLES_THAT_DISABLE_REMOTE_CONTROL: [&str; 15] = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -239,6 +242,28 @@ impl RemoteControlStatus {
         self.last_error = None;
         self.problem = None;
     }
+
+    /// The environment the server's claude.ai link names, absent for the link of a single
+    /// session. Session titles in the server's output can hold other links.
+    pub fn environment_id(&self) -> Option<&str> {
+        let query = self.url.as_deref()?.strip_prefix(SERVER_LINK)?;
+        let query = query.split_once('#').map_or(query, |(query, _)| query);
+        query
+            .split('&')
+            .find_map(|parameter| parameter.strip_prefix("environment="))
+            .filter(|id| {
+                !id.is_empty()
+                    && id.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+                    })
+            })
+    }
+
+    /// That environment while the server is connected.
+    pub fn connected_environment(&self) -> Option<&str> {
+        self.environment_id()
+            .filter(|_| self.state == ServerState::Running)
+    }
 }
 
 /// A known reason a server stopped.
@@ -349,6 +374,7 @@ pub struct RemoteControlOverview {
 pub struct RemoteControl {
     device: Option<String>,
     servers: Published<BTreeMap<PathBuf, RemoteControlStatus>>,
+    environment_changes: watch::Sender<bool>,
     logs: PathBuf,
     pub supervision: Supervision,
 }
@@ -364,8 +390,40 @@ impl RemoteControl {
                 .ok()
                 .and_then(|hostname| hostname.into_string().ok()),
             servers: Published::new(BTreeMap::new(), events, Topic::RemoteControl),
+            environment_changes: watch::Sender::new(false),
             logs,
             supervision: Supervision::default(),
+        }
+    }
+
+    /// Whether a server is connected in an environment that sessions can be created in.
+    pub fn has_environment(&self) -> bool {
+        *self.environment_changes.borrow()
+    }
+
+    /// Marked changed when a change can let a waiting session request through: a server
+    /// connects in an environment or moves to another, or a server goes away so that the
+    /// projects server takes its folder. Always holds `has_environment`.
+    pub fn environment_changes(&self) -> watch::Receiver<bool> {
+        self.environment_changes.subscribe()
+    }
+
+    /// The directory of the server connected in `environment`.
+    pub fn serving(&self, environment: &str) -> Option<PathBuf> {
+        self.servers.read(|servers| {
+            servers
+                .iter()
+                .find(|(_, status)| status.connected_environment() == Some(environment))
+                .map(|(directory, _)| directory.clone())
+        })
+    }
+
+    /// Shows `status` for `directory`, or no server when it is absent.
+    #[cfg(test)]
+    pub fn show(&self, directory: &Path, status: Option<RemoteControlStatus>) {
+        match status {
+            Some(status) => self.update(directory, |shown| *shown = status),
+            None => self.forget(directory),
         }
     }
 
@@ -409,8 +467,30 @@ impl RemoteControl {
     }
 
     fn update(&self, directory: &Path, change: impl FnOnce(&mut RemoteControlStatus)) {
-        self.servers
-            .update(|servers| change(servers.entry(directory.to_path_buf()).or_default()));
+        self.servers.update(|servers| {
+            let before = servers.route_of(directory);
+            change(servers.entry(directory.to_path_buf()).or_default());
+            self.note_route(before, servers, directory);
+        });
+    }
+
+    fn note_route(
+        &self,
+        before: Option<Option<String>>,
+        servers: &BTreeMap<PathBuf, RemoteControlStatus>,
+        directory: &Path,
+    ) {
+        let after = servers.route_of(directory);
+        let can_help = match (&before, &after) {
+            (Some(_), None) => true,
+            (_, Some(Some(_))) => after != before,
+            _ => false,
+        };
+        let available = servers.has_environment();
+        self.environment_changes.send_if_modified(|current| {
+            *current = available;
+            can_help
+        });
     }
 
     /// Removes the logs of folders that are not in the projects directory any more.
@@ -427,7 +507,30 @@ impl RemoteControl {
     }
 
     fn forget(&self, directory: &Path) {
-        self.servers.update(|servers| servers.remove(directory));
+        self.servers.update(|servers| {
+            let before = servers.route_of(directory);
+            servers.remove(directory);
+            self.note_route(before, servers, directory);
+        });
+    }
+}
+
+trait ServersExt {
+    /// Whether `directory` has a server, and its environment while it is connected.
+    fn route_of(&self, directory: &Path) -> Option<Option<String>>;
+
+    fn has_environment(&self) -> bool;
+}
+
+impl ServersExt for BTreeMap<PathBuf, RemoteControlStatus> {
+    fn route_of(&self, directory: &Path) -> Option<Option<String>> {
+        self.get(directory)
+            .map(|status| status.connected_environment().map(str::to_owned))
+    }
+
+    fn has_environment(&self) -> bool {
+        self.values()
+            .any(|status| status.connected_environment().is_some())
     }
 }
 
@@ -1094,7 +1197,8 @@ trait RemoteControlLineExt {
     fn has_log_stamp(&self) -> bool;
 
     /// The claude.ai link printed once the server is connected: the server's, or its one
-    /// session's at capacity 1.
+    /// session's at capacity 1. Only the last word of a line that is not a log line counts,
+    /// because log lines and session titles can quote message text.
     fn connect_url(&self) -> Option<String>;
 }
 
@@ -1116,8 +1220,12 @@ impl RemoteControlLineExt for str {
     }
 
     fn connect_url(&self) -> Option<String> {
+        if self.starts_with('[') {
+            return None;
+        }
         self.split_whitespace()
-            .find(|word| {
+            .next_back()
+            .filter(|word| {
                 word.starts_with("https://")
                     && (word.contains("environment=") || word.contains("/code/session_"))
             })
@@ -1774,6 +1882,115 @@ mod tests {
             Some("https://claude.ai/code/session_01AB")
         );
         assert_eq!("Capacity: 1/4 · New sessions".connect_url(), None);
+        for quoted in [
+            r#"[bridge:ws] sessionId=[REDACTED] <<< {"content":"see https://claude.ai/code?environment=env_02CD please"}"#,
+            "    Fix crash https://claude.ai/code?environment=env_02CD Running tests",
+            "see https://claude.ai/code?environment=env_02CD and more",
+        ] {
+            assert_eq!(quoted.connect_url(), None, "{quoted}");
+        }
+    }
+
+    fn connected(url: &str) -> RemoteControlStatus {
+        let mut status = RemoteControlStatus::default();
+        status.connect(url.to_owned());
+        status
+    }
+
+    #[test]
+    fn the_environment_comes_from_the_server_link_while_connected() {
+        for (url, environment) in [
+            (
+                "https://claude.ai/code?environment=env_01AB",
+                Some("env_01AB"),
+            ),
+            (
+                "https://claude.ai/code?from=cli&environment=env_01AB&m=0#top",
+                Some("env_01AB"),
+            ),
+            ("https://claude.ai/code/session_01AB", None),
+            ("https://claude.ai/code?environment=", None),
+            ("https://claude.ai/code?environment=env%2F01AB", None),
+            ("https://claude.ai/code#environment=env_01AB", None),
+            ("https://a?environment=env_01AB", None),
+            ("https://claude.ai.example/code?environment=env_01AB", None),
+            ("https://claude.ai/code/x?environment=env_01AB", None),
+            ("http://claude.ai/code?environment=env_01AB", None),
+        ] {
+            let status = connected(url);
+            assert_eq!(status.environment_id(), environment, "{url}");
+            assert_eq!(status.connected_environment(), environment, "{url}");
+        }
+        let mut starting = connected("https://claude.ai/code?environment=env_01AB");
+        starting.state = ServerState::Starting;
+        assert_eq!(starting.environment_id(), Some("env_01AB"));
+        assert_eq!(starting.connected_environment(), None);
+    }
+
+    #[test]
+    fn environment_changes_follow_which_servers_are_connected_and_where() {
+        let remote_control = RemoteControl::new(Events::default(), PathBuf::new());
+        let (projects, folder) = (Path::new("/projects"), Path::new("/projects/folder"));
+        let mut changes = remote_control.environment_changes();
+        let link = |environment: &str| format!("https://claude.ai/code?environment={environment}");
+        let mut changed = || {
+            let changed = changes.has_changed().expect("the sender is alive");
+            changes.mark_unchanged();
+            changed
+        };
+
+        remote_control.update(projects, |status| status.enter(ServerState::Starting));
+        assert!(!changed(), "a starting server cannot take requests");
+        assert!(!remote_control.has_environment());
+        remote_control.update(projects, |status| status.enter(ServerState::Retrying));
+        assert!(!changed());
+
+        remote_control.update(projects, |status| status.connect(link("env_projects")));
+        assert!(changed());
+        assert!(remote_control.has_environment());
+        remote_control.update(projects, |status| {
+            status.usage = Some(ServerUsage {
+                sessions: 1,
+                capacity: None,
+                memory_bytes: 1,
+            });
+            status.restarts = 3;
+        });
+        assert!(!changed(), "usage leaves the environments alone");
+
+        remote_control.update(folder, |status| status.enter(ServerState::Starting));
+        assert!(!changed());
+        remote_control.update(folder, |status| status.connect(link("env_folder")));
+        assert!(
+            changed(),
+            "a folder connected while the projects server stayed"
+        );
+        assert!(remote_control.has_environment());
+        assert_eq!(
+            remote_control.serving("env_folder").as_deref(),
+            Some(folder)
+        );
+        remote_control.update(folder, |status| status.connect(link("env_other")));
+        assert!(changed());
+        assert_eq!(remote_control.serving("env_folder"), None);
+
+        remote_control.forget(folder);
+        assert!(changed());
+        remote_control.forget(folder);
+        assert!(!changed());
+
+        remote_control.update(projects, |status| status.enter(ServerState::Stopping));
+        assert!(
+            !changed(),
+            "a server going down cannot let a request through"
+        );
+        assert!(!remote_control.has_environment());
+        assert_eq!(remote_control.serving("env_projects"), None);
+
+        remote_control.update(projects, |status| status.connect(link("env_projects")));
+        assert!(changed(), "the server is back in its environment");
+        remote_control.update(projects, |status| status.connect(link("env_projects")));
+        assert!(!changed(), "the same link again");
     }
 
     #[test]

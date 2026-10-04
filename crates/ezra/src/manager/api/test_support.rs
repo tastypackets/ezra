@@ -21,6 +21,7 @@ use tower::ServiceExt;
 
 use super::session::SessionStatus;
 use crate::manager::agents::{Agent, InstallPaths, TlsVerification};
+use crate::manager::claude_remote::ClaudeRemote;
 use crate::manager::codex_remote::{CodexRemote, ExpectedPeer, ServerBudget};
 use crate::manager::events::{ManagerEvent, Topic};
 use crate::manager::folders::ProjectsDirectory;
@@ -69,6 +70,17 @@ impl TestManager {
             GitTools::under(directory.path()),
         );
         state.projects = ProjectsDirectory(directory.path().join("projects"));
+        state.claude_remote = Arc::new(
+            ClaudeRemote::new(
+                Arc::clone(&state.remote_control),
+                Arc::clone(&state.install_paths),
+                state.projects.clone(),
+            )
+            .with_api(
+                reqwest::Url::parse("http://127.0.0.1:9/").expect("a valid URL"),
+                Duration::from_secs(10),
+            ),
+        );
         Self {
             router: state.clone().into_router(directory.path().join("web")),
             state,
