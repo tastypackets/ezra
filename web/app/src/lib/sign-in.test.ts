@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { signInEnd } from "./sign-in";
 
 const now = new Date("2026-09-26T12:00:00Z");
-const signedIn: AgentStatus = { agent: "claude", configured: true, logged_in: true };
+const signedIn: AgentStatus = { agent: "claude", configured: true, logged_in: true, models: [] };
 const endingAt = (sign_in_ends_at: string) => signInEnd({ ...signedIn, sign_in_ends_at }, now);
 
 describe("signInEnd", () => {

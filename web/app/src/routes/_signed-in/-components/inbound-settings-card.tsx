@@ -24,20 +24,22 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 import { INBOUND_COPY } from "@/content/inbound";
 import {
+  agentModels,
   effortSuggestions,
   inboundDraft,
   modelSuggestions,
   settingsFromDraft,
 } from "@/lib/inbound-settings";
-import { codexModelsQueryOptions } from "@/queries/remote-control-queries";
+import { agentsQueryOptions } from "@/queries/agent-queries";
 import { errorMessage } from "@/lib/utils";
 
 export function InboundSettingsCard() {
   const identifier = useId();
   const queryClient = useQueryClient();
   const { data: settings } = useSuspenseQuery(getInboundSettingsOptions());
-  const models = useQuery(codexModelsQueryOptions);
-  const modelOptions = modelSuggestions(models.data ?? []);
+  const agents = useQuery(agentsQueryOptions);
+  const models = agentModels(agents.data, "codex");
+  const modelOptions = modelSuggestions(models);
   const [error, setError] = useState<string>();
   const save = useMutation({
     ...updateInboundSettingsMutation(),
@@ -95,10 +97,14 @@ export function InboundSettingsCard() {
               {(shortcuts) => (
                 <FieldSet>
                   <FieldLegend>{INBOUND_COPY.shortcuts}</FieldLegend>
-                  <FieldDescription>{INBOUND_COPY.shortcutHint}</FieldDescription>
-                  {models.isError ? (
-                    <FieldDescription>{INBOUND_COPY.discoveryUnavailable}</FieldDescription>
-                  ) : null}
+                  {/* Chromium lays out no boxes for a row when a paragraph is added beside it in the
+                  update that changes the row, so the hint stays inside this paragraph. */}
+                  <FieldDescription>
+                    {INBOUND_COPY.shortcutHint}
+                    {models.length === 0 ? (
+                      <span className="mt-2 block">{INBOUND_COPY.noSuggestions}</span>
+                    ) : null}
+                  </FieldDescription>
                   {shortcuts.state.value.map((_, index) => (
                     <FieldGroup key={index} className="gap-3">
                       <form.Field name={`shortcuts[${index}].trigger`}>
@@ -139,7 +145,7 @@ export function InboundSettingsCard() {
                                 <Autocomplete
                                   id={field.name}
                                   value={field.state.value}
-                                  options={effortSuggestions(models.data ?? [], selectedModel)}
+                                  options={effortSuggestions(models, selectedModel)}
                                   showOptionsLabel={INBOUND_COPY.showEfforts}
                                   placeholder={INBOUND_COPY.currentDefault}
                                   onValueChange={field.handleChange}

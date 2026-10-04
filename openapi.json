@@ -126,60 +126,6 @@
         }
       }
     },
-    "/api/v1/agents/codex/models": {
-      "get": {
-        "tags": [
-          "agents"
-        ],
-        "summary": "List Codex models and their supported reasoning efforts",
-        "operationId": "listCodexModels",
-        "responses": {
-          "200": {
-            "description": "The running Codex server's model catalog",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CodexModel"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Not signed in to the manager",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Codex is not running",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "Codex could not list models",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/agents/codex/settings": {
       "get": {
         "tags": [
@@ -2207,13 +2153,61 @@
           "codex"
         ]
       },
+      "AgentEffort": {
+        "type": "object",
+        "description": "An effort a model takes.",
+        "required": [
+          "effort",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Empty when the agent describes none."
+          },
+          "effort": {
+            "type": "string",
+            "description": "What a shortcut's effort is set to for this effort."
+          }
+        }
+      },
+      "AgentModel": {
+        "type": "object",
+        "description": "A model an agent offers.",
+        "required": [
+          "model",
+          "display_name",
+          "description",
+          "efforts"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "efforts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentEffort"
+            },
+            "description": "The efforts the model takes, empty when it takes none."
+          },
+          "model": {
+            "type": "string",
+            "description": "What a shortcut's model is set to for this model."
+          }
+        }
+      },
       "AgentStatus": {
         "type": "object",
         "description": "One agent's install and sign-in state.",
         "required": [
           "agent",
           "configured",
-          "logged_in"
+          "logged_in",
+          "models"
         ],
         "properties": {
           "account": {
@@ -2277,6 +2271,13 @@
                 "type": "null"
               }
             ]
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentModel"
+            },
+            "description": "The models the agent listed when it last came up, empty until it has."
           },
           "sign_in_ends_at": {
             "type": [
@@ -2427,55 +2428,6 @@
           "on-request",
           "never"
         ]
-      },
-      "CodexEffort": {
-        "type": "object",
-        "required": [
-          "reasoning_effort"
-        ],
-        "properties": {
-          "description": {
-            "type": "string"
-          },
-          "reasoning_effort": {
-            "type": "string"
-          }
-        }
-      },
-      "CodexModel": {
-        "type": "object",
-        "required": [
-          "model"
-        ],
-        "properties": {
-          "default_reasoning_effort": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "description": {
-            "type": "string"
-          },
-          "display_name": {
-            "type": "string"
-          },
-          "hidden": {
-            "type": "boolean"
-          },
-          "is_default": {
-            "type": "boolean"
-          },
-          "model": {
-            "type": "string"
-          },
-          "supported_reasoning_efforts": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CodexEffort"
-            }
-          }
-        }
       },
       "CodexPairing": {
         "type": "object",

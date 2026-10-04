@@ -87,26 +87,18 @@ After pairing, in the ChatGPT app:
 
 1. Sign in to GitHub under Settings and install, sign in to, and start Codex under Agents.
 2. Clone the repository into `~/projects`. Its `origin` must match the configured GitHub host and repository.
-3. Under GitHub triggers, turn off Only repositories added to Ezra to accept commands from other repositories. New chats there start in `/home/dev`.
-4. Post `/ezra fix this` in an issue or pull request conversation comment using your signed-in GitHub account. A bare `/ezra` asks the agent to act on that issue or pull request.
+3. Post `/ezra fix this` in an issue or pull request conversation comment from your signed-in GitHub account. A bare `/ezra` asks the agent to act on that issue or pull request, and `/ezra --new fix this` starts a new chat for it.
 
-Ezra polls your issue and pull request conversation comments through GitHub GraphQL using the existing `gh` sign-in, then filters to repositories added to Ezra unless that setting is off. The polling interval defaults to 30 seconds after the previous scan finishes and can be changed under GitHub triggers. No GitHub App, webhook endpoint, or CI runner is required. Polling starts from the first scan after activation. Comments from other accounts, issue descriptions, and inline review comments do not trigger sessions. Shortcuts match literal text, including text inside quotes and code. Edits do not rerun an already queued comment.
+Ezra polls GitHub with the `gh` sign-in, so it needs no GitHub App or webhook. Follow the work in the ChatGPT app.
 
-Successful scans save the timestamp from GitHub's first response, and the next scan starts five seconds earlier with comment IDs preventing duplicate delivery. Failed scans keep the previous timestamp.
-
-For an unmapped discussion, Ezra reads GitHub's direct issue and pull request links, including closed and merged pull requests. Multiple links can reuse one distinct mapped chat on the same Ezra host, including chats in another checkout. Ezra starts a separate chat when no linked discussion has a mapping or the mappings point to different chats. Failed lookups and unfinished linked routing stay pending. Existing discussion mappings keep their chat when GitHub links change.
-
-Add `--new` immediately after the command, such as `/ezra --new fix this`, to start a fresh chat for that discussion. Older messages there are delivered first, and other discussions sharing the old chat keep their route. A saved request still runs if its comment is edited or deleted. Edits do not change its original routing instruction.
-
-New chats use the repository's existing checkout, or `/home/dev` when no unique checkout is available. They use the nearest matching Codex project when it is unique, otherwise no project association. Their requested name includes the repository, discussion number and title. Ezra does not create a worktree or check out the pull request branch. Requests keep the comment text, discussion URL and title. The description is included only in the first message to a new chat, including a fresh or replacement chat. Follow-up requests keep the chat's current name. Open the paired app to follow progress or steer the session.
-
-Settings can map custom commands such as `/ezra-fast` to a model and effort. These change the chat defaults for subsequent turns, including queued work. Model and effort inputs suggest values from the running Codex server and also accept manual values. Blank fields keep the current defaults. A comment containing different configured shortcuts is rejected as ambiguous. Only Codex is supported by this integration currently.
-
-Status feedback defaults to reactions, with a rocket for confirmed delivery and a confused face when attention is needed. Under GitHub triggers, choose a status footer or turn feedback off. Footers edit your original comment with received, delivered, unconfirmed, or failed status and the assigned chat name when available. Each update reads the current comment before writing and has a five-second overall timeout. Feedback uses your GitHub identity and never posts a new comment. It is best effort and each status is attempted once. Concurrent edits or a timed-out write can leave stale status. Database delivery records remain authoritative, so feedback failures and comment edits do not repeat agent delivery. Delivered means the session accepted the message, not that the work finished. Agent answers remain in the app unless you ask the agent to reply on GitHub.
-
-Archived chats are restored automatically when possible. A definitively missing chat is replaced and its mapping updated. Timeouts and unknown delivery results stay uncertain to avoid sending the same request twice. Check the app and manager logs before posting a new request in that case.
-
-Integration metadata lives in `/config/ezra/ezra.db`. Cleanup runs at startup and daily, with a configurable 90-day history default and count and byte limits. Queued and uncertain requests are kept within the queue limits. Cleanup does not delete native chats or repositories. After an idle mapping expires, a new trigger can start a new chat. Routing is local to this Ezra instance.
+| Setting under GitHub triggers | Does |
+|---|---|
+| Only repositories added to Ezra | Off accepts commands from any repository |
+| Shortcuts | Map commands such as `/ezra-fast` to a model and effort |
+| Status feedback | Reactions, a status footer edited into your comment, or off |
+| Polling interval | Seconds between scans, 30 by default |
+| Waiting request expiry | Hours a request waits to be sent, 24 by default |
+| History retention | Days of trigger history to keep, 90 by default |
 
 ## Environment
 

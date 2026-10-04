@@ -4,7 +4,6 @@ import {
   getCodexPairingOptions,
   getRemoteControlOptions,
   listCodexPhonesOptions,
-  listCodexModelsOptions,
 } from "@ezra/client/react-query.gen";
 import { queryOptions, skipToken } from "@tanstack/react-query";
 
@@ -35,12 +34,6 @@ export const codexPairingWatchQueryOptions = queryOptions<boolean>({
 export const codexPhonesQueryOptions = queryOptions({
   ...listCodexPhonesOptions(),
   staleTime: 0,
-  retry: false,
-});
-
-export const codexModelsQueryOptions = queryOptions({
-  ...listCodexModelsOptions(),
-  staleTime: 60_000,
   retry: false,
 });
 

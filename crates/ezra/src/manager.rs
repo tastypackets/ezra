@@ -2,6 +2,7 @@ mod agents;
 mod api;
 mod auth;
 mod checks;
+mod claude_remote;
 mod clones;
 mod codex_remote;
 mod environment;
