@@ -29,8 +29,10 @@ pub(super) enum PollError {
     Store(#[from] ezra::inbound::store::StoreError),
     #[error("inbound queue is full")]
     QueueFull,
-    #[error("agent is unavailable")]
-    Unavailable,
+    #[error("agent is unavailable: {0}")]
+    Unavailable(String),
+    #[error("agent destination is paused: {0}")]
+    Paused(String),
     #[error("GitHub identity changed during polling")]
     IdentityChanged,
     #[cfg(test)]
@@ -107,13 +109,24 @@ impl InboundRuntime {
             .expire_waiting(settings.waiting_cutoff(OffsetDateTime::now_utc()))
             .await?;
         if !expired.is_empty() {
+            let waiting_expiry_hours = settings.waiting_expiry_hours.get();
             for key in &expired {
-                let event = self.store.get(key).await.unwrap_or_else(|error| {
-                    tracing::warn!(delivery_id = %key.delivery_id(), %error, "expired GitHub request has no feedback");
-                    None
-                });
-                if let Some(event) = event
-                    && let Some(host) = key.conversation.source.strip_prefix("github:")
+                let delivery_id = key.delivery_id();
+                let event = match self.store.get(key).await {
+                    Ok(Some(event)) => {
+                        tracing::warn!(%delivery_id, agent = %event.options.agent, waiting_expiry_hours, "GitHub request expired before it was sent");
+                        event
+                    }
+                    Ok(None) => {
+                        tracing::warn!(%delivery_id, waiting_expiry_hours, "GitHub request expired before it was sent, and its record is gone");
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%delivery_id, waiting_expiry_hours, %error, "GitHub request expired before it was sent, and its record cannot be read");
+                        continue;
+                    }
+                };
+                if let Some(host) = key.conversation.source.strip_prefix("github:")
                     && let Some(mut feedback) = GitHubFeedback::from_event(&event, host)
                 {
                     feedback.status = ezra::inbound::github::CommentStatus::Failed;
@@ -322,7 +335,9 @@ impl InboundRuntime {
                     .await;
                 feedback.status = match &admitted {
                     Err(PollError::QueueFull) => CommentStatus::Failed,
-                    Err(PollError::Unavailable | PollError::Git(_)) => CommentStatus::Received,
+                    Err(PollError::Unavailable(_) | PollError::Paused(_) | PollError::Git(_)) => {
+                        CommentStatus::Received
+                    }
                     Err(_) => CommentStatus::Unconfirmed,
                     Ok(Admission::Expired) => continue,
                     Ok(Admission::Uncertain) => CommentStatus::Unconfirmed,
@@ -525,6 +540,7 @@ impl InboundRuntime {
 #[cfg(test)]
 mod tests {
     mod account;
+    mod claude;
     mod linking;
 
     use std::num::NonZeroU64;
@@ -926,7 +942,7 @@ mod tests {
             );
             self.creations.fetch_add(1, Ordering::SeqCst);
             if self.unavailable.load(Ordering::SeqCst) {
-                return Err(MessageSendError::Unavailable);
+                return Err(MessageSendError::Unavailable("connection lost".into()));
             }
             if self.uncertain.load(Ordering::SeqCst) {
                 return Err(MessageSendError::Uncertain("connection lost".into()));

@@ -13,6 +13,7 @@ use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
+use super::PrintableExt;
 use super::sessions_api::SessionId;
 use crate::manager::login::AgentCli;
 use crate::manager::remote_control::VARIABLES_THAT_DISABLE_REMOTE_CONTROL;
@@ -125,7 +126,7 @@ impl FollowUp<'_> {
                 .chars()
                 .take(TEXT_LIMIT)
                 .collect();
-            tracing::warn!(stderr = %last_line, "Claude Code printed no follow-up result");
+            tracing::warn!(stderr = %last_line.printable(), "Claude Code printed no follow-up result");
             FollowUpError::NoResult(status)
         })
     }
@@ -176,7 +177,8 @@ impl FollowUpResult {
             .unwrap_or("Claude Code gave no reason")
             .chars()
             .take(TEXT_LIMIT)
-            .collect()
+            .collect::<String>()
+            .printable()
     }
 }
 

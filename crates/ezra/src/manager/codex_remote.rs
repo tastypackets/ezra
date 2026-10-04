@@ -25,7 +25,7 @@ use utoipa::ToSchema;
 use super::events::{Events, Topic};
 use super::remote_control::ServerState;
 use super::supervision::{
-    Failure, OUTPUT_DRAIN_TIMEOUT, PendingUpdate, Published, ServerLog, Supervision,
+    Failure, OUTPUT_DRAIN_TIMEOUT, Pauses, PendingUpdate, Published, ServerLog, Supervision,
     UPDATE_RESTART_DEADLINE, USAGE_INTERVAL,
 };
 pub use control::ControlError;
@@ -150,7 +150,9 @@ pub struct CodexRemote {
     /// Sign-ins in progress, which keep the server stopped.
     holds: watch::Sender<u32>,
     control: SyncMutex<Control>,
-    control_available: watch::Sender<bool>,
+    /// Paused while ezra stops the server or holds it off on purpose, until its control
+    /// connection opens.
+    pub pauses: Pauses<()>,
     /// The pairing code asked for last.
     pairing: SyncMutex<Option<Pairing>>,
 }
@@ -197,7 +199,7 @@ impl CodexRemote {
             expected,
             holds: watch::Sender::new(0),
             control: SyncMutex::default(),
-            control_available: watch::Sender::new(false),
+            pauses: Pauses::new([()]),
             pairing: SyncMutex::default(),
         }
     }
@@ -262,18 +264,7 @@ impl CodexRemote {
     }
 
     fn with_control<R>(&self, change: impl FnOnce(&mut Control) -> R) -> R {
-        let mut control = self.control.lock().unwrap_or_else(PoisonError::into_inner);
-        let result = change(&mut control);
-        let available = control.client.is_some();
-        self.control_available.send_if_modified(|current| {
-            if *current == available {
-                false
-            } else {
-                *current = available;
-                true
-            }
-        });
-        result
+        change(&mut self.control.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     fn client(&self) -> Option<Arc<ControlClient>> {
@@ -287,6 +278,7 @@ pub struct SignInHold(Arc<CodexRemote>);
 
 impl SignInHold {
     fn take(codex_remote: Arc<CodexRemote>) -> Self {
+        codex_remote.pauses.pause(());
         codex_remote
             .holds
             .send_modify(|holds| *holds = holds.saturating_add(1));
