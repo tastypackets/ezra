@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\", new_chat AS \"new_chat!: bool\",\n                      new_chat_applied AS \"new_chat_applied!: bool\",\n                      delivery_state AS \"delivery_state: DeliveryState\"\n               FROM inbound_events WHERE source = ?1 AND subject = ?2 AND event_id = ?3",
+  "query": "SELECT rowid AS \"rowid!: i64\", new_chat AS \"new_chat!: bool\",\n                      new_chat_applied AS \"new_chat_applied!: bool\",\n                      delivery_state AS \"delivery_state: DeliveryState\"\n               FROM inbound_events WHERE source = ?1 AND subject = ?2 AND event_id = ?3\n                 AND COALESCE(requested_agent, ?5) = ?4",
   "describe": {
     "columns": [
       {
@@ -49,7 +49,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 5
     },
     "nullable": [
       false,
@@ -58,5 +58,5 @@
       false
     ]
   },
-  "hash": "dc646f45ce7f56357bd6e6bc25aa2671eb9029bec56eed19e9039b5cc91f953c"
+  "hash": "45a9bb55a1af3bee8813ef14dd081d5539123299fd44d79916b4d606f30dd00c"
 }

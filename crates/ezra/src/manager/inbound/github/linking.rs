@@ -116,7 +116,7 @@ impl InboundRuntime {
         let related = if event.new_chat
             || self
                 .store
-                .find_binding(&event.key.conversation)
+                .find_binding(&event.key.conversation, event.options.agent)
                 .await?
                 .is_some()
         {

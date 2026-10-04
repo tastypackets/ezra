@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO inbound_conversations (source, subject, agent, session_id)\n             SELECT ?1, ?2, agent, session_id FROM inbound_conversations\n             WHERE source = ?3 AND subject = ?4 AND agent = ?5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "370f11dc885ff5d4234f1621c503864461e2ed98654156a7f49465526e882cc7"
+}

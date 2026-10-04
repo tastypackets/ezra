@@ -16,6 +16,7 @@ impl EventStore {
         source: &str,
         subject_prefix: &str,
     ) -> Result<Vec<crate::inbound::InboundEvent>, StoreError> {
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let records = sqlx::query!(
             r#"SELECT events.subject, events.event_id, events.actor,
                       events.created_at AS "created_at: time::OffsetDateTime", events.message, events.initial_context,
@@ -27,9 +28,10 @@ impl EventStore {
                  AND ((events.new_chat = 1 AND events.new_chat_applied = 0) OR NOT EXISTS (
                      SELECT 1 FROM inbound_conversations AS conversations
                      WHERE conversations.source = events.source AND conversations.subject = events.subject
+                       AND conversations.agent = COALESCE(events.requested_agent, ?3)
                  ))
                ORDER BY events.rowid"#,
-            source, subject_prefix,
+            source, subject_prefix, unrecorded_agent,
         ).fetch_all(&self.pool).await?;
         records
             .into_iter()
@@ -67,15 +69,19 @@ impl EventStore {
         workspace: &str,
     ) -> Result<RoutingOutcome, StoreError> {
         let related = serde_json::to_string(related).expect("conversation keys serialize");
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let event = sqlx::query!(
             r#"SELECT rowid AS "rowid!: i64", new_chat AS "new_chat!: bool",
                       new_chat_applied AS "new_chat_applied!: bool",
                       delivery_state AS "delivery_state: DeliveryState"
-               FROM inbound_events WHERE source = ?1 AND subject = ?2 AND event_id = ?3"#,
+               FROM inbound_events WHERE source = ?1 AND subject = ?2 AND event_id = ?3
+                 AND COALESCE(requested_agent, ?5) = ?4"#,
             key.conversation.source,
             key.conversation.subject,
             key.id,
+            scope.agent,
+            unrecorded_agent,
         )
         .fetch_optional(&mut *transaction)
         .await?
@@ -97,17 +103,14 @@ impl EventStore {
             "SELECT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace
              FROM inbound_conversations AS conversations
              JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id
-             WHERE conversations.source = ?1 AND conversations.subject = ?2",
+             WHERE conversations.source = ?1 AND conversations.subject = ?2 AND conversations.agent = ?3",
             key.conversation.source,
             key.conversation.subject,
+            scope.agent,
         )
         .fetch_optional(&mut *transaction)
         .await?;
-        let switches_agent = !event.new_chat
-            && existing
-                .as_ref()
-                .is_some_and(|existing| existing.agent != scope.agent);
-        if existing.is_some() && !switches_agent && (!event.new_chat || event.new_chat_applied) {
+        if existing.is_some() && (!event.new_chat || event.new_chat_applied) {
             transaction.rollback().await?;
             return Ok(RoutingOutcome::Ready);
         }
@@ -116,10 +119,13 @@ impl EventStore {
                 SELECT 1 FROM inbound_events AS older
                 WHERE older.source = ?1 AND older.subject = ?2 AND older.rowid < ?3
                   AND older.delivery_state IN ('pending', 'delivering')
+                  AND COALESCE(older.requested_agent, ?5) = ?4
             ) AS "blocked!: bool""#,
             key.conversation.source,
             key.conversation.subject,
             event.rowid,
+            scope.agent,
+            unrecorded_agent,
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -127,7 +133,7 @@ impl EventStore {
             transaction.rollback().await?;
             return Ok(RoutingOutcome::Deferred);
         }
-        if event.new_chat || switches_agent {
+        if event.new_chat {
             if let Some(existing) = existing {
                 if existing.host_id != scope.host_id {
                     transaction.rollback().await?;
@@ -138,11 +144,12 @@ impl EventStore {
                         SELECT 1 FROM inbound_events AS events
                         JOIN inbound_conversations AS conversations
                           ON events.source = conversations.source AND events.subject = conversations.subject
+                         AND COALESCE(events.requested_agent, ?4) = conversations.agent
                         JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id
                         WHERE sessions.host_id = ?1 AND sessions.agent = ?2 AND sessions.chat_id = ?3
                           AND events.delivery_state = 'delivering'
                     ) AS "busy!: bool""#,
-                    existing.host_id, existing.agent, existing.chat_id,
+                    existing.host_id, existing.agent, existing.chat_id, unrecorded_agent,
                 ).fetch_one(&mut *transaction).await?;
                 if busy {
                     transaction.rollback().await?;
@@ -150,7 +157,6 @@ impl EventStore {
                 }
             }
         } else {
-            let unrecorded_agent = Agent::UNRECORDED.command_name();
             let creating_related = sqlx::query_scalar!(
                 r#"SELECT EXISTS (
                     SELECT 1 FROM inbound_events AS events
@@ -160,10 +166,12 @@ impl EventStore {
                     WHERE ((events.delivery_state IN ('pending', 'delivering') AND events.new_chat = 1 AND events.new_chat_applied = 0 AND EXISTS (
                           SELECT 1 FROM inbound_conversations AS conversations
                           WHERE conversations.source = events.source AND conversations.subject = events.subject
+                            AND conversations.agent = ?2
                       ))
                        OR (events.delivery_state = 'delivering' AND NOT EXISTS (
                           SELECT 1 FROM inbound_conversations AS conversations
                           WHERE conversations.source = events.source AND conversations.subject = events.subject
+                            AND conversations.agent = ?2
                       )))
                       AND COALESCE(events.requested_agent, ?3) = ?2
                 ) AS "creating!: bool""#,
@@ -175,24 +183,25 @@ impl EventStore {
                 transaction.rollback().await?;
                 return Ok(RoutingOutcome::Deferred);
             }
-            let mut candidates = sqlx::query_as!(SessionTarget,
+            let candidates = sqlx::query_as!(SessionTarget,
                 "SELECT DISTINCT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace
                  FROM inbound_conversations AS conversations
                  JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id
                  JOIN json_each(?1) AS related
                    ON conversations.source = json_extract(related.value, '$.source')
-                  AND conversations.subject = json_extract(related.value, '$.subject')",
+                  AND conversations.subject = json_extract(related.value, '$.subject')
+                 WHERE conversations.agent = ?2",
                 related,
+                scope.agent,
             ).fetch_all(&mut *transaction).await?;
-            candidates.retain(|candidate| candidate.agent == scope.agent);
             if let [target] = candidates.as_slice() {
                 if target.host_id != scope.host_id {
                     transaction.rollback().await?;
                     return Ok(RoutingOutcome::Deferred);
                 }
                 sqlx::query!(
-                    "INSERT INTO inbound_conversations (source, subject, session_id)
-                     SELECT ?1, ?2, id FROM inbound_sessions WHERE host_id = ?3 AND agent = ?4 AND chat_id = ?5",
+                    "INSERT INTO inbound_conversations (source, subject, agent, session_id)
+                     SELECT ?1, ?2, agent, id FROM inbound_sessions WHERE host_id = ?3 AND agent = ?4 AND chat_id = ?5",
                     key.conversation.source, key.conversation.subject, target.host_id, target.agent, target.chat_id,
                 ).execute(&mut *transaction).await?;
                 sqlx::query!(
@@ -209,12 +218,11 @@ impl EventStore {
             }
         }
         sqlx::query!(
-            "UPDATE inbound_events SET delivery_state = 'delivering', new_chat = (new_chat OR ?4)
+            "UPDATE inbound_events SET delivery_state = 'delivering'
              WHERE source = ?1 AND subject = ?2 AND event_id = ?3 AND delivery_state = 'pending'",
             key.conversation.source,
             key.conversation.subject,
             key.id,
-            switches_agent,
         )
         .execute(&mut *transaction)
         .await?;
@@ -230,12 +238,14 @@ impl EventStore {
         target: &SessionTarget,
     ) -> Result<(), StoreError> {
         target.validate_binding(&key.conversation)?;
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let event = sqlx::query!(
             r#"SELECT new_chat AS "new_chat!: bool" FROM inbound_events
                WHERE source = ?1 AND subject = ?2 AND event_id = ?3 AND delivery_state = 'delivering'
-                 AND (new_chat = 0 OR new_chat_applied = 0)"#,
-            key.conversation.source, key.conversation.subject, key.id,
+                 AND (new_chat = 0 OR new_chat_applied = 0)
+                 AND COALESCE(requested_agent, ?5) = ?4"#,
+            key.conversation.source, key.conversation.subject, key.id, target.agent, unrecorded_agent,
         ).fetch_optional(&mut *transaction).await?.ok_or(StoreError::DeliveryChanged)?;
         let session_id = sqlx::query_scalar!(
             "INSERT INTO inbound_sessions (host_id, agent, chat_id, workspace, initial_context_pending)
@@ -249,16 +259,16 @@ impl EventStore {
         .await?;
         if event.new_chat {
             sqlx::query!(
-                "INSERT INTO inbound_conversations (source, subject, session_id) VALUES (?1, ?2, ?3)
-                 ON CONFLICT (source, subject) DO UPDATE SET session_id = excluded.session_id",
-                key.conversation.source, key.conversation.subject, session_id,
+                "INSERT INTO inbound_conversations (source, subject, agent, session_id) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (source, subject, agent) DO UPDATE SET session_id = excluded.session_id",
+                key.conversation.source, key.conversation.subject, target.agent, session_id,
             )
             .execute(&mut *transaction)
             .await?;
         } else {
             sqlx::query!(
-                "INSERT INTO inbound_conversations (source, subject, session_id) VALUES (?1, ?2, ?3)",
-                key.conversation.source, key.conversation.subject, session_id,
+                "INSERT INTO inbound_conversations (source, subject, agent, session_id) VALUES (?1, ?2, ?3, ?4)",
+                key.conversation.source, key.conversation.subject, target.agent, session_id,
             ).execute(&mut *transaction).await?;
         }
         sqlx::query!(

@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_database_installs_one_schema_without_legacy_retry_state() {
+    async fn fresh_database_installs_the_schema_without_legacy_retry_state() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let store = EventStore::open(&directory.path().join("ezra.db"))
             .await
@@ -478,7 +478,7 @@ mod tests {
                 .fetch_all(&store.pool)
                 .await
                 .expect("migration versions read");
-        assert_eq!(migration_versions, vec![1]);
+        assert_eq!(migration_versions, vec![1, 2]);
         let legacy_columns: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('inbound_events') WHERE name = 'next_delivery_at'",
         )
@@ -493,6 +493,209 @@ mod tests {
         .await
         .expect("schema reads");
         assert_eq!(legacy_tables, 0);
+    }
+
+    #[tokio::test]
+    async fn migrating_a_0_4_0_database_keeps_its_mappings_as_codex() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("ezra.db");
+        let pool = SqlitePoolOptions::new()
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&path)
+                    .create_if_missing(true),
+            )
+            .await
+            .expect("database opens");
+        sqlx::migrate!("./migrations")
+            .run_to(1, &pool)
+            .await
+            .expect("0.4.0 schema installs");
+        for statement in [
+            "INSERT INTO inbound_sessions (id, host_id, agent, chat_id, workspace)
+             VALUES (1, 'host-a', 'codex', 'shared-chat', '/repo'),
+                    (2, 'host-a', 'codex', 'other-chat', '/repo'),
+                    (3, 'host-a', 'claude', 'claude-chat', '/repo')",
+            "INSERT INTO inbound_conversations (source, subject, session_id)
+             VALUES ('github:github.com', 'issue', 1), ('github:github.com', 'pull', 1),
+                    ('github:github.com', 'other', 2), ('github:github.com', 'claude', 3)",
+            "INSERT INTO inbound_events (source, subject, event_id, actor, created_at, message)
+             VALUES ('github:github.com', 'issue', '1', '789', '2026-09-29T10:00:00Z', 'Continue'),
+                    ('github:github.com', 'pull', '2', '789', '2026-09-29T10:01:00Z', 'Follow up')",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("0.4.0 rows insert");
+        }
+        pool.close().await;
+        let store = EventStore::open(&path).await.expect("database migrates");
+        let conversation = |subject: &str| ConversationKey {
+            source: "github:github.com".to_owned(),
+            subject: subject.to_owned(),
+        };
+        let target = |agent: &str, chat_id: &str| SessionTarget {
+            host_id: "host-a".to_owned(),
+            agent: agent.to_owned(),
+            chat_id: chat_id.to_owned(),
+            workspace: "/repo".to_owned(),
+        };
+        for (subject, codex, claude) in [
+            ("issue", Some(target("codex", "shared-chat")), None),
+            ("pull", Some(target("codex", "shared-chat")), None),
+            ("other", Some(target("codex", "other-chat")), None),
+            ("claude", None, Some(target("claude", "claude-chat"))),
+        ] {
+            for (agent, expected) in [(Agent::Codex, codex), (Agent::Claude, claude)] {
+                assert_eq!(
+                    store
+                        .find_binding(&conversation(subject), agent)
+                        .await
+                        .expect("mapping reads"),
+                    expected
+                );
+            }
+        }
+        let scope = DeliveryScope {
+            host_id: "host-a",
+            agent: "codex",
+        };
+        let request = |subject: &str, id: &str| EventKey {
+            conversation: conversation(subject),
+            id: id.to_owned(),
+        };
+        assert_eq!(
+            store
+                .claim_routing(&request("pull", "2"), &[], scope, "/repo")
+                .await
+                .expect("later request routes"),
+            RoutingOutcome::Ready
+        );
+        assert_eq!(
+            store
+                .claim_event(&request("pull", "2"), scope)
+                .await
+                .expect("later request waits for the shared chat"),
+            None
+        );
+        assert_eq!(
+            store
+                .claim_event(&request("issue", "1"), scope)
+                .await
+                .expect("waiting request claims")
+                .map(|event| event.key),
+            Some(request("issue", "1"))
+        );
+        let key_columns: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_table_info('inbound_conversations') WHERE pk > 0 ORDER BY pk",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .expect("key reads");
+        assert_eq!(key_columns, ["source", "subject", "agent"]);
+        let foreign_keys: Vec<(String, String, String, String)> = sqlx::query_as(
+            r#"SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list('inbound_conversations')"#,
+        )
+        .fetch_all(&store.pool)
+        .await
+        .expect("foreign keys read");
+        assert_eq!(
+            foreign_keys,
+            [(
+                "inbound_sessions".to_owned(),
+                "session_id".to_owned(),
+                "id".to_owned(),
+                "CASCADE".to_owned()
+            )]
+        );
+        let strict: bool = sqlx::query_scalar(
+            "SELECT strict FROM pragma_table_list WHERE name = 'inbound_conversations'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .expect("table reads");
+        assert!(strict);
+        let indexes: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_index_list('inbound_conversations') WHERE origin = 'c'",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .expect("indexes read");
+        assert_eq!(indexes, ["inbound_conversations_session"]);
+        sqlx::query("DELETE FROM inbound_sessions WHERE id = 2")
+            .execute(&store.pool)
+            .await
+            .expect("session deletes");
+        assert_eq!(
+            store
+                .find_binding(&conversation("other"), Agent::Codex)
+                .await
+                .expect("mapping reads"),
+            None
+        );
+        assert_eq!(
+            store
+                .prune_sessions(
+                    OffsetDateTime::now_utc().saturating_add(time::Duration::days(1)),
+                    0
+                )
+                .await
+                .expect("idle chats expire"),
+            1
+        );
+        assert_eq!(
+            store
+                .find_binding(&conversation("pull"), Agent::Codex)
+                .await
+                .expect("mapping reads"),
+            Some(target("codex", "shared-chat"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mapping_cannot_name_another_agent_than_its_chat() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("database opens");
+        let conversation = ConversationKey {
+            source: "github:github.com".to_owned(),
+            subject: "issue".to_owned(),
+        };
+        let target = SessionTarget {
+            host_id: "host-a".to_owned(),
+            agent: "codex".to_owned(),
+            chat_id: "codex-chat".to_owned(),
+            workspace: "/repo".to_owned(),
+        };
+        store
+            .bind_conversation(&conversation, &target)
+            .await
+            .expect("discussion binds");
+        for statement in [
+            "INSERT INTO inbound_conversations (source, subject, agent, session_id)
+             SELECT 'github:github.com', 'pull', 'claude', id FROM inbound_sessions",
+            "UPDATE inbound_conversations SET agent = 'claude'",
+            "UPDATE inbound_sessions SET agent = 'claude'",
+        ] {
+            let error = sqlx::query(statement)
+                .execute(&store.pool)
+                .await
+                .expect_err("a mismatched agent is refused");
+            assert!(
+                error
+                    .to_string()
+                    .contains("conversation agent differs from its session"),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            store
+                .find_binding(&conversation, Agent::Codex)
+                .await
+                .expect("mapping reads"),
+            Some(target)
+        );
     }
 
     #[tokio::test]
