@@ -36,10 +36,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/login", post(session::log_in))
         .route("/api/v1/logout", post(session::log_out))
         .route("/api/v1/agents", get(agents::list))
-        .route(
-            "/api/v1/agents/codex/models",
-            get(remote_control::codex_models),
-        )
         .route("/api/v1/agents/{agent}", delete(agents::uninstall))
         .route("/api/v1/agents/{agent}/install", post(agents::install))
         .route(
@@ -229,7 +225,6 @@ pub struct ErrorBody {
         session::log_in,
         session::log_out,
         agents::list,
-        remote_control::codex_models,
         agents::install,
         agents::uninstall,
         agents::restart_servers,

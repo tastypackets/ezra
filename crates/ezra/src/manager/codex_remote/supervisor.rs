@@ -448,6 +448,10 @@ impl CodexRun {
         });
         self.asking.threads(Arc::clone(&client));
         self.asking.account(client, None);
+        self.asking.models(
+            Arc::clone(&state.codex_remote),
+            Arc::clone(&state.agent_checks),
+        );
     }
 
     fn usage(&self) -> Option<CodexUsage> {
@@ -676,6 +680,17 @@ impl Asking {
                 .check_sign_in(Agent::Codex, Duration::ZERO)
                 .await;
             Answer::TurnedOff
+        });
+    }
+
+    /// Reads the server's models and keeps them with the agent's checks.
+    fn models(&mut self, codex_remote: Arc<CodexRemote>, agent_checks: Arc<AgentChecks>) {
+        self.0.spawn(async move {
+            match codex_remote.models().await {
+                Ok(models) => agent_checks.store_models(Agent::Codex, models),
+                Err(error) => tracing::warn!("could not read Codex's models: {error}"),
+            }
+            Answer::Nothing
         });
     }
 
@@ -1022,6 +1037,7 @@ mod tests {
     use crate::manager::events::Topic;
     use crate::manager::login::LoginPrompt;
     use crate::manager::remote_control::RemoteControlOverview;
+    use crate::manager::status::{AgentEffort, AgentModel};
     use crate::manager::supervision::{
         FIRST_RETRY_DELAY, PendingUpdate, ServerLog, UPDATE_RESTART_DEADLINE,
     };
@@ -1277,6 +1293,53 @@ mod tests {
                 Some("0.157.1")
             )
         );
+
+        shut_down(&manager, supervisor).await;
+    }
+
+    #[tokio::test]
+    async fn codex_lists_its_models_each_time_its_connection_opens() {
+        let manager = manager(BUDGET);
+        install_codex(&manager, "0.157.1", TAKES_EVERY_FLAG, SERVE);
+        sign_in(&manager, CHATGPT);
+        let supervisor = supervise(&manager);
+        servers_started(&manager, 1).await;
+        let fake = control(&manager, "connected");
+        fake.reply(
+            "model/list",
+            [
+                Reply::Result(json!({"data": [{"model": "first", "displayName": "First", "supportedReasoningEfforts": [{"reasoningEffort": "high", "description": "Deeper"}]}], "nextCursor": null})),
+                Reply::Result(json!({"data": [{"model": "second"}], "nextCursor": null})),
+            ],
+        );
+        status_until(&manager, connected).await;
+        let models = wait_until(
+            WAIT,
+            || manager.state.agent_checks.models(Agent::Codex),
+            |models| !models.is_empty(),
+        )
+        .await;
+        assert_eq!(
+            models,
+            [AgentModel {
+                model: "first".to_owned(),
+                display_name: "First".to_owned(),
+                description: String::new(),
+                efforts: vec![AgentEffort {
+                    effort: "high".to_owned(),
+                    description: "Deeper".to_owned(),
+                }],
+            }]
+        );
+
+        manager.state.codex_remote.supervision.restart();
+        let models = wait_until(
+            WAIT,
+            || manager.state.agent_checks.models(Agent::Codex),
+            |models| models.first().is_some_and(|model| model.model == "second"),
+        )
+        .await;
+        assert_eq!(models.len(), 1);
 
         shut_down(&manager, supervisor).await;
     }

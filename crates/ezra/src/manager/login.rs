@@ -125,7 +125,7 @@ impl AgentCli {
         }
     }
 
-    fn command(&self) -> Command {
+    pub(super) fn command(&self) -> Command {
         let mut command = Command::new(&self.command_path);
         if let Some(directory) = &self.config_directory {
             command.env(self.agent.config_directory_variable(), directory);

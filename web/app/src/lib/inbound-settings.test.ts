@@ -1,46 +1,50 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  agentModels,
   effortSuggestions,
   inboundDraft,
   modelSuggestions,
   settingsFromDraft,
 } from "./inbound-settings";
 
-describe("Codex shortcut suggestions", () => {
+function effort(value: string, description = "") {
+  return { effort: value, description };
+}
+
+describe("shortcut suggestions", () => {
   const models = [
     {
       model: "first",
       display_name: "First",
-      supported_reasoning_efforts: [
-        { reasoning_effort: "low" },
-        { reasoning_effort: "high", description: "More reasoning" },
-      ],
+      description: "",
+      efforts: [effort("low"), effort("high", "More reasoning")],
     },
     {
       model: "second",
+      display_name: "",
       description: "Second model",
-      supported_reasoning_efforts: [
-        { reasoning_effort: "low" },
-        { reasoning_effort: "future-effort" },
-      ],
+      efforts: [effort("low"), effort("future-effort")],
     },
+    { model: "plain", display_name: "", description: "", efforts: [] },
   ];
-  it("suggests model identifiers and only the selected model's efforts", () => {
+  it("suggests each listed model and only the selected model's efforts", () => {
     expect(modelSuggestions(models)).toEqual([
       { value: "first", description: "First" },
       { value: "second", description: "Second model" },
+      { value: "plain", description: undefined },
     ]);
-    expect(effortSuggestions(models, " first ").map((option) => option.value)).toEqual([
-      "low",
-      "high",
+    expect(effortSuggestions(models, " first ")).toEqual([
+      { value: "low", description: undefined },
+      { value: "high", description: "More reasoning" },
     ]);
     expect(effortSuggestions(models, "second").map((option) => option.value)).toEqual([
       "low",
       "future-effort",
     ]);
+    expect(effortSuggestions(models, "plain")).toEqual([]);
   });
-  it("combines reported efforts for an unknown or unchanged model and supports unavailable catalogs", () => {
+  it("combines every listed effort for an unlisted or unchanged model", () => {
     for (const model of ["", "custom-model"]) {
       expect(effortSuggestions(models, model).map((option) => option.value)).toEqual([
         "low",
@@ -48,8 +52,17 @@ describe("Codex shortcut suggestions", () => {
         "future-effort",
       ]);
     }
-    expect(effortSuggestions([{ model: "old-model" }], "old-model")).toEqual([]);
     expect(modelSuggestions([])).toEqual([]);
+    expect(effortSuggestions([], "")).toEqual([]);
+  });
+  it("reads each agent's models from the agents list", () => {
+    const agents = [
+      { agent: "claude" as const, configured: true, logged_in: true, models },
+      { agent: "codex" as const, configured: false, logged_in: false, models: [] },
+    ];
+    expect(agentModels(agents, "claude")).toBe(models);
+    expect(agentModels(agents, "codex")).toEqual([]);
+    expect(agentModels(undefined, "claude")).toEqual([]);
   });
 });
 

@@ -2,34 +2,49 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
-use utoipa::ToSchema;
 
 use super::CodexRemote;
 use super::control::{ControlError, ControlRequest};
+use crate::manager::status::{AgentEffort, AgentModel};
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all(deserialize = "camelCase"))]
-pub struct CodexModel {
-    pub model: String,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexModel {
+    model: String,
     #[serde(default)]
-    pub display_name: String,
+    display_name: String,
     #[serde(default)]
-    pub description: String,
+    description: String,
     #[serde(default)]
-    pub hidden: bool,
+    hidden: bool,
     #[serde(default)]
-    pub is_default: bool,
-    pub default_reasoning_effort: Option<String>,
-    #[serde(default)]
-    pub supported_reasoning_efforts: Vec<CodexEffort>,
+    supported_reasoning_efforts: Vec<CodexEffort>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all(deserialize = "camelCase"))]
-pub struct CodexEffort {
-    pub reasoning_effort: String,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexEffort {
+    reasoning_effort: String,
     #[serde(default)]
-    pub description: String,
+    description: String,
+}
+
+impl From<CodexModel> for AgentModel {
+    fn from(model: CodexModel) -> Self {
+        Self {
+            model: model.model,
+            display_name: model.display_name,
+            description: model.description,
+            efforts: model
+                .supported_reasoning_efforts
+                .into_iter()
+                .map(|effort| AgentEffort {
+                    effort: effort.reasoning_effort,
+                    description: effort.description,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -53,7 +68,8 @@ impl ControlRequest for ListModels {
 }
 
 impl CodexRemote {
-    pub async fn models(&self) -> Result<Vec<CodexModel>, ControlError> {
+    /// The models the running server lists, without hidden ones.
+    pub async fn models(&self) -> Result<Vec<AgentModel>, ControlError> {
         let client = self.client().ok_or(ControlError::Closed)?;
         timeout(self.budget.request, async {
             let mut models = Vec::new();
@@ -67,7 +83,12 @@ impl CodexRemote {
                         include_hidden: false,
                     })
                     .await?;
-                models.extend(page.data.into_iter().filter(|model| !model.hidden));
+                models.extend(
+                    page.data
+                        .into_iter()
+                        .filter(|model| !model.hidden)
+                        .map(AgentModel::from),
+                );
                 let Some(next) = page.next_cursor else {
                     return Ok(models);
                 };
@@ -155,12 +176,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["first", "second"]
         );
-        assert_eq!(
-            models[0].supported_reasoning_efforts[0].reasoning_effort,
-            "future-effort"
-        );
-        let serialized = serde_json::to_value(&models[0]).expect("API JSON");
-        assert_eq!(serialized["display_name"], "First");
+        assert_eq!(models[0].efforts[0].effort, "future-effort");
+        assert_eq!(models[0].display_name, "First");
         assert_eq!(
             fixture.fake.requests_of("model/list"),
             [

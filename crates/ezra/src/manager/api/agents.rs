@@ -299,6 +299,7 @@ mod tests {
                 config_disk_bytes: Some(0),
                 install_progress: None,
                 available_update: None,
+                models: Vec::new(),
             })
         );
     }

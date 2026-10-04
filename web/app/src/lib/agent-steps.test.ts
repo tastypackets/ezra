@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { menuOffersInstall, nextAgentStep } from "./agent-steps";
 
-const missing: AgentStatus = { agent: "claude", configured: false, logged_in: false };
+const missing: AgentStatus = { agent: "claude", configured: false, logged_in: false, models: [] };
 const signedOut: AgentStatus = { ...missing, configured: true, installed_version: "2.1.283" };
 const signedIn: AgentStatus = { ...signedOut, logged_in: true };
 const prompt = { url: "https://claude.com/oauth" };

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { INSTALL_POLL_MS, isInstalled, pollInterval } from "./agent-queries";
 
-const idle: AgentStatus = { agent: "claude", configured: false, logged_in: false };
+const idle: AgentStatus = { agent: "claude", configured: false, logged_in: false, models: [] };
 
 describe("pollInterval", () => {
   it("does not poll while nothing is in progress", () => {

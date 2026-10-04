@@ -791,6 +791,9 @@ impl AppState {
             Ok(server) => server,
             Err(error) => return RunEnd::Failed(format!("could not start: {error}").into()),
         };
+        if *served == Served::Projects {
+            tokio::spawn(self.clone().read_claude_models());
+        }
         tracing::info!(
             "Claude Remote Control is starting in {}",
             launch.directory.display()
@@ -1200,6 +1203,44 @@ mod tests {
             .expect("settings save");
         state.remote_control.supervision.reconsider();
         wait_for(&state, ServerState::Off).await;
+
+        state.remote_control.supervision.begin_shut_down();
+        supervisor.await.expect("supervisor stops");
+    }
+
+    #[tokio::test]
+    async fn starting_the_projects_server_reads_claude_codes_models() {
+        let manager = TestManager::new();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state = fake_claude(
+            &manager,
+            directory.path(),
+            "echo 'https://claude.ai/code?environment=env_test'; exec sleep 60",
+        );
+        let answer = r#"{"type":"control_response","response":{"subtype":"success","request_id":"ezra-models","response":{"models":[{"value":"opus","supportedEffortLevels":["high"]}]}}}"#;
+        manager.install_fake_cli(
+            Agent::Claude,
+            &format!(
+                "case \"$1\" in\n  auth) echo '{SIGNED_IN}' ;;\n  remote-control) echo 'https://claude.ai/code?environment=env_test'; exec sleep 60 ;;\n  -p) cat > /dev/null; echo '{answer}' ;;\nesac"
+            ),
+        );
+        assert!(state.agent_checks.models(Agent::Claude).is_empty());
+        let supervisor = tokio::spawn(state.clone().supervise_remote_control());
+        wait_for(&state, ServerState::Running).await;
+
+        let models = wait_until(
+            WAIT,
+            || state.agent_checks.models(Agent::Claude),
+            |models| !models.is_empty(),
+        )
+        .await;
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| (model.model.as_str(), model.efforts.len()))
+                .collect::<Vec<_>>(),
+            [("opus", 1)]
+        );
 
         state.remote_control.supervision.begin_shut_down();
         supervisor.await.expect("supervisor stops");
