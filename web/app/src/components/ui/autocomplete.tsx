@@ -43,6 +43,7 @@ function Autocomplete({
     !query || exact.length > 0
       ? [...exact, ...options.filter((option) => !exact.includes(option))]
       : options.filter((option) => option.value.toLowerCase().includes(query));
+  if (open && matches.length === 0) setOpen(false);
   return (
     <AutocompletePrimitive.Root
       open={open && matches.length > 0}

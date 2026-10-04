@@ -36,6 +36,10 @@ impl InboundRuntime {
         if recovered > 0 {
             tracing::warn!(recovered, "interrupted inbound operations recovered");
         }
+        let failed = store.fail_unknown_agents().await?;
+        if failed > 0 {
+            tracing::warn!(failed, "inbound requests for unknown agents failed");
+        }
         let (github_routing_sender, github_routing_receiver) = mpsc::unbounded_channel();
         let maintenance = Self {
             store,
@@ -345,6 +349,57 @@ mod tests {
                 .delivery_state(&pending.key)
                 .await
                 .expect("pending retained"),
+            Some(DeliveryState::Pending)
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_fails_waiting_requests_for_unknown_agents() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("ezra.db");
+        let store = EventStore::open(&path).await.expect("store opens");
+        let settings = Settings::default();
+        let known = InboundEvent::maintenance_example("known");
+        store
+            .insert(&known, settings.inbound.queue_limits())
+            .await
+            .expect("known request inserts");
+        drop(store);
+        let fixture_pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .expect("fixture database connects");
+        sqlx::query(
+            "INSERT INTO inbound_events (source, subject, event_id, actor, created_at, message, requested_agent)
+             VALUES ('github:github.com', 'unknown', 'comment-1', 'author', '2026-09-29T10:00:00Z', 'Continue', 'gemini')",
+        )
+        .execute(&fixture_pool)
+        .await
+        .expect("request from a newer version inserts");
+        fixture_pool.close().await;
+        let runtime = InboundRuntime::open(&path, Arc::new(Mutex::new(settings)))
+            .await
+            .expect("startup succeeds");
+        let unknown = EventKey {
+            conversation: ConversationKey {
+                source: "github:github.com".to_owned(),
+                subject: "unknown".to_owned(),
+            },
+            id: "comment-1".to_owned(),
+        };
+        assert_eq!(
+            runtime
+                .store
+                .delivery_state(&unknown)
+                .await
+                .expect("unknown state"),
+            Some(DeliveryState::Failed)
+        );
+        assert_eq!(
+            runtime
+                .store
+                .delivery_state(&known.key)
+                .await
+                .expect("known state"),
             Some(DeliveryState::Pending)
         );
     }

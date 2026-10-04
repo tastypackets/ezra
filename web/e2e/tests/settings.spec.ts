@@ -450,6 +450,9 @@ test("GitHub trigger settings persist and reject duplicate shortcuts", async ({
 
 const NO_CODEX_SUGGESTIONS =
   "Codex suggestions appear once Codex is running. You can still type model and effort values.";
+const NO_CLAUDE_SUGGESTIONS =
+  "Claude Code suggestions appear once its ~/projects server is running. You can still type model and effort values.";
+
 /** A model as an agent lists it, with efforts that have no description. */
 function listed(model: string, display_name: string, description: string, efforts: string[]) {
   return {
@@ -555,4 +558,57 @@ test("manual shortcut values remain usable before an agent lists its models", as
   } finally {
     await request.put("api/v1/inbound/settings", { data: {} });
   }
+});
+
+test("a shortcut's agent picks its suggestions", async ({ page }) => {
+  const announce = await listModels(page, {
+    claude: [
+      listed("opus", "Opus", "For complex work", ["low", "max"]),
+      listed("haiku", "Haiku", "Fastest", []),
+    ],
+  });
+  await page.goto("./settings");
+  const triggers = card(page, "GitHub triggers");
+  const agent = triggers.getByRole("combobox", { name: "Agent", exact: true });
+  const agentValue = agent.locator("[data-slot=select-value]");
+  const model = triggers.getByRole("combobox", { name: "Chat model", exact: true });
+  const effort = triggers.getByRole("combobox", { name: "Chat effort", exact: true });
+  const noCodex = triggers.getByText(NO_CODEX_SUGGESTIONS, { exact: true });
+  const noClaude = triggers.getByText(NO_CLAUDE_SUGGESTIONS, { exact: true });
+  await expect(agentValue).toHaveText("Codex");
+  await expect(noCodex).toBeVisible();
+  await expect(noClaude).toBeHidden();
+  await model.fill("codex-model");
+  await effort.fill("high");
+
+  await agent.click();
+  await page.getByRole("option", { name: "Claude Code", exact: true }).click();
+  await expect(agentValue).toHaveText("Claude Code");
+  await expect(model).toHaveValue("");
+  await expect(effort).toHaveValue("");
+  await expect(noCodex).toBeHidden();
+  await expect(noClaude).toBeVisible();
+  await announce();
+  await expect(noClaude).toBeHidden();
+
+  await triggers.getByRole("button", { name: "Show Claude models", exact: true }).click();
+  await expect(page.getByRole("option")).toHaveCount(2);
+  await page.getByRole("option", { name: "haiku Fastest", exact: true }).click();
+  await expect(model).toHaveValue("haiku");
+  await triggers.getByRole("button", { name: "Show Claude effort levels", exact: true }).click();
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await model.fill("");
+  await page.keyboard.press("Escape");
+  await triggers.getByRole("button", { name: "Show Claude models", exact: true }).click();
+  await page.getByRole("option", { name: "opus For complex work", exact: true }).click();
+  await expect(model).toHaveValue("opus");
+  await triggers.getByRole("button", { name: "Show Claude effort levels", exact: true }).click();
+  await expect(page.getByRole("option")).toHaveText(["low", "max"]);
+  await page.getByRole("option", { name: "max", exact: true }).click();
+  await expect(effort).toHaveValue("max");
+
+  await triggers.getByRole("button", { name: "Add shortcut" }).click();
+  await expect(agentValue.last()).toHaveText("Codex");
+  await expect(noCodex).toBeVisible();
 });

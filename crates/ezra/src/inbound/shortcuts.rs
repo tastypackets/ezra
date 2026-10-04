@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 use super::{InboundSettings, InvalidEvent, MAX_IDENTIFIER_BYTES};
+use crate::agent::Agent;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(default)]
 pub struct Shortcut {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
+    /// Shortcuts saved without an agent use Codex.
+    #[schema(required = true)]
+    pub agent: Agent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,13 +50,19 @@ impl TriggerTextExt for str {
     }
 }
 
+impl Default for Shortcut {
+    fn default() -> Self {
+        Self {
+            agent: Agent::Codex,
+            model: None,
+            effort: None,
+        }
+    }
+}
+
 impl Shortcut {
     pub fn validate(&self) -> Result<(), InvalidEvent> {
-        for (field, value) in [
-            ("agent", &self.agent),
-            ("model", &self.model),
-            ("effort", &self.effort),
-        ] {
+        for (field, value) in [("model", &self.model), ("effort", &self.effort)] {
             if let Some(value) = value {
                 if value.trim().is_empty() {
                     return Err(InvalidEvent::Empty { field });
@@ -172,7 +180,7 @@ mod tests {
     fn custom_shortcuts_return_their_options_and_reject_ambiguity() {
         let mut settings = InboundSettings::default();
         let options = Shortcut {
-            agent: Some("codex".to_owned()),
+            agent: Agent::Codex,
             model: Some("chosen-model".to_owned()),
             effort: Some("high".to_owned()),
         };
@@ -205,6 +213,39 @@ mod tests {
                 .expect("custom text")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn shortcuts_without_an_agent_load_as_codex_and_always_save_their_agent() {
+        let saved_before_agents: Shortcut =
+            serde_json::from_str(r#"{"model":"chosen-model"}"#).expect("0.4.0 shortcut");
+        assert_eq!(
+            saved_before_agents,
+            Shortcut {
+                agent: Agent::Codex,
+                model: Some("chosen-model".to_owned()),
+                effort: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(Shortcut::default()).expect("shortcut serializes"),
+            serde_json::json!({ "agent": "codex" })
+        );
+        let claude = Shortcut {
+            agent: Agent::Claude,
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+        };
+        let serialized = serde_json::to_value(&claude).expect("shortcut serializes");
+        assert_eq!(
+            serialized,
+            serde_json::json!({ "agent": "claude", "model": "opus", "effort": "high" })
+        );
+        assert_eq!(
+            serde_json::from_value::<Shortcut>(serialized).expect("shortcut loads"),
+            claude
+        );
+        assert!(serde_json::from_str::<Shortcut>(r#"{"agent":"unsupported"}"#).is_err());
     }
 
     #[test]

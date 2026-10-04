@@ -658,6 +658,7 @@ impl MessageSender for AvailabilitySender {
         &self,
         _workspace: &str,
         _name: Option<&str>,
+        _options: &ezra::inbound::Shortcut,
     ) -> Result<String, MessageSendError> {
         panic!("scheduler fixture supplies the operation")
     }
