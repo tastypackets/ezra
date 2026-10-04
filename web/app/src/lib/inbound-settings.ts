@@ -1,25 +1,31 @@
-import type { CodexModel, InboundSettings } from "@ezra/client";
+import type { Agent, AgentModel, AgentStatus, InboundSettings } from "@ezra/client";
 
 import { INBOUND_COPY } from "@/content/inbound";
 
-export function modelSuggestions(models: readonly CodexModel[]) {
+/** The models `agent` listed when it last started, empty until it has. */
+export function agentModels(agents: readonly AgentStatus[] | undefined, agent: Agent) {
+  return agents?.find((status) => status.agent === agent)?.models ?? [];
+}
+
+export function modelSuggestions(models: readonly AgentModel[]) {
   return models.map((model) => ({
     value: model.model,
-    description: model.description || model.display_name,
+    description: model.description || model.display_name || undefined,
   }));
 }
 
-export function effortSuggestions(models: readonly CodexModel[], selectedModel: string) {
+/** The selected model's efforts, or every listed effort for a model the agent did not list. */
+export function effortSuggestions(models: readonly AgentModel[], selectedModel: string) {
   const selected = models.find((model) => model.model === selectedModel.trim());
   const candidates = selected ? [selected] : models;
   return [
     ...new Map(
       candidates.flatMap((model) =>
-        (model.supported_reasoning_efforts ?? []).map(
+        model.efforts.map(
           (effort) =>
             [
-              effort.reasoning_effort,
-              { value: effort.reasoning_effort, description: effort.description },
+              effort.effort,
+              { value: effort.effort, description: effort.description || undefined },
             ] as const,
         ),
       ),

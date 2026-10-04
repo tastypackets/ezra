@@ -28,6 +28,28 @@ pub struct AgentStatus {
     pub install_progress: Option<DownloadProgress>,
     /// A newer release than the installed version, absent when none is known.
     pub available_update: Option<String>,
+    /// The models the agent listed when it last came up, empty until it has.
+    pub models: Vec<AgentModel>,
+}
+
+/// A model an agent offers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct AgentModel {
+    /// What a shortcut's model is set to for this model.
+    pub model: String,
+    pub display_name: String,
+    pub description: String,
+    /// The efforts the model takes, empty when it takes none.
+    pub efforts: Vec<AgentEffort>,
+}
+
+/// An effort a model takes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct AgentEffort {
+    /// What a shortcut's effort is set to for this effort.
+    pub effort: String,
+    /// Empty when the agent describes none.
+    pub description: String,
 }
 
 impl AgentStatus {
@@ -85,6 +107,7 @@ impl AgentStatus {
             config_disk_bytes: state.agent_checks.config_bytes(agent),
             install_progress,
             available_update,
+            models: state.agent_checks.models(agent),
         }
     }
 }
@@ -96,9 +119,44 @@ mod tests {
 
     use super::*;
     use crate::manager::agents::ReleaseChannel;
-    use crate::manager::api::test_support::{ResponseExt, TestManager};
+    use crate::manager::api::test_support::{EventStreamExt, ResponseExt, TestManager};
+    use crate::manager::events::Topic;
     use crate::manager::updates::LatestRelease;
     use crate::path_ext::PathExt;
+
+    #[tokio::test]
+    async fn each_agent_lists_the_models_it_last_listed() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let mut events = Box::pin(manager.state.events.stream());
+        let model = AgentModel {
+            model: "opus".to_owned(),
+            display_name: "Opus".to_owned(),
+            description: String::new(),
+            efforts: vec![AgentEffort {
+                effort: "high".to_owned(),
+                description: String::new(),
+            }],
+        };
+        manager
+            .state
+            .agent_checks
+            .store_models(Agent::Claude, vec![model.clone()]);
+        assert!(events.published().await.contains(&Topic::Agents));
+
+        let listing: Vec<AgentStatus> = manager
+            .get("/api/v1/agents", Some(&cookie))
+            .await
+            .json()
+            .await;
+        assert_eq!(
+            listing
+                .into_iter()
+                .map(|status| (status.agent, status.models))
+                .collect::<Vec<_>>(),
+            [(Agent::Claude, vec![model]), (Agent::Codex, Vec::new())]
+        );
+    }
 
     #[tokio::test]
     async fn listing_agents_runs_no_cli() {

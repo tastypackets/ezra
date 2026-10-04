@@ -256,6 +256,7 @@ mod tests {
                 config_disk_bytes: None,
                 install_progress: None,
                 available_update: None,
+                models: Vec::new(),
             }]),
             folders: None,
             git: None,

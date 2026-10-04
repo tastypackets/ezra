@@ -9,12 +9,13 @@ use tokio::time::{Instant, sleep, timeout};
 use super::agents::{Agent, InstallPaths};
 use super::events::{Events, Topic};
 use super::login::{AgentCli, ClaudeCredentials, SignInStatus};
+use super::status::AgentModel;
 use crate::path_ext::PathExt;
 
 const SIGN_IN_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECK_INTERVAL: Duration = Duration::from_mins(5);
 
-/// Each agent's sign-in and config size as last checked, so reading them runs nothing.
+/// Each agent's sign-in, config size and models as last checked, so reading them runs nothing.
 pub struct AgentChecks {
     install_paths: Arc<InstallPaths>,
     events: Events,
@@ -29,6 +30,7 @@ struct AgentCheck {
     sign_in: watch::Sender<Option<SignInStatus>>,
     sign_in_ends_at: watch::Sender<Option<OffsetDateTime>>,
     config_bytes: watch::Sender<Option<u64>>,
+    models: watch::Sender<Vec<AgentModel>>,
 }
 
 impl AgentCheck {
@@ -38,6 +40,7 @@ impl AgentCheck {
             sign_in: watch::Sender::new(None),
             sign_in_ends_at: watch::Sender::new(None),
             config_bytes: watch::Sender::new(None),
+            models: watch::Sender::new(Vec::new()),
         }
     }
 }
@@ -70,6 +73,15 @@ impl AgentChecks {
     /// Absent until measured, or when the directory cannot be read.
     pub fn config_bytes(&self, agent: Agent) -> Option<u64> {
         *self.of(agent).config_bytes.borrow()
+    }
+
+    /// The models the agent listed when it last came up, empty until it has.
+    pub fn models(&self, agent: Agent) -> Vec<AgentModel> {
+        self.of(agent).models.borrow().clone()
+    }
+
+    pub fn store_models(&self, agent: Agent, models: Vec<AgentModel>) {
+        self.store(&self.of(agent).models, models);
     }
 
     /// Asks the CLI and measures the config directory now.

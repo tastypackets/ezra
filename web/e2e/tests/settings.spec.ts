@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { Page, PlaywrightTestOptions, PlaywrightWorkerArgs } from "@playwright/test";
+import type { Page, PlaywrightTestOptions, PlaywrightWorkerArgs, Route } from "@playwright/test";
 
 import {
   CODEX_SIGNED_OUT,
@@ -448,31 +448,66 @@ test("GitHub trigger settings persist and reject duplicate shortcuts", async ({
   }
 });
 
+const NO_CODEX_SUGGESTIONS =
+  "Codex suggestions appear once Codex is running. You can still type model and effort values.";
+/** A model as an agent lists it, with efforts that have no description. */
+function listed(model: string, display_name: string, description: string, efforts: string[]) {
+  return {
+    model,
+    display_name,
+    description,
+    efforts: efforts.map((effort) => ({ effort, description: "" })),
+  };
+}
+
+/**
+ * Serves `models` in the agents list, and returns a function that tells the page the agents
+ * changed, as the manager does once an agent has listed its models.
+ */
+async function listModels(
+  page: Page,
+  models: Partial<Record<"claude" | "codex", object[]>>,
+): Promise<() => Promise<void>> {
+  const events: Route[] = [];
+  await page.route("**/api/v1/events", (route) => {
+    events.push(route);
+  });
+  await page.route("**/api/v1/agents", async (route) => {
+    const response = await route.fetch();
+    const agents = (await response.json()) as { agent: "claude" | "codex" }[];
+    await route.fulfill({
+      response,
+      json: agents.map((agent) => ({ ...agent, models: models[agent.agent] ?? [] })),
+    });
+  });
+  return async () => {
+    await expect.poll(() => events.length).toBeGreaterThan(0);
+    await events.shift()?.fulfill({
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ event: "changed", topic: "agents", revision: 1 })}\n\n`,
+    });
+  };
+}
+
 test("shortcut model and effort suggestions follow the selected model and accept custom values", async ({
   page,
   request,
 }) => {
-  await page.route("**/api/v1/agents/codex/models", (route) =>
-    route.fulfill({
-      json: [
-        {
-          model: "first-model",
-          display_name: "First",
-          supported_reasoning_efforts: [{ reasoning_effort: "low" }, { reasoning_effort: "high" }],
-        },
-        {
-          model: "second-model",
-          display_name: "Second",
-          supported_reasoning_efforts: [{ reasoning_effort: "future-effort" }],
-        },
-      ],
-    }),
-  );
+  const announce = await listModels(page, {
+    codex: [
+      listed("first-model", "First", "", ["low", "high"]),
+      listed("second-model", "Second", "", ["future-effort"]),
+    ],
+  });
   try {
     await page.goto("./settings");
     const triggers = card(page, "GitHub triggers");
     const model = triggers.getByRole("combobox", { name: "Chat model", exact: true });
     const effort = triggers.getByRole("combobox", { name: "Chat effort", exact: true });
+    const unlisted = triggers.getByText(NO_CODEX_SUGGESTIONS, { exact: true });
+    await expect(unlisted).toBeVisible();
+    await announce();
+    await expect(unlisted).toBeHidden();
     await triggers.getByRole("button", { name: "Show Codex models", exact: true }).click();
     await page.getByRole("option", { name: "first-model First", exact: true }).click();
     await expect(model).toHaveValue("first-model");
@@ -501,22 +536,14 @@ test("shortcut model and effort suggestions follow the selected model and accept
   }
 });
 
-test("manual shortcut values remain usable when Codex model discovery fails", async ({
+test("manual shortcut values remain usable before an agent lists its models", async ({
   page,
   request,
 }) => {
-  await page.route("**/api/v1/agents/codex/models", (route) =>
-    route.fulfill({ status: 502, json: { error: "Unsupported catalog" } }),
-  );
   try {
     await page.goto("./settings");
     const triggers = card(page, "GitHub triggers");
-    await expect(
-      triggers.getByText(
-        "Codex suggestions are unavailable. You can still type model and effort values.",
-        { exact: true },
-      ),
-    ).toBeVisible();
+    await expect(triggers.getByText(NO_CODEX_SUGGESTIONS, { exact: true })).toBeVisible();
     await triggers.getByRole("combobox", { name: "Chat model", exact: true }).fill("manual-model");
     await triggers
       .getByRole("combobox", { name: "Chat effort", exact: true })

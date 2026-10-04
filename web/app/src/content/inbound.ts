@@ -13,8 +13,8 @@ export const INBOUND_COPY = {
   showModels: "Show Codex models",
   showEfforts: "Show Codex effort levels",
   currentDefault: "Keep current default",
-  discoveryUnavailable:
-    "Codex suggestions are unavailable. You can still type model and effort values.",
+  noSuggestions:
+    "Codex suggestions appear once Codex is running. You can still type model and effort values.",
   add: "Add shortcut",
   remove: "Remove shortcut",
   retention: "History retention in days",
