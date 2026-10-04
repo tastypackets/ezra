@@ -44,8 +44,9 @@ impl EventStore {
         let subjects = serde_json::to_string(subjects).expect("strings serialize as JSON");
         sqlx::query!(
             "UPDATE inbound_source_checkpoints
-             SET active = source = ?2 AND EXISTS (SELECT 1 FROM json_each(?3) WHERE value = subject)
-             WHERE substr(source, 1, length(?1)) = ?1",
+             SET active = NOT active
+             WHERE substr(source, 1, length(?1)) = ?1
+                 AND active != (source = ?2 AND EXISTS (SELECT 1 FROM json_each(?3) WHERE value = subject))",
             source_prefix,
             source,
             subjects,
@@ -181,6 +182,45 @@ mod tests {
                 .await,
             Err(StoreError::CheckpointMissing)
         ));
+    }
+
+    #[tokio::test]
+    async fn reconciling_unchanged_scopes_writes_nothing() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store");
+        let scope = ConversationKey {
+            source: "github:github.com".into(),
+            subject: "viewer/1".into(),
+        };
+        store
+            .source_checkpoint(&scope, OffsetDateTime::now_utc())
+            .await
+            .expect("checkpoint");
+        let subjects = [scope.subject.clone()];
+        let changes = || async {
+            sqlx::query_scalar!(r#"SELECT total_changes() AS "changes!: i64""#)
+                .fetch_one(&store.pool)
+                .await
+                .expect("changes")
+        };
+        let before = changes().await;
+        store
+            .set_active_source_scopes("github:", &scope.source, &subjects)
+            .await
+            .expect("unchanged scope");
+        assert_eq!(changes().await, before);
+        store
+            .set_active_source_scopes("github:", &scope.source, &[])
+            .await
+            .expect("disable scope");
+        assert_eq!(changes().await, before + 1);
+        store
+            .set_active_source_scopes("github:", &scope.source, &subjects)
+            .await
+            .expect("enable scope");
+        assert_eq!(changes().await, before + 2);
     }
 
     #[tokio::test]

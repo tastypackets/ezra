@@ -30,7 +30,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use time::OffsetDateTime;
 
 use super::{EventKey, InboundEvent, InvalidEvent, Shortcut};
@@ -88,6 +88,7 @@ impl EventStore {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -191,6 +192,19 @@ mod tests {
                 message: "Explain 'this';\n\nKeep the formatting. 🦦".to_owned(),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn database_uses_write_ahead_logging() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store opens");
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&store.pool)
+            .await
+            .expect("journal mode reads");
+        assert_eq!(mode, "wal");
     }
 
     #[tokio::test]
