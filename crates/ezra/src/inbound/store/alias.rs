@@ -1,4 +1,5 @@
 use super::{EventStore, SessionTarget, StoreError};
+use crate::agent::Agent;
 use crate::inbound::ConversationKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,16 +15,20 @@ impl EventStore {
         &self,
         conversation: &ConversationKey,
         destination: &ConversationKey,
+        agent: Agent,
     ) -> Result<AliasOutcome, StoreError> {
+        let agent = agent.command_name();
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let target = sqlx::query_as!(
             SessionTarget,
             "SELECT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace
              FROM inbound_conversations AS conversations
              JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id
-             WHERE conversations.source = ?1 AND conversations.subject = ?2",
+             WHERE conversations.source = ?1 AND conversations.subject = ?2 AND conversations.agent = ?3",
             destination.source,
             destination.subject,
+            agent,
         )
         .fetch_optional(&mut *transaction)
         .await?;
@@ -34,10 +39,11 @@ impl EventStore {
         target.validate_binding(conversation)?;
         let already_bound = sqlx::query_scalar!(
             r#"SELECT EXISTS (
-                   SELECT 1 FROM inbound_conversations WHERE source = ?1 AND subject = ?2
+                   SELECT 1 FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?3
                ) AS "already_bound!: bool""#,
             conversation.source,
             conversation.subject,
+            agent,
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -50,9 +56,12 @@ impl EventStore {
                    SELECT 1 FROM inbound_events
                    WHERE source = ?1 AND subject = ?2
                      AND delivery_state IN ('delivering', 'uncertain')
+                     AND COALESCE(requested_agent, ?4) = ?3
                ) AS "unresolved!: bool""#,
             conversation.source,
             conversation.subject,
+            agent,
+            unrecorded_agent,
         )
         .fetch_one(&mut *transaction)
         .await?;
@@ -61,23 +70,25 @@ impl EventStore {
             return Ok(AliasOutcome::UnresolvedDelivery);
         }
         sqlx::query!(
-            "INSERT INTO inbound_conversations (source, subject, session_id)
-             SELECT ?1, ?2, session_id FROM inbound_conversations
-             WHERE source = ?3 AND subject = ?4",
+            "INSERT INTO inbound_conversations (source, subject, agent, session_id)
+             SELECT ?1, ?2, agent, session_id FROM inbound_conversations
+             WHERE source = ?3 AND subject = ?4 AND agent = ?5",
             conversation.source,
             conversation.subject,
             destination.source,
             destination.subject,
+            agent,
         )
         .execute(&mut *transaction)
         .await?;
         sqlx::query!(
             "UPDATE inbound_sessions SET last_used_at = MAX(last_used_at, unixepoch())
              WHERE id = (
-                 SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2
+                 SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?3
              )",
             conversation.source,
             conversation.subject,
+            agent,
         )
         .execute(&mut *transaction)
         .await?;
@@ -135,7 +146,7 @@ mod tests {
         let pull_request = InboundEvent::alias_example("pull-2").key.conversation;
         assert_eq!(
             store
-                .link_conversation(&pull_request, &issue)
+                .link_conversation(&pull_request, &issue, Agent::Codex)
                 .await
                 .expect("missing destination"),
             AliasOutcome::MissingDestination
@@ -147,7 +158,7 @@ mod tests {
             .expect("issue binds");
         assert_eq!(
             store
-                .link_conversation(&pull_request, &issue)
+                .link_conversation(&pull_request, &issue, Agent::Codex)
                 .await
                 .expect("alias creates"),
             AliasOutcome::Created
@@ -156,14 +167,14 @@ mod tests {
         let store = EventStore::open(&path).await.expect("store reopens");
         assert_eq!(
             store
-                .find_binding(&pull_request)
+                .find_binding(&pull_request, Agent::Codex)
                 .await
                 .expect("alias lookup"),
             Some(target.clone())
         );
         assert_eq!(
             store
-                .link_conversation(&pull_request, &issue)
+                .link_conversation(&pull_request, &issue, Agent::Codex)
                 .await
                 .expect("alias repeats"),
             AliasOutcome::AlreadyBound
@@ -179,14 +190,14 @@ mod tests {
             .expect("other issue binds");
         assert_eq!(
             store
-                .link_conversation(&pull_request, &other_issue)
+                .link_conversation(&pull_request, &other_issue, Agent::Codex)
                 .await
                 .expect("replacement refused"),
             AliasOutcome::AlreadyBound
         );
         assert_eq!(
             store
-                .find_binding(&pull_request)
+                .find_binding(&pull_request, Agent::Codex)
                 .await
                 .expect("original alias lookup"),
             Some(target)
@@ -196,7 +207,9 @@ mod tests {
             ..issue.clone()
         };
         assert!(matches!(
-            store.link_conversation(&invalid_alias, &issue).await,
+            store
+                .link_conversation(&invalid_alias, &issue, Agent::Codex)
+                .await,
             Err(StoreError::InvalidBinding(_))
         ));
     }
@@ -225,7 +238,11 @@ mod tests {
             .await
             .expect("issue binds");
         store
-            .link_conversation(&pull_event.key.conversation, &issue_event.key.conversation)
+            .link_conversation(
+                &pull_event.key.conversation,
+                &issue_event.key.conversation,
+                Agent::Codex,
+            )
             .await
             .expect("PR links");
         for event in [&issue_event, &pull_event, &followup_event] {
@@ -305,7 +322,11 @@ mod tests {
         store.claim_next(None).await.expect("PR claims");
         assert_eq!(
             store
-                .link_conversation(&pull_event.key.conversation, &issue_event.key.conversation)
+                .link_conversation(
+                    &pull_event.key.conversation,
+                    &issue_event.key.conversation,
+                    Agent::Codex
+                )
                 .await
                 .expect("in-flight PR refused"),
             AliasOutcome::UnresolvedDelivery
@@ -316,14 +337,18 @@ mod tests {
             .expect("PR uncertain");
         assert_eq!(
             store
-                .link_conversation(&pull_event.key.conversation, &issue_event.key.conversation)
+                .link_conversation(
+                    &pull_event.key.conversation,
+                    &issue_event.key.conversation,
+                    Agent::Codex
+                )
                 .await
                 .expect("uncertain PR refused"),
             AliasOutcome::UnresolvedDelivery
         );
         assert_eq!(
             store
-                .find_binding(&pull_event.key.conversation)
+                .find_binding(&pull_event.key.conversation, Agent::Codex)
                 .await
                 .expect("PR unlinked"),
             None
@@ -341,7 +366,8 @@ mod tests {
             store
                 .link_conversation(
                     &new_alias_event.key.conversation,
-                    &issue_event.key.conversation
+                    &issue_event.key.conversation,
+                    Agent::Codex
                 )
                 .await
                 .expect("busy destination links"),
@@ -365,6 +391,87 @@ mod tests {
         assert_eq!(
             store.claim_next(None).await.expect("alias claims"),
             Some(new_alias_event)
+        );
+    }
+
+    #[tokio::test]
+    async fn links_copy_only_the_requested_agents_chat() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store opens");
+        let issue = InboundEvent::alias_example("issue-1").key.conversation;
+        let pull_request = InboundEvent::alias_example("pull-2").key.conversation;
+        let codex = SessionTarget::alias_target();
+        let claude = SessionTarget {
+            agent: "claude".to_owned(),
+            chat_id: "claude-chat".to_owned(),
+            ..codex.clone()
+        };
+        store
+            .bind_conversation(&issue, &codex)
+            .await
+            .expect("issue binds to Codex");
+        assert_eq!(
+            store
+                .link_conversation(&pull_request, &issue, Agent::Claude)
+                .await
+                .expect("issue has no Claude chat"),
+            AliasOutcome::MissingDestination
+        );
+        store
+            .bind_conversation(&issue, &claude)
+            .await
+            .expect("issue binds to Claude");
+        assert_eq!(
+            store
+                .link_conversation(&pull_request, &issue, Agent::Claude)
+                .await
+                .expect("Claude alias creates"),
+            AliasOutcome::Created
+        );
+        assert_eq!(
+            store
+                .find_binding(&pull_request, Agent::Claude)
+                .await
+                .expect("Claude alias lookup"),
+            Some(claude.clone())
+        );
+        assert_eq!(
+            store
+                .find_binding(&pull_request, Agent::Codex)
+                .await
+                .expect("Codex lookup"),
+            None
+        );
+        let mut busy = InboundEvent::alias_example("pull-3");
+        busy.options.agent = Agent::Claude;
+        store
+            .insert(&busy, TEST_QUEUE_LIMITS)
+            .await
+            .expect("Claude request inserts");
+        store.claim_next(None).await.expect("Claude request claims");
+        let busy_pull = busy.key.conversation;
+        assert_eq!(
+            store
+                .link_conversation(&busy_pull, &issue, Agent::Claude)
+                .await
+                .expect("in-flight Claude request refused"),
+            AliasOutcome::UnresolvedDelivery
+        );
+        assert_eq!(
+            store
+                .link_conversation(&busy_pull, &issue, Agent::Codex)
+                .await
+                .expect("Codex alias creates"),
+            AliasOutcome::Created
+        );
+        assert_eq!(
+            store
+                .find_binding(&busy_pull, Agent::Codex)
+                .await
+                .expect("Codex alias lookup"),
+            Some(codex)
         );
     }
 }

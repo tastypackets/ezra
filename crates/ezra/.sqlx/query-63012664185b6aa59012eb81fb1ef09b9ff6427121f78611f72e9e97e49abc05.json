@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT new_chat AS \"new_chat!: bool\" FROM inbound_events\n               WHERE source = ?1 AND subject = ?2 AND event_id = ?3 AND delivery_state = 'delivering'\n                 AND (new_chat = 0 OR new_chat_applied = 0)\n                 AND COALESCE(requested_agent, ?5) = ?4",
+  "describe": {
+    "columns": [
+      {
+        "name": "new_chat!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "inbound_events",
+            "name": "new_chat"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "63012664185b6aa59012eb81fb1ef09b9ff6427121f78611f72e9e97e49abc05"
+}

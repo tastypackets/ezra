@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT DISTINCT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace\n                 FROM inbound_conversations AS conversations\n                 JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id\n                 JOIN json_each(?1) AS related\n                   ON conversations.source = json_extract(related.value, '$.source')\n                  AND conversations.subject = json_extract(related.value, '$.subject')",
+  "query": "SELECT sessions.host_id, sessions.agent, sessions.chat_id, sessions.workspace\n             FROM inbound_conversations AS conversations\n             JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id\n             WHERE conversations.source = ?1 AND conversations.subject = ?2 AND conversations.agent = ?3",
   "describe": {
     "columns": [
       {
@@ -49,7 +49,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 3
     },
     "nullable": [
       false,
@@ -58,5 +58,5 @@
       false
     ]
   },
-  "hash": "d05107906882f0c89e0dfae42901c5e7dbdab9fc1cb1ad6e77988f762c7315da"
+  "hash": "c4c0e963add067bd749de11d502da3543ab4bb10ef3e0aa8ecef718f478044c3"
 }

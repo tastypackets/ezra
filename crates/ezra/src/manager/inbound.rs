@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(
             maintenance
                 .store
-                .find_binding(&delivered.key.conversation)
+                .find_binding(&delivered.key.conversation, Agent::Codex)
                 .await
                 .expect("idle binding removed"),
             None
@@ -343,7 +343,7 @@ mod tests {
         assert!(
             maintenance
                 .store
-                .find_binding(&pending.key.conversation)
+                .find_binding(&pending.key.conversation, Agent::Codex)
                 .await
                 .expect("queued binding retained")
                 .is_some()

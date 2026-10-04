@@ -113,7 +113,7 @@ impl EventStore {
         let delivery_id = event.key.delivery_id();
         tracing::Span::current().record("delivery_id", delivery_id.as_str());
         let target = self
-            .find_binding(&event.key.conversation)
+            .find_binding(&event.key.conversation, event.options.agent)
             .await?
             .ok_or(StoreError::DeliveryChanged)?;
         let initial_context_pending = sqlx::query_scalar!(
@@ -256,6 +256,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::agent::Agent;
     use crate::inbound::store::{DeliveryState, SessionTarget, TEST_QUEUE_LIMITS};
     use crate::inbound::{ConversationKey, InboundEvent, Shortcut};
 
@@ -406,7 +407,7 @@ mod tests {
             }
             assert_eq!(
                 self.store
-                    .find_binding(&event.key.conversation)
+                    .find_binding(&event.key.conversation, Agent::Codex)
                     .await
                     .expect("binding")
                     .expect("bound")
@@ -469,7 +470,7 @@ mod tests {
             );
             assert_eq!(
                 store
-                    .find_binding(&event.key.conversation)
+                    .find_binding(&event.key.conversation, Agent::Codex)
                     .await
                     .expect("binding")
                     .expect("bound")
@@ -583,7 +584,11 @@ mod tests {
                 .await
                 .expect("issue binds");
             store
-                .link_conversation(&followup.key.conversation, &issue.key.conversation)
+                .link_conversation(
+                    &followup.key.conversation,
+                    &issue.key.conversation,
+                    Agent::Codex,
+                )
                 .await
                 .expect("PR links");
             for event in [&issue, &followup] {
@@ -721,7 +726,11 @@ mod tests {
             followup.key.conversation.subject = "pull-2".to_owned();
             followup.message = "Full followup\n\n```rust\nrun();\n```".to_owned();
             store
-                .link_conversation(&followup.key.conversation, &event.key.conversation)
+                .link_conversation(
+                    &followup.key.conversation,
+                    &event.key.conversation,
+                    Agent::Codex,
+                )
                 .await
                 .expect("link");
             store

@@ -1,35 +1,39 @@
 use super::{EventStore, StoreError};
+use crate::agent::Agent;
 use crate::inbound::EventKey;
 
 impl EventStore {
     /// Call only after confirming that the native session accepted this event's message.
     pub async fn confirm_delivery(&self, key: &EventKey) -> Result<bool, StoreError> {
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let result = sqlx::query!(
-            "UPDATE inbound_events SET delivery_state = 'delivered'
-             WHERE source = ?1 AND subject = ?2 AND event_id = ?3
-               AND delivery_state = 'uncertain' AND (new_chat = 0 OR new_chat_applied = 1)",
+        let confirmed = sqlx::query_scalar!(
+            r#"UPDATE inbound_events SET delivery_state = 'delivered'
+               WHERE source = ?1 AND subject = ?2 AND event_id = ?3
+                 AND delivery_state = 'uncertain' AND (new_chat = 0 OR new_chat_applied = 1)
+               RETURNING COALESCE(requested_agent, ?4) AS "agent!: String""#,
             key.conversation.source,
             key.conversation.subject,
             key.id,
+            unrecorded_agent,
         )
-        .execute(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await?;
-        let confirmed = result.rows_affected() == 1;
-        if confirmed {
+        if let Some(agent) = &confirmed {
             sqlx::query!(
                 "UPDATE inbound_sessions SET last_used_at = MAX(last_used_at, unixepoch()), initial_context_pending = 0
                  WHERE id = (
-                     SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2
+                     SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?3
                  )",
                 key.conversation.source,
                 key.conversation.subject,
+                agent,
             )
             .execute(&mut *transaction)
             .await?;
         }
         transaction.commit().await?;
-        Ok(confirmed)
+        Ok(confirmed.is_some())
     }
 }
 
@@ -83,7 +87,11 @@ mod tests {
             .await
             .expect("issue binds");
         store
-            .link_conversation(&followup.key.conversation, &interrupted.key.conversation)
+            .link_conversation(
+                &followup.key.conversation,
+                &interrupted.key.conversation,
+                Agent::Codex,
+            )
             .await
             .expect("PR links");
         for event in [&interrupted, &followup] {
@@ -233,7 +241,7 @@ mod tests {
         );
         assert!(
             store
-                .find_binding(&event.key.conversation)
+                .find_binding(&event.key.conversation, Agent::Codex)
                 .await
                 .expect("binding lookup")
                 .is_some()

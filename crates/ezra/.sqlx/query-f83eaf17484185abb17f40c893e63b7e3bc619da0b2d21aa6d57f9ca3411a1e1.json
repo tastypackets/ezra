@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                        SELECT 1 FROM inbound_events AS events\n                        JOIN inbound_conversations AS conversations\n                          ON events.source = conversations.source AND events.subject = conversations.subject\n                         AND COALESCE(events.requested_agent, ?4) = conversations.agent\n                        JOIN inbound_sessions AS sessions ON sessions.id = conversations.session_id\n                        WHERE sessions.host_id = ?1 AND sessions.agent = ?2 AND sessions.chat_id = ?3\n                          AND events.delivery_state = 'delivering'\n                    ) AS \"busy!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "busy!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f83eaf17484185abb17f40c893e63b7e3bc619da0b2d21aa6d57f9ca3411a1e1"
+}

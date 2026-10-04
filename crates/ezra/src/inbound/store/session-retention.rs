@@ -1,6 +1,7 @@
 use time::OffsetDateTime;
 
 use super::{EventStore, StoreError};
+use crate::agent::Agent;
 
 impl EventStore {
     /// Caps idle conversation links, expiring each session's aliases together.
@@ -11,6 +12,7 @@ impl EventStore {
         max_idle_conversations: u32,
     ) -> Result<u64, StoreError> {
         let cutoff_seconds = cutoff.unix_timestamp();
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let result = sqlx::query!(
             "WITH idle_sessions AS (
                  SELECT sessions.id, sessions.last_used_at,
@@ -22,6 +24,7 @@ impl EventStore {
                      JOIN inbound_events AS events
                        ON events.source = conversations.source
                       AND events.subject = conversations.subject
+                      AND COALESCE(events.requested_agent, ?3) = conversations.agent
                      WHERE conversations.session_id = sessions.id
                        AND events.delivery_state IN ('pending', 'delivering')
                  )
@@ -38,6 +41,7 @@ impl EventStore {
              )",
             cutoff_seconds,
             max_idle_conversations,
+            unrecorded_agent,
         )
         .execute(&self.pool)
         .await?;
@@ -118,7 +122,7 @@ mod tests {
             .await
             .expect("issue binds");
         store
-            .link_conversation(&pull_request, &issue_event.key.conversation)
+            .link_conversation(&pull_request, &issue_event.key.conversation, Agent::Codex)
             .await
             .expect("PR links");
         store
@@ -151,7 +155,7 @@ mod tests {
         for conversation in [&issue_event.key.conversation, &pull_request] {
             assert_eq!(
                 store
-                    .find_binding(conversation)
+                    .find_binding(conversation, Agent::Codex)
                     .await
                     .expect("expired lookup"),
                 None
@@ -175,7 +179,7 @@ mod tests {
             .expect("expired discussion can bind again");
         assert_eq!(
             store
-                .find_binding(&pull_request)
+                .find_binding(&pull_request, Agent::Codex)
                 .await
                 .expect("fresh lookup"),
             Some(fresh_target)
@@ -199,7 +203,7 @@ mod tests {
                 .await
                 .expect("issue binds");
             store
-                .link_conversation(&pull_event.key.conversation, &issue)
+                .link_conversation(&pull_event.key.conversation, &issue, Agent::Codex)
                 .await
                 .expect("PR links");
             store
@@ -223,7 +227,7 @@ mod tests {
             for conversation in [&issue, &pull_event.key.conversation] {
                 assert_eq!(
                     store
-                        .find_binding(conversation)
+                        .find_binding(conversation, Agent::Codex)
                         .await
                         .expect("protected lookup"),
                     Some(target.clone())
@@ -269,7 +273,7 @@ mod tests {
             );
             assert!(
                 store
-                    .find_binding(&event.key.conversation)
+                    .find_binding(&event.key.conversation, Agent::Codex)
                     .await
                     .expect("binding lookup")
                     .is_none()
@@ -325,13 +329,13 @@ mod tests {
         assert!(store.test_session_activity().await > 0);
         store.set_test_session_activity(0).await;
         store
-            .link_conversation(&pull_request, &issue_event.key.conversation)
+            .link_conversation(&pull_request, &issue_event.key.conversation, Agent::Codex)
             .await
             .expect("PR links");
         assert!(store.test_session_activity().await > 0);
         store.set_test_session_activity(0).await;
         store
-            .link_conversation(&pull_request, &issue_event.key.conversation)
+            .link_conversation(&pull_request, &issue_event.key.conversation, Agent::Codex)
             .await
             .expect("repeated link ignored");
         assert_eq!(store.test_session_activity().await, 0);
@@ -387,7 +391,7 @@ mod tests {
                     .expect("session binds");
             }
             store
-                .link_conversation(&middle_alias, &middle)
+                .link_conversation(&middle_alias, &middle, Agent::Codex)
                 .await
                 .expect("middle PR links");
             store.set_test_session_activity(1000).await;
@@ -409,7 +413,7 @@ mod tests {
             ] {
                 assert_eq!(
                     store
-                        .find_binding(conversation)
+                        .find_binding(conversation, Agent::Codex)
                         .await
                         .expect("retained lookup")
                         .is_some(),
@@ -466,14 +470,67 @@ mod tests {
         );
         assert!(
             store
-                .find_binding(&first_event.key.conversation)
+                .find_binding(&first_event.key.conversation, Agent::Codex)
                 .await
                 .expect("first retained")
                 .is_some()
         );
         assert_eq!(
-            store.find_binding(&second).await.expect("second expires"),
+            store
+                .find_binding(&second, Agent::Codex)
+                .await
+                .expect("second expires"),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_requests_keep_only_their_agents_chat() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = EventStore::open(&directory.path().join("ezra.db"))
+            .await
+            .expect("store opens");
+        let request = InboundEvent::session_retention_example("issue-1");
+        let codex = SessionTarget::retention_target("codex-chat");
+        let claude = SessionTarget {
+            agent: "claude".to_owned(),
+            ..SessionTarget::retention_target("claude-chat")
+        };
+        for target in [&codex, &claude] {
+            store
+                .bind_conversation(&request.key.conversation, target)
+                .await
+                .expect("issue binds");
+        }
+        store.set_test_session_activity(1000).await;
+        assert_eq!(
+            store
+                .insert(&request, TEST_QUEUE_LIMITS)
+                .await
+                .expect("Codex request inserts"),
+            InsertOutcome::Inserted
+        );
+        let cutoff = OffsetDateTime::from_unix_timestamp(2000).expect("cutoff timestamp");
+        assert_eq!(
+            store
+                .prune_sessions(cutoff, u32::MAX)
+                .await
+                .expect("idle Claude chat expires"),
+            1
+        );
+        assert_eq!(
+            store
+                .find_binding(&request.key.conversation, Agent::Claude)
+                .await
+                .expect("Claude lookup"),
+            None
+        );
+        assert_eq!(
+            store
+                .find_binding(&request.key.conversation, Agent::Codex)
+                .await
+                .expect("Codex lookup"),
+            Some(codex)
         );
     }
 }

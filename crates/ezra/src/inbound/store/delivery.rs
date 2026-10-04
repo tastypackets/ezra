@@ -49,6 +49,7 @@ impl EventStore {
                      AND NOT EXISTS (
                          SELECT 1 FROM inbound_events AS reset
                          WHERE reset.source = pending.source AND reset.subject = pending.subject
+                           AND COALESCE(reset.requested_agent, ?3) = COALESCE(pending.requested_agent, ?3)
                            AND reset.new_chat = 1 AND reset.new_chat_applied = 0
                            AND reset.delivery_state IN ('pending', 'delivering')
                            AND reset.rowid < pending.rowid
@@ -57,29 +58,30 @@ impl EventStore {
                          SELECT 1 FROM inbound_conversations AS conversation
                          JOIN inbound_sessions AS session ON session.id = conversation.session_id
                          WHERE conversation.source = pending.source AND conversation.subject = pending.subject
-                           AND session.host_id = ?1 AND session.agent = ?2
+                           AND conversation.agent = ?2 AND session.host_id = ?1
                      ))
                      AND (?2 IS NULL OR COALESCE(pending.requested_agent, ?3) = ?2)
                      AND NOT EXISTS (
                          SELECT 1 FROM inbound_events AS unresolved
                          WHERE unresolved.source = pending.source
                            AND unresolved.subject = pending.subject
+                           AND COALESCE(unresolved.requested_agent, ?3) = COALESCE(pending.requested_agent, ?3)
                            AND (unresolved.delivery_state = 'delivering'
                                 OR (unresolved.delivery_state = 'pending' AND unresolved.rowid < pending.rowid))
                      )
                      AND NOT EXISTS (
                          SELECT 1 FROM inbound_conversations AS destination
-                         JOIN inbound_sessions AS shared ON shared.id = destination.session_id
                          JOIN inbound_conversations AS related
                            ON related.session_id = destination.session_id
                          JOIN inbound_events AS unresolved
                            ON unresolved.source = related.source
                           AND unresolved.subject = related.subject
+                          AND COALESCE(unresolved.requested_agent, ?3) = related.agent
                          WHERE destination.source = pending.source
                            AND destination.subject = pending.subject
+                           AND destination.agent = COALESCE(pending.requested_agent, ?3)
                            AND (unresolved.delivery_state = 'delivering'
-                                OR (unresolved.delivery_state = 'pending' AND unresolved.rowid < pending.rowid
-                                    AND COALESCE(unresolved.requested_agent, ?3) = shared.agent))
+                                OR (unresolved.delivery_state = 'pending' AND unresolved.rowid < pending.rowid))
                      )
                    ORDER BY pending.received_at, pending.rowid LIMIT 1
                )
@@ -132,19 +134,18 @@ impl EventStore {
                    SELECT 1 FROM inbound_conversations AS conversation
                    JOIN inbound_sessions AS session ON session.id = conversation.session_id
                    WHERE conversation.source = pending.source AND conversation.subject = pending.subject
-                     AND session.host_id = ?4 AND session.agent = ?5
+                     AND conversation.agent = ?5 AND session.host_id = ?4
                )
                AND COALESCE(pending.requested_agent, ?6) = ?5
                AND NOT EXISTS (
                    SELECT 1 FROM inbound_conversations AS destination
-                   JOIN inbound_sessions AS shared ON shared.id = destination.session_id
                    JOIN inbound_conversations AS related ON related.session_id = destination.session_id
                    JOIN inbound_events AS older ON older.source = related.source AND older.subject = related.subject
+                    AND COALESCE(older.requested_agent, ?6) = related.agent
                    WHERE destination.source = pending.source AND destination.subject = pending.subject
+                     AND destination.agent = ?5
                      AND (older.delivery_state = 'delivering'
-                          OR (older.delivery_state = 'pending' AND older.rowid < pending.rowid
-                              AND (COALESCE(older.requested_agent, ?6) = shared.agent
-                                   OR (older.source = pending.source AND older.subject = pending.subject))))
+                          OR (older.delivery_state = 'pending' AND older.rowid < pending.rowid))
                )",
             key.conversation.source, key.conversation.subject, key.id, scope.host_id, scope.agent, unrecorded_agent,
         ).execute(&self.pool).await?;
@@ -227,36 +228,39 @@ impl EventStore {
         chat_name: Option<&str>,
     ) -> Result<bool, StoreError> {
         let chat_name = chat_name.map(|name| &name[..name.floor_char_boundary(512)]);
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let result = sqlx::query!(
-            "UPDATE inbound_events SET delivery_state = ?1, delivered_chat_name = ?5
-             WHERE source = ?2 AND subject = ?3 AND event_id = ?4
-               AND delivery_state = 'delivering'",
+        let finished = sqlx::query_scalar!(
+            r#"UPDATE inbound_events SET delivery_state = ?1, delivered_chat_name = ?5
+               WHERE source = ?2 AND subject = ?3 AND event_id = ?4
+                 AND delivery_state = 'delivering'
+               RETURNING COALESCE(requested_agent, ?6) AS "agent!: String""#,
             outcome,
             key.conversation.source,
             key.conversation.subject,
             key.id,
             chat_name,
+            unrecorded_agent,
         )
-        .execute(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await?;
-        let finished = result.rows_affected() == 1;
-        if finished {
+        if let Some(agent) = &finished {
             sqlx::query!(
                 "UPDATE inbound_sessions SET last_used_at = MAX(last_used_at, unixepoch()),
                      initial_context_pending = CASE WHEN ?3 = 'delivered' THEN 0 ELSE initial_context_pending END
                  WHERE id = (
-                     SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2
+                     SELECT session_id FROM inbound_conversations WHERE source = ?1 AND subject = ?2 AND agent = ?4
                  )",
                 key.conversation.source,
                 key.conversation.subject,
                 outcome,
+                agent,
             )
             .execute(&mut *transaction)
             .await?;
         }
         transaction.commit().await?;
-        Ok(finished)
+        Ok(finished.is_some())
     }
 
     pub async fn delivered_chat_name(&self, key: &EventKey) -> Result<Option<String>, StoreError> {
@@ -461,7 +465,11 @@ mod tests {
             .await
             .expect("bind");
         store
-            .link_conversation(&linked.key.conversation, &oldest.key.conversation)
+            .link_conversation(
+                &linked.key.conversation,
+                &oldest.key.conversation,
+                Agent::Codex,
+            )
             .await
             .expect("link");
         store

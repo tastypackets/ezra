@@ -182,7 +182,11 @@ impl InboundRuntime {
                     {
                         queue.waiting.push_back(key);
                     }
-                    Err(PollError::Unavailable) => queue.offline.push_back(key),
+                    Err(PollError::Unavailable)
+                        if !senders.for_agent(agent).control_available() =>
+                    {
+                        queue.offline.push_back(key);
+                    }
                     Err(error) => {
                         let recorded = async {
                             if let Err(storage_error) = self.store.fail_waiting_event(&key).await {
