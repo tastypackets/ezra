@@ -15,7 +15,7 @@ use crate::manager::inbound::{AgentSenders, RoutingWake};
 const ROUTES_PER_AGENT: usize = 8;
 
 struct AgentQueue {
-    changes: Option<watch::Receiver<bool>>,
+    changes: Option<watch::Receiver<()>>,
     generation: u64,
     waiting: VecDeque<EventKey>,
     offline: VecDeque<EventKey>,
@@ -23,7 +23,7 @@ struct AgentQueue {
 }
 
 impl AgentQueue {
-    fn watching(changes: Option<watch::Receiver<bool>>) -> Self {
+    fn watching(changes: Option<watch::Receiver<()>>) -> Self {
         Self {
             changes,
             generation: 0,
@@ -62,8 +62,8 @@ struct AgentQueues {
 impl AgentQueues {
     fn watching(senders: &AgentSenders<impl MessageSender, impl MessageSender>) -> Self {
         Self {
-            claude: AgentQueue::watching(senders.claude.control_changes()),
-            codex: AgentQueue::watching(senders.codex.control_changes()),
+            claude: AgentQueue::watching(senders.claude.resumes()),
+            codex: AgentQueue::watching(senders.codex.resumes()),
         }
     }
 
@@ -176,31 +176,50 @@ impl InboundRuntime {
                         queue.waiting.push_back(key);
                     }
                     Ok(Admission::Deferred) => deferred.push((key, agent)),
-                    Err(PollError::Unavailable)
-                        if senders.for_agent(agent).control_available()
-                            && queue.changed_since(generation) =>
+                    Err(error @ (PollError::Unavailable(_) | PollError::Paused(_)))
+                        if queue.changed_since(generation) =>
                     {
+                        tracing::debug!(delivery_id = %key.delivery_id(), %agent, %error, "GitHub request retries after its agent changed");
                         queue.waiting.push_back(key);
                     }
-                    Err(PollError::Unavailable)
-                        if !senders.for_agent(agent).control_available() =>
-                    {
+                    Err(error @ PollError::Paused(_)) => {
+                        tracing::debug!(delivery_id = %key.delivery_id(), %agent, %error, "GitHub request waits while its destination is paused");
                         queue.offline.push_back(key);
                     }
                     Err(error) => {
+                        let delivery_id = key.delivery_id();
                         let recorded = async {
-                            if let Err(storage_error) = self.store.fail_waiting_event(&key).await {
-                                tracing::error!(%storage_error, "could not record failed GitHub request");
+                            let recorded = self.store.fail_waiting_event(&key).await;
+                            match self.store.get(&key).await {
+                                Ok(Some(event)) => {
+                                    if let Some(mut feedback) =
+                                        GitHubFeedback::from_event(&event, host)
+                                    {
+                                        feedback.status = CommentStatus::Failed;
+                                        self.queue_github_feedback(feedback).await;
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(storage_error) => {
+                                    tracing::warn!(%delivery_id, %agent, %storage_error, "failed GitHub request has no feedback")
+                                }
                             }
-                            if let Ok(Some(event)) = self.store.get(&key).await
-                                && let Some(mut feedback) = GitHubFeedback::from_event(&event, host)
-                            {
-                                feedback.status = CommentStatus::Failed;
-                                self.queue_github_feedback(feedback).await;
-                            }
+                            recorded
                         };
-                        active.draining(recorded, &mut finished).await;
-                        tracing::warn!(%error, "GitHub request failed before submission");
+                        match active.draining(recorded, &mut finished).await {
+                            Ok(true) => {
+                                tracing::warn!(%delivery_id, %agent, %error, "GitHub request failed before submission");
+                            }
+                            Ok(false) if matches!(error, PollError::Store(_)) => {
+                                tracing::warn!(%delivery_id, %agent, %error, "GitHub request routing failed after the request was settled or attempted");
+                            }
+                            Ok(false) => {
+                                tracing::debug!(%delivery_id, %agent, %error, "GitHub request routing failed after the request was settled");
+                            }
+                            Err(storage_error) => {
+                                tracing::error!(%delivery_id, %agent, %error, %storage_error, "GitHub request failed before submission and could not be recorded");
+                            }
+                        }
                         queued.remove(&key);
                         progress_generation = progress_generation.wrapping_add(1);
                         agents.requeue(deferred.drain(..));
@@ -209,9 +228,7 @@ impl InboundRuntime {
             }
             for agent in Agent::ALL {
                 let queue = agents.get_mut(agent);
-                while senders.for_agent(agent).control_available()
-                    && queue.active < ROUTES_PER_AGENT
-                {
+                while queue.active < ROUTES_PER_AGENT {
                     let Some(key) = queue.waiting.pop_front() else {
                         break;
                     };
@@ -258,7 +275,6 @@ impl InboundRuntime {
                         queue.changes = None;
                     } else {
                         queue.generation = queue.generation.wrapping_add(1);
-                        if !senders.for_agent(agent).control_available() { continue; }
                         queue.resume();
                         let (resumed, others) = deferred
                             .drain(..)
@@ -296,7 +312,11 @@ impl InboundRuntime {
     ) -> (EventKey, Result<Admission, PollError>) {
         let result = async {
             let settings = self.settings.lock().await.inbound.clone();
-            if !self.store.event_is_waiting(&key, settings.waiting_cutoff(OffsetDateTime::now_utc())).await? {
+            if !self
+                .store
+                .event_is_waiting(&key, settings.waiting_cutoff(OffsetDateTime::now_utc()))
+                .await?
+            {
                 self.expire_waiting_requests(&settings).await?;
                 return Ok(Admission::Expired);
             }
@@ -306,23 +326,52 @@ impl InboundRuntime {
             let Some(feedback) = GitHubFeedback::from_event(&event, source.host().as_str()) else {
                 return Ok(Admission::Expired);
             };
-            let Some((repository_id, number)) = event.key.conversation.subject.split_once('/') else {
+            let Some((repository_id, number)) = event.key.conversation.subject.split_once('/')
+            else {
                 return Ok(Admission::Expired);
             };
             let (Ok(repository_id), Ok(number)) = (repository_id.parse(), number.parse()) else {
                 return Ok(Admission::Expired);
             };
-            let workspaces = projects.github_workspaces(source.host().as_str(), &settings.github).await.map_err(crate::manager::git::GitError::Io)?;
-            let workspace = workspaces.get(&feedback.repository.to_ascii_lowercase())
-                .and_then(|path| path.to_str()).unwrap_or("/home/dev");
+            let workspaces = projects
+                .github_workspaces(source.host().as_str(), &settings.github)
+                .await
+                .map_err(crate::manager::git::GitError::Io)?;
+            let workspace = workspaces
+                .get(&feedback.repository.to_ascii_lowercase())
+                .and_then(|path| path.to_str())
+                .unwrap_or("/home/dev");
             let sender = senders.for_agent(event.options.agent);
-            let result = self.admit_github_event(source, &sender, &settings, &event, GitHubDiscussion {
-                repository: &feedback.repository, repository_id, number, workspace,
-            }).await;
+            let result = self
+                .admit_github_event(
+                    source,
+                    &sender,
+                    &settings,
+                    &event,
+                    GitHubDiscussion {
+                        repository: &feedback.repository,
+                        repository_id,
+                        number,
+                        workspace,
+                    },
+                )
+                .await;
             let result = match result {
                 Ok(Admission::Accepted) => {
-                    let scope = DeliveryScope { host_id: &self.host_id, agent: event.options.agent.command_name() };
-                    match self.store.dispatch_event(&event.key, scope, &sender, settings.waiting_cutoff(OffsetDateTime::now_utc())).await? {
+                    let scope = DeliveryScope {
+                        host_id: &self.host_id,
+                        agent: event.options.agent.command_name(),
+                    };
+                    match self
+                        .store
+                        .dispatch_event(
+                            &event.key,
+                            scope,
+                            &sender,
+                            settings.waiting_cutoff(OffsetDateTime::now_utc()),
+                        )
+                        .await?
+                    {
                         DispatchOutcome::Delivered { .. } => {
                             let mut feedback = feedback.clone();
                             feedback.status = CommentStatus::Delivered;
@@ -336,9 +385,14 @@ impl InboundRuntime {
                             self.queue_github_feedback(feedback).await;
                             Ok(Admission::Accepted)
                         }
-                        DispatchOutcome::Unavailable { .. } => Err(PollError::Unavailable),
+                        DispatchOutcome::Unavailable { reason, .. } => {
+                            Err(PollError::Unavailable(reason))
+                        }
+                        DispatchOutcome::Paused { reason, .. } => Err(PollError::Paused(reason)),
                         DispatchOutcome::Idle => {
-                            if self.store.delivery_state(&event.key).await? == Some(DeliveryState::Pending) {
+                            if self.store.delivery_state(&event.key).await?
+                                == Some(DeliveryState::Pending)
+                            {
                                 Ok(Admission::Deferred)
                             } else {
                                 Ok(Admission::Accepted)
@@ -348,18 +402,14 @@ impl InboundRuntime {
                 }
                 result => result,
             };
-            match &result {
-                Ok(Admission::Uncertain) => {
-                    let mut feedback = feedback;
-                    feedback.status = CommentStatus::Unconfirmed;
-                    self.queue_github_feedback(feedback).await;
-                }
-                Err(PollError::Unavailable) => tracing::debug!(delivery_id = %event.key.delivery_id(), "GitHub request waits for its agent"),
-                Err(error) => tracing::warn!(delivery_id = %event.key.delivery_id(), %error, "GitHub request routing failed"),
-                _ => {},
+            if let Ok(Admission::Uncertain) = &result {
+                let mut feedback = feedback;
+                feedback.status = CommentStatus::Unconfirmed;
+                self.queue_github_feedback(feedback).await;
             }
             result
-        }.await;
+        }
+        .await;
         (key, result)
     }
 
@@ -471,14 +521,14 @@ impl InboundRuntime {
                     continue;
                 }
                 Err(error) => {
-                    tracing::warn!(comment_id = %fetched.comment.id, %error, "GitHub trigger rejected");
+                    tracing::warn!(delivery_id = %feedback.key.delivery_id(), comment_id = %fetched.comment.id, %error, "GitHub trigger rejected");
                     feedback.status = CommentStatus::Failed;
                     self.queue_github_feedback(feedback).await;
                     continue;
                 }
             };
             if let Err(error) = shortcut.1.validate() {
-                tracing::warn!(trigger = %shortcut.0, %error, "invalid GitHub shortcut configuration");
+                tracing::warn!(delivery_id = %feedback.key.delivery_id(), agent = %shortcut.1.agent, trigger = %shortcut.0, %error, "invalid GitHub shortcut configuration");
                 feedback.status = CommentStatus::Failed;
                 self.queue_github_feedback(feedback).await;
                 continue;
@@ -492,7 +542,7 @@ impl InboundRuntime {
             ) {
                 Ok(event) => event,
                 Err(error) => {
-                    tracing::warn!(%error, "GitHub trigger context rejected");
+                    tracing::warn!(delivery_id = %feedback.key.delivery_id(), agent = %shortcut.1.agent, %error, "GitHub trigger context rejected");
                     feedback.status = CommentStatus::Failed;
                     self.queue_github_feedback(feedback).await;
                     continue;
@@ -502,7 +552,7 @@ impl InboundRuntime {
             match self.store.insert(&event, settings.queue_limits()).await? {
                 InsertOutcome::QueueFull => {
                     self.store.reject_event(&event).await?;
-                    tracing::warn!(delivery_id = %event.key.delivery_id(), "GitHub request rejected because the inbound queue is full");
+                    tracing::warn!(delivery_id = %event.key.delivery_id(), agent = %event.options.agent, "GitHub request rejected because the inbound queue is full");
                     feedback.status = CommentStatus::Failed;
                     self.queue_github_feedback(feedback).await;
                 }
