@@ -46,14 +46,6 @@ impl EventStore {
                    SELECT pending.rowid FROM inbound_events AS pending
                    WHERE pending.delivery_state = 'pending'
                      AND (pending.new_chat = 0 OR pending.new_chat_applied = 1)
-                     AND NOT EXISTS (
-                         SELECT 1 FROM inbound_events AS reset
-                         WHERE reset.source = pending.source AND reset.subject = pending.subject
-                           AND COALESCE(reset.requested_agent, ?3) = COALESCE(pending.requested_agent, ?3)
-                           AND reset.new_chat = 1 AND reset.new_chat_applied = 0
-                           AND reset.delivery_state IN ('pending', 'delivering')
-                           AND reset.rowid < pending.rowid
-                     )
                      AND (?1 IS NULL OR EXISTS (
                          SELECT 1 FROM inbound_conversations AS conversation
                          JOIN inbound_sessions AS session ON session.id = conversation.session_id
