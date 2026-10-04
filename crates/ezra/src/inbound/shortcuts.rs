@@ -79,6 +79,9 @@ impl Shortcut {
                 {
                     return Err(InvalidEvent::InvalidIdentifier { field });
                 }
+                if value.starts_with('-') {
+                    return Err(InvalidEvent::LeadingHyphen { field });
+                }
             }
         }
         Ok(())
@@ -246,6 +249,37 @@ mod tests {
             claude
         );
         assert!(serde_json::from_str::<Shortcut>(r#"{"agent":"unsupported"}"#).is_err());
+    }
+
+    #[test]
+    fn models_and_efforts_cannot_look_like_options() {
+        for (field, shortcut) in [
+            (
+                "model",
+                Shortcut {
+                    model: Some("--mcp-config=evil.json".to_owned()),
+                    ..Shortcut::default()
+                },
+            ),
+            (
+                "effort",
+                Shortcut {
+                    effort: Some("-x".to_owned()),
+                    ..Shortcut::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                shortcut.validate(),
+                Err(InvalidEvent::LeadingHyphen { field })
+            );
+        }
+        let hyphenated = Shortcut {
+            model: Some("gpt-5.5-codex".to_owned()),
+            effort: Some("x-high".to_owned()),
+            ..Shortcut::default()
+        };
+        assert_eq!(hyphenated.validate(), Ok(()));
     }
 
     #[test]

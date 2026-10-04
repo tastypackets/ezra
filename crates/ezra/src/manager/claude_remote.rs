@@ -1040,6 +1040,7 @@ mod tests {
         let mut event = Fixture::event();
         event.chat_name = Some("owner/repo#1: Fix it".to_owned());
         event.initial_context = Some("\n\nOriginal description".to_owned());
+        event.options.agent = Agent::Claude;
         event.options.model = Some("opus".to_owned());
         let workspace = fixture.folder().to_str().expect("a UTF-8 path").to_owned();
         store

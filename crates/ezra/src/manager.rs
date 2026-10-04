@@ -142,7 +142,10 @@ async fn serve() -> Result<(), ManagerError> {
         tracing::warn!("could not remove unfinished clones: {error}");
     }
     let inbound_runtime = tokio::spawn(inbound.run(
-        Arc::clone(&state.codex_remote),
+        inbound::AgentSenders {
+            claude: Arc::clone(&state.claude_remote),
+            codex: Arc::clone(&state.codex_remote),
+        },
         state.git_tools.as_ref().clone(),
         state.projects.clone(),
     ));

@@ -1,6 +1,7 @@
 use time::OffsetDateTime;
 
 use super::{EventStore, StoreError};
+use crate::agent::Agent;
 use crate::inbound::{ConversationKey, EventKey, InboundEvent, Shortcut};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
@@ -38,6 +39,7 @@ impl EventStore {
         let (host_id, agent) = scope.map_or((None, None), |scope| {
             (Some(scope.host_id), Some(scope.agent))
         });
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let record = sqlx::query!(
             r#"UPDATE inbound_events SET delivery_state = 'delivering'
                WHERE rowid = (
@@ -57,6 +59,7 @@ impl EventStore {
                          WHERE conversation.source = pending.source AND conversation.subject = pending.subject
                            AND session.host_id = ?1 AND session.agent = ?2
                      ))
+                     AND (?2 IS NULL OR COALESCE(pending.requested_agent, ?3) = ?2)
                      AND NOT EXISTS (
                          SELECT 1 FROM inbound_events AS unresolved
                          WHERE unresolved.source = pending.source
@@ -66,6 +69,7 @@ impl EventStore {
                      )
                      AND NOT EXISTS (
                          SELECT 1 FROM inbound_conversations AS destination
+                         JOIN inbound_sessions AS shared ON shared.id = destination.session_id
                          JOIN inbound_conversations AS related
                            ON related.session_id = destination.session_id
                          JOIN inbound_events AS unresolved
@@ -74,7 +78,8 @@ impl EventStore {
                          WHERE destination.source = pending.source
                            AND destination.subject = pending.subject
                            AND (unresolved.delivery_state = 'delivering'
-                                OR (unresolved.delivery_state = 'pending' AND unresolved.rowid < pending.rowid))
+                                OR (unresolved.delivery_state = 'pending' AND unresolved.rowid < pending.rowid
+                                    AND COALESCE(unresolved.requested_agent, ?3) = shared.agent))
                      )
                    ORDER BY pending.received_at, pending.rowid LIMIT 1
                )
@@ -82,6 +87,7 @@ impl EventStore {
                          created_at AS "created_at: OffsetDateTime", message, initial_context, requested_agent, requested_model, requested_effort, chat_name, source_url, new_chat AS "new_chat!: bool""#,
             host_id,
             agent,
+            unrecorded_agent,
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -116,6 +122,7 @@ impl EventStore {
         key: &EventKey,
         scope: DeliveryScope<'_>,
     ) -> Result<Option<InboundEvent>, StoreError> {
+        let unrecorded_agent = Agent::UNRECORDED.command_name();
         let claimed = sqlx::query!(
             "UPDATE inbound_events AS pending SET delivery_state = 'delivering'
              WHERE pending.source = ?1 AND pending.subject = ?2 AND pending.event_id = ?3
@@ -127,15 +134,19 @@ impl EventStore {
                    WHERE conversation.source = pending.source AND conversation.subject = pending.subject
                      AND session.host_id = ?4 AND session.agent = ?5
                )
+               AND COALESCE(pending.requested_agent, ?6) = ?5
                AND NOT EXISTS (
                    SELECT 1 FROM inbound_conversations AS destination
+                   JOIN inbound_sessions AS shared ON shared.id = destination.session_id
                    JOIN inbound_conversations AS related ON related.session_id = destination.session_id
                    JOIN inbound_events AS older ON older.source = related.source AND older.subject = related.subject
                    WHERE destination.source = pending.source AND destination.subject = pending.subject
                      AND (older.delivery_state = 'delivering'
-                          OR (older.delivery_state = 'pending' AND older.rowid < pending.rowid))
+                          OR (older.delivery_state = 'pending' AND older.rowid < pending.rowid
+                              AND (COALESCE(older.requested_agent, ?6) = shared.agent
+                                   OR (older.source = pending.source AND older.subject = pending.subject))))
                )",
-            key.conversation.source, key.conversation.subject, key.id, scope.host_id, scope.agent,
+            key.conversation.source, key.conversation.subject, key.id, scope.host_id, scope.agent, unrecorded_agent,
         ).execute(&self.pool).await?;
         if claimed.rows_affected() == 0 {
             return Ok(None);
@@ -178,20 +189,33 @@ impl EventStore {
         Ok(result.rows_affected() == 1)
     }
 
-    pub async fn waiting_events(&self, source: &str) -> Result<Vec<EventKey>, StoreError> {
+    pub async fn waiting_events(&self, source: &str) -> Result<Vec<(EventKey, Agent)>, StoreError> {
+        // The redundant state list lets SQLite use a partial index of queued requests.
         let records = sqlx::query!(
-            "SELECT subject, event_id FROM inbound_events
-             WHERE source = ?1 AND delivery_state = 'pending' AND attempted_at IS NULL ORDER BY rowid",
+            "SELECT subject, event_id, requested_agent FROM inbound_events
+             WHERE source = ?1 AND delivery_state IN ('pending', 'delivering')
+               AND delivery_state = 'pending' AND attempted_at IS NULL ORDER BY rowid",
             source,
-        ).fetch_all(&self.pool).await?;
+        )
+        .fetch_all(&self.pool)
+        .await?;
         Ok(records
             .into_iter()
-            .map(|record| EventKey {
-                conversation: ConversationKey {
-                    source: source.to_owned(),
-                    subject: record.subject,
-                },
-                id: record.event_id,
+            .filter_map(|record| {
+                let key = EventKey {
+                    conversation: ConversationKey {
+                        source: source.to_owned(),
+                        subject: record.subject,
+                    },
+                    id: record.event_id,
+                };
+                match Agent::stored(record.requested_agent.as_deref()) {
+                    Ok(agent) => Some((key, agent)),
+                    Err(error) => {
+                        tracing::warn!(delivery_id = %key.delivery_id(), %error, "waiting inbound request skipped");
+                        None
+                    }
+                }
             })
             .collect())
     }
@@ -476,9 +500,9 @@ mod tests {
                 .await
                 .expect("recovery"),
             [
-                oldest.key.clone(),
-                linked.key.clone(),
-                unrelated.key.clone()
+                (oldest.key.clone(), Agent::Codex),
+                (linked.key.clone(), Agent::Codex),
+                (unrelated.key.clone(), Agent::Codex)
             ]
         );
         assert_eq!(
