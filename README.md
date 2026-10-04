@@ -83,11 +83,11 @@ After pairing, in the ChatGPT app:
 2. Change This computer to the hostname of your ezra instance.
 3. Click Add, open `projects`, and select your repository.
 
-### Trigger Codex from GitHub
+### Trigger an agent from GitHub
 
-1. Sign in to GitHub under Settings and install, sign in to, and start Codex under Agents.
+1. Sign in to GitHub under Settings, and install and sign in to the agent your shortcut uses under Agents. For Codex, start it under Agents. For Claude Code, keep Serve to the Claude app on under Settings.
 2. Clone the repository into `~/projects`. Its `origin` must match the configured GitHub host and repository.
-3. Under GitHub triggers, turn off Only repositories added to Ezra to accept commands from other repositories. New chats there start in `/home/dev`.
+3. Under GitHub triggers, turn off Only repositories added to Ezra to accept commands from other repositories. New Codex chats there start in `/home/dev`, and new Claude Code sessions in `/home/dev/projects`.
 4. Post `/ezra fix this` in an issue or pull request conversation comment using your signed-in GitHub account. A bare `/ezra` asks the agent to act on that issue or pull request.
 
 Ezra polls your issue and pull request conversation comments through GitHub GraphQL using the existing `gh` sign-in, then filters to repositories added to Ezra unless that setting is off. The polling interval defaults to 30 seconds after the previous scan finishes and can be changed under GitHub triggers. No GitHub App, webhook endpoint, or CI runner is required. Polling starts from the first scan after activation. Comments from other accounts, issue descriptions, and inline review comments do not trigger sessions. Shortcuts match literal text, including text inside quotes and code. Edits do not rerun an already queued comment.
@@ -98,13 +98,25 @@ For an unmapped discussion, Ezra reads GitHub's direct issue and pull request li
 
 Add `--new` immediately after the command, such as `/ezra --new fix this`, to start a fresh chat for that discussion. Older messages there are delivered first, and other discussions sharing the old chat keep their route. A saved request still runs if its comment is edited or deleted. Edits do not change its original routing instruction.
 
-New chats use the repository's existing checkout, or `/home/dev` when no unique checkout is available. They use the nearest matching Codex project when it is unique, otherwise no project association. Their requested name includes the repository, discussion number and title. Ezra does not create a worktree or check out the pull request branch. Requests keep the comment text, discussion URL and title. The description is included only in the first message to a new chat, including a fresh or replacement chat. Follow-up requests keep the chat's current name. Open the paired app to follow progress or steer the session.
+A new chat's requested name includes the repository, discussion number and title. A new Codex chat uses the repository's existing checkout, or `/home/dev` when no unique checkout is available, and the nearest matching Codex project when it is unique, otherwise no project association. Where a new Claude Code session works is described under Claude Code requests. Ezra itself does not create a worktree or check out the pull request branch. Requests keep the comment text, discussion URL and title. The description is included only in the first message to a new chat, including a fresh or replacement chat. Follow-up requests keep the chat's current name. Open the ChatGPT or Claude app to follow progress or steer the session.
 
-Settings can map custom commands such as `/ezra-fast` to a model and effort. These change the chat defaults for subsequent turns, including queued work. Model and effort inputs suggest the models Codex listed when Ezra last connected to it, and the efforts a chosen model takes. They also accept manual values. Blank fields keep the current defaults. A comment containing different configured shortcuts is rejected as ambiguous. Only Codex is supported by this integration currently.
+Settings can map custom commands such as `/ezra-fast` to an agent, a model and an effort. The default `/ezra` and shortcuts saved without an agent use Codex. For Codex, model and effort change the chat defaults for subsequent turns, including queued work. The inputs suggest the models each agent listed when it last started, and the efforts a chosen model takes. Codex lists them when Ezra connects to it, and Claude Code when its `~/projects` server starts. Inputs also accept manual values. Blank fields keep the current defaults. A comment containing different configured shortcuts is rejected as ambiguous.
 
 Status feedback defaults to reactions, with a rocket for confirmed delivery and a confused face when attention is needed. Under GitHub triggers, choose a status footer or turn feedback off. Footers edit your original comment with received, delivered, unconfirmed, or failed status and the assigned chat name when available. Each update reads the current comment before writing and has a five-second overall timeout. Feedback uses your GitHub identity and never posts a new comment. It is best effort and each status is attempted once. Concurrent edits or a timed-out write can leave stale status. Database delivery records remain authoritative, so feedback failures and comment edits do not repeat agent delivery. Delivered means the session accepted the message, not that the work finished. Agent answers remain in the app unless you ask the agent to reply on GitHub.
 
-Archived chats are restored automatically when possible. A definitively missing chat is replaced and its mapping updated. Timeouts and unknown delivery results stay uncertain to avoid sending the same request twice. Check the app and manager logs before posting a new request in that case.
+Archived Codex chats are restored automatically when possible. A definitively missing chat is replaced and its mapping updated. Timeouts and unknown delivery results stay uncertain to avoid sending the same request twice. Check the app and manager logs before posting a new request in that case.
+
+#### Claude Code requests
+
+A shortcut set to Claude Code creates a Claude Code session in the Remote Control environment of the served folder that holds the repository's checkout, so the Claude app lists it with that folder's other sessions. A repository whose folder is not served, or that has no unique checkout, gets a session from the `/home/dev/projects` server. Each session counts against the server's Sessions per folder, and in worktree mode Remote Control gives it a worktree of its own.
+
+Requests wait while the server they need is not connected, until it connects or the request expires. A server whose Sessions per folder is 1 shows a session link instead of its environment, so requests that need it wait.
+
+Ezra queues each request in the session with `claude -p --cloud <session>`, and delivered means that command reported the message as queued. Model and effort apply when Ezra creates the session, and later requests keep the session's model and effort.
+
+Before each request Ezra reads the session. A session that is archived, unknown to Claude, or in an environment no running server is connected in is replaced with a new session that gets the description again. Archived sessions are not restored. Remote Control environments change when the container is recreated, so the first request for an older session after that starts a new one.
+
+Creating and reading sessions uses an unofficial Claude Code endpoint that may change with Claude Code releases.
 
 Integration metadata lives in `/config/ezra/ezra.db`. Cleanup runs at startup and daily, with a configurable 90-day history default and count and byte limits. Queued and uncertain requests are kept within the queue limits. Cleanup does not delete native chats or repositories. After an idle mapping expires, a new trigger can start a new chat. Routing is local to this Ezra instance.
 

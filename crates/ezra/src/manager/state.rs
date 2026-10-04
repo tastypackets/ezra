@@ -52,9 +52,12 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
-    #[expect(
-        dead_code,
-        reason = "inbound routing reads it once it routes per agent"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "inbound routing reads it once it routes per agent"
+        )
     )]
     pub claude_remote: Arc<ClaudeRemote>,
     pub codex_remote: Arc<CodexRemote>,
@@ -82,15 +85,24 @@ impl AppState {
             .parent()
             .map_or_else(PathBuf::new, Path::to_path_buf)
             .join("remote-control");
+        let remote_control = Arc::new(RemoteControl::new(
+            events.clone(),
+            remote_control_logs.clone(),
+        ));
+        let projects = ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY));
         Self {
-            claude_remote: Arc::new(ClaudeRemote::new()),
+            claude_remote: Arc::new(ClaudeRemote::new(
+                Arc::clone(&remote_control),
+                Arc::clone(&install_paths),
+                projects.clone(),
+            )),
             codex_remote: Arc::new(CodexRemote::new(
                 events.clone(),
                 ServerLog(remote_control_logs.join("codex")),
                 ServerBudget::default(),
                 ExpectedPeer::Child,
             )),
-            remote_control: Arc::new(RemoteControl::new(events.clone(), remote_control_logs)),
+            remote_control,
             settings_path: Arc::new(settings_path),
             settings: Arc::new(Mutex::new(settings)),
             sessions: Arc::default(),
@@ -108,7 +120,7 @@ impl AppState {
             certificate: None,
             environment: EnvironmentSettings::default(),
             github_sign_in: Arc::new(watch::Sender::new(GitHubSignIn::default())),
-            projects: ProjectsDirectory(PathBuf::from(PROJECTS_DIRECTORY)),
+            projects,
         }
     }
 
