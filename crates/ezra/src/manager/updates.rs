@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::time::MissedTickBehavior;
 
-use super::agents::{Agent, ReleaseChannel};
+use super::agents::{Agent, AgentExt, ReleaseChannel};
 use super::events::Topic;
 use super::state::AppState;
 

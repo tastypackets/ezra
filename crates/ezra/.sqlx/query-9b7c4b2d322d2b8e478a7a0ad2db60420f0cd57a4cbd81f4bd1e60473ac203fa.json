@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_events SET delivery_state = 'failed'\n             WHERE delivery_state IN ('pending', 'delivering') AND attempted_at IS NULL\n               AND requested_agent IS NOT NULL\n               AND requested_agent NOT IN (SELECT value FROM json_each(?1))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9b7c4b2d322d2b8e478a7a0ad2db60420f0cd57a4cbd81f4bd1e60473ac203fa"
+}

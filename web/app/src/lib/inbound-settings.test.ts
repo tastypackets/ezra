@@ -6,6 +6,7 @@ import {
   inboundDraft,
   modelSuggestions,
   settingsFromDraft,
+  withAgent,
 } from "./inbound-settings";
 
 function effort(value: string, description = "") {
@@ -114,7 +115,7 @@ describe("inbound settings drafts", () => {
       github: { max_concurrent_requests: 2, only_added_repositories: false },
     };
     const draft = inboundDraft(settings);
-    draft.shortcuts = [{ trigger: "/custom", model: "", effort: " high " }];
+    draft.shortcuts = [{ trigger: "/custom", agent: "codex", model: "", effort: " high " }];
     const saved = settingsFromDraft(settings, draft);
     expect(saved.max_queued_events).toBe(12);
     expect(saved.github.max_concurrent_requests).toBe(2);
@@ -122,9 +123,46 @@ describe("inbound settings drafts", () => {
     expect(saved.shortcuts).toEqual({ "/custom": { agent: "codex", effort: "high" } });
   });
 
+  it("defaults to a Codex /ezra shortcut", () => {
+    expect(inboundDraft({}).shortcuts).toEqual([
+      { trigger: "/ezra", agent: "codex", model: "", effort: "" },
+    ]);
+    expect(settingsFromDraft({}, inboundDraft({})).shortcuts).toEqual({
+      "/ezra": { agent: "codex" },
+    });
+  });
+
+  it("saves and loads each shortcut's agent", () => {
+    const draft = inboundDraft({});
+    draft.shortcuts = [
+      { trigger: "/claude", agent: "claude", model: " opus ", effort: "max" },
+      { trigger: "/codex", agent: "codex", model: "", effort: "" },
+    ];
+    const saved = settingsFromDraft({}, draft);
+    expect(saved.shortcuts).toEqual({
+      "/claude": { agent: "claude", model: "opus", effort: "max" },
+      "/codex": { agent: "codex" },
+    });
+    expect(inboundDraft(saved).shortcuts).toEqual([
+      { trigger: "/claude", agent: "claude", model: "opus", effort: "max" },
+      { trigger: "/codex", agent: "codex", model: "", effort: "" },
+    ]);
+  });
+
+  it("clears model and effort only when the agent changes", () => {
+    const shortcut = { trigger: "/ezra", agent: "codex" as const, model: "first", effort: "high" };
+    expect(withAgent(shortcut, "codex")).toBe(shortcut);
+    expect(withAgent(shortcut, "claude")).toEqual({
+      trigger: "/ezra",
+      agent: "claude",
+      model: "",
+      effort: "",
+    });
+  });
+
   it("rejects duplicate commands and invalid retention before saving", () => {
     const draft = inboundDraft({});
-    draft.shortcuts.push({ trigger: " /ezra ", model: "", effort: "" });
+    draft.shortcuts.push({ trigger: " /ezra ", agent: "codex", model: "", effort: "" });
     expect(() => settingsFromDraft({}, draft)).toThrow();
     draft.shortcuts = [];
     draft.retention_days = "NaN";

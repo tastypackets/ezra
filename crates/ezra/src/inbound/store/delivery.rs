@@ -1,7 +1,7 @@
 use time::OffsetDateTime;
 
 use super::{EventStore, StoreError};
-use crate::inbound::{ConversationKey, EventKey, InboundEvent};
+use crate::inbound::{ConversationKey, EventKey, InboundEvent, Shortcut};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(rename_all = "snake_case")]
@@ -85,7 +85,10 @@ impl EventStore {
         )
         .fetch_optional(&self.pool)
         .await?;
-        Ok(record.map(|record| InboundEvent {
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        Ok(Some(InboundEvent {
             new_chat: record.new_chat,
             chat_name: record.chat_name,
             source_url: record.source_url,
@@ -96,11 +99,11 @@ impl EventStore {
                 },
                 id: record.event_id,
             },
-            options: crate::inbound::Shortcut {
-                agent: record.requested_agent,
-                model: record.requested_model,
-                effort: record.requested_effort,
-            },
+            options: Shortcut::stored(
+                record.requested_agent,
+                record.requested_model,
+                record.requested_effort,
+            )?,
             actor: record.actor,
             created_at: record.created_at,
             message: record.message,

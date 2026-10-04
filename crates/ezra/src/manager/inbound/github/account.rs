@@ -334,12 +334,7 @@ impl InboundRuntime {
                     continue;
                 }
             };
-            if shortcut
-                .1
-                .agent
-                .as_deref()
-                .is_some_and(|agent| agent != "codex")
-            {
+            if shortcut.1.agent != ezra::agent::Agent::Codex {
                 feedback.status = CommentStatus::Failed;
                 self.queue_github_feedback(feedback).await;
                 continue;

@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use super::{EventKey, InboundEvent};
+use super::{EventKey, InboundEvent, Shortcut};
 
 pub trait MessageAttempt {
     fn mark_attempted(
@@ -56,6 +56,7 @@ pub trait MessageSender: Sync {
         &self,
         workspace: &str,
         chat_name: Option<&str>,
+        options: &Shortcut,
     ) -> impl Future<Output = Result<String, MessageSendError>> + Send;
 
     fn queue_message(

@@ -57,7 +57,7 @@ impl EventStore {
             transaction.rollback().await?;
             return Ok(InsertOutcome::QueueFull);
         }
-        let requested_agent = event.options.agent.as_deref();
+        let requested_agent = event.options.agent.command_name();
         let requested_model = event.options.model.as_deref();
         let requested_effort = event.options.effort.as_deref();
         sqlx::query!(
@@ -407,7 +407,7 @@ mod tests {
         let store = EventStore::open(&path).await.expect("store");
         let mut event = InboundEvent::admission_example("options", "request");
         event.options = crate::inbound::Shortcut {
-            agent: Some("codex".to_owned()),
+            agent: crate::agent::Agent::Claude,
             model: Some("future-model".to_owned()),
             effort: Some("future-effort".to_owned()),
         };

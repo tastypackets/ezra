@@ -1,4 +1,4 @@
-import type { Agent, AgentModel, AgentStatus, InboundSettings } from "@ezra/client";
+import type { Agent, AgentModel, AgentStatus, InboundSettings, Shortcut } from "@ezra/client";
 
 import { INBOUND_COPY } from "@/content/inbound";
 
@@ -35,11 +35,14 @@ export function effortSuggestions(models: readonly AgentModel[], selectedModel: 
 
 export function inboundDraft(settings: InboundSettings) {
   return {
-    shortcuts: Object.entries(settings.shortcuts ?? { "/ezra": {} }).map(([trigger, shortcut]) => ({
-      trigger,
-      model: shortcut.model ?? "",
-      effort: shortcut.effort ?? "",
-    })),
+    shortcuts: Object.entries<Shortcut>(settings.shortcuts ?? { "/ezra": { agent: "codex" } }).map(
+      ([trigger, shortcut]) => ({
+        trigger,
+        agent: shortcut.agent,
+        model: shortcut.model ?? "",
+        effort: shortcut.effort ?? "",
+      }),
+    ),
     retention_days: String(settings.retention_days ?? 90),
     waiting_expiry_hours: String(settings.waiting_expiry_hours ?? 24),
     poll_interval_seconds: String(settings.github?.poll_interval_seconds ?? 30),
@@ -50,6 +53,12 @@ export function inboundDraft(settings: InboundSettings) {
         ? "off"
         : "reactions",
   };
+}
+
+export type ShortcutDraft = ReturnType<typeof inboundDraft>["shortcuts"][number];
+
+export function withAgent(shortcut: ShortcutDraft, agent: Agent): ShortcutDraft {
+  return shortcut.agent === agent ? shortcut : { ...shortcut, agent, model: "", effort: "" };
 }
 
 export function settingsFromDraft(
@@ -101,7 +110,7 @@ export function settingsFromDraft(
       draft.shortcuts.map((shortcut) => [
         shortcut.trigger.trim(),
         {
-          agent: "codex",
+          agent: shortcut.agent,
           ...(shortcut.model.trim() ? { model: shortcut.model.trim() } : {}),
           ...(shortcut.effort.trim() ? { effort: shortcut.effort.trim() } : {}),
         },
