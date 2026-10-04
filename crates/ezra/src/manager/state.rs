@@ -52,13 +52,6 @@ pub struct AppState {
     pub git_tools: Arc<GitTools>,
     pub github_login: Arc<Mutex<Option<LoginProcess>>>,
     pub remote_control: Arc<RemoteControl>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "inbound routing reads it once it routes per agent"
-        )
-    )]
     pub claude_remote: Arc<ClaudeRemote>,
     pub codex_remote: Arc<CodexRemote>,
     pub clones: Arc<Clones>,

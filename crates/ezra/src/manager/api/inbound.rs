@@ -1,6 +1,5 @@
 use axum::Json;
 use axum::extract::State;
-use ezra::agent::Agent;
 use ezra::inbound::InboundSettings;
 
 use super::{ApiError, AppState, ErrorBody, Session};
@@ -38,14 +37,9 @@ pub async fn update_settings(
     for shortcut in settings.shortcuts.values() {
         shortcut.validate().map_err(|_| {
             ApiError::BadRequest(
-                "Model and effort must be nonempty identifiers of at most 512 bytes",
+                "Model and effort must be nonempty identifiers of at most 512 bytes that do not start with a hyphen",
             )
         })?;
-        if shortcut.agent != Agent::Codex {
-            return Err(ApiError::BadRequest(
-                "GitHub triggers currently support Codex",
-            ));
-        }
     }
     state
         .update_settings(|current| {
@@ -97,12 +91,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shortcuts_can_select_claude() {
+        let manager = TestManager::new();
+        let cookie = manager.logged_in().await;
+        let response = manager
+            .put(
+                PATH,
+                r#"{"shortcuts":{"/ezra":{},"/ezra-claude":{"agent":"claude","model":"opus","effort":"high"}}}"#,
+                Some(&cookie),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved: serde_json::Value = response.json().await;
+        assert_eq!(
+            saved["shortcuts"],
+            serde_json::json!({
+                "/ezra": {"agent": "codex"},
+                "/ezra-claude": {"agent": "claude", "model": "opus", "effort": "high"}
+            })
+        );
+        let loaded = crate::manager::settings::Settings::load(&manager.settings_path)
+            .expect("settings load");
+        assert_eq!(
+            loaded.inbound.shortcuts["/ezra-claude"].agent,
+            ezra::agent::Agent::Claude
+        );
+        let read: serde_json::Value = manager.get(PATH, Some(&cookie)).await.json().await;
+        assert_eq!(read["shortcuts"], saved["shortcuts"]);
+    }
+
+    #[tokio::test]
     async fn invalid_trigger_configuration_does_not_replace_saved_settings() {
         let manager = TestManager::new();
         let cookie = manager.logged_in().await;
         for body in [
             r#"{"shortcuts":{"has space":{}}}"#,
             r#"{"shortcuts":{"/custom":{"model":""}}}"#,
+            r#"{"shortcuts":{"/custom":{"agent":"claude","model":"--settings=x"}}}"#,
         ] {
             assert_eq!(
                 manager.put(PATH, body, Some(&cookie)).await.status(),
