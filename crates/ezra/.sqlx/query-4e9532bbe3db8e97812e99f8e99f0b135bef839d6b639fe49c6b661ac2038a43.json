@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT total_changes() AS \"changes!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "changes!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4e9532bbe3db8e97812e99f8e99f0b135bef839d6b639fe49c6b661ac2038a43"
+}

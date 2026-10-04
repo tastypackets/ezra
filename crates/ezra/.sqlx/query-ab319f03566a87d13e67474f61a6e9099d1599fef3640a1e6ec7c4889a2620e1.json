@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE inbound_source_checkpoints\n             SET active = NOT active\n             WHERE substr(source, 1, length(?1)) = ?1\n                 AND active != (source = ?2 AND EXISTS (SELECT 1 FROM json_each(?3) WHERE value = subject))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ab319f03566a87d13e67474f61a6e9099d1599fef3640a1e6ec7c4889a2620e1"
+}
